@@ -1,6 +1,5 @@
 import threading
 from pathlib import Path
-import os
 
 import customtkinter as ctk
 
@@ -19,6 +18,7 @@ class ScanPage(ctk.CTkFrame):
         self.service = ScanService()
         self.pictures_folder = DEFAULT_LIBRARY
         self.last_report_path = None
+        self.report_window = None
 
         self.build_page()
 
@@ -218,4 +218,107 @@ class ScanPage(ctk.CTkFrame):
         if not self.last_report_path:
             return
 
-        os.startfile(self.last_report_path)
+        report_path = Path(self.last_report_path)
+
+        if not report_path.exists():
+            self.status.configure(
+                text=f"Report not found: {report_path}"
+            )
+            return
+
+        if (
+            self.report_window is not None and
+            self.report_window.winfo_exists()
+        ):
+            self.report_window.lift()
+            self.report_window.focus_force()
+            return
+
+        try:
+            report_text = report_path.read_text(
+                encoding="utf-8"
+            )
+        except Exception as ex:
+            self.status.configure(
+                text=f"Could not read report: {ex}"
+            )
+            return
+
+        self.report_window = ctk.CTkToplevel(self)
+        self.report_window.title("Scan Report")
+        self.report_window.geometry("900x700")
+        self.report_window.minsize(700, 500)
+        self.report_window.transient(self.winfo_toplevel())
+
+        self.report_window.grid_columnconfigure(0, weight=1)
+        self.report_window.grid_rowconfigure(1, weight=1)
+
+        heading = ctk.CTkLabel(
+            self.report_window,
+            text=str(report_path),
+            font=("Segoe UI", 16, "bold")
+        )
+
+        heading.grid(
+            row=0,
+            column=0,
+            sticky="ew",
+            padx=20,
+            pady=(20, 10)
+        )
+
+        textbox = ctk.CTkTextbox(
+            self.report_window,
+            wrap="none"
+        )
+
+        textbox.grid(
+            row=1,
+            column=0,
+            sticky="nsew",
+            padx=20,
+            pady=(0, 15)
+        )
+
+        textbox.insert(
+            "1.0",
+            report_text
+        )
+
+        textbox.configure(
+            state="disabled"
+        )
+
+        close_button = ctk.CTkButton(
+            self.report_window,
+            text="Close",
+            command=self.close_scan_report
+        )
+
+        close_button.grid(
+            row=2,
+            column=0,
+            pady=(0, 20)
+        )
+
+        self.report_window.protocol(
+            "WM_DELETE_WINDOW",
+            self.close_scan_report
+        )
+
+        self.report_window.lift()
+        self.report_window.focus_force()
+
+    ###########################################################
+
+    def close_scan_report(self):
+
+        if (
+            self.report_window is not None and
+            self.report_window.winfo_exists()
+        ):
+            self.report_window.destroy()
+
+        self.report_window = None
+        self.winfo_toplevel().lift()
+        self.winfo_toplevel().focus_force()
