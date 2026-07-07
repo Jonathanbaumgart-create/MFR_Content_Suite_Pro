@@ -198,8 +198,10 @@ class PhotoViewer(ctk.CTkToplevel):
         self.brain.analyze_photo(
             self.media_id,
             self.filepath,
+            force=self.analysis is not None,
             callback=self.analysis_complete,
-            error_callback=self.analysis_failed
+            error_callback=self.analysis_failed,
+            progress_callback=self.analysis_progress
         )
 
     ##########################################################
@@ -229,6 +231,21 @@ class PhotoViewer(ctk.CTkToplevel):
         self.after(
             0,
             lambda: self.show_error(error)
+        )
+
+    ##########################################################
+
+    def analysis_progress(self, progress):
+
+        status = progress.get("status", "")
+        queued = progress.get("queued", 0)
+        running = progress.get("running", 0)
+
+        self.after(
+            0,
+            lambda: self.status.configure(
+                text=f"Status: {status} ({queued} queued, {running} running)"
+            )
         )
 
     ##########################################################
@@ -268,7 +285,11 @@ class PhotoViewer(ctk.CTkToplevel):
             f"Overall Score: {analysis.get('overall_score', 0)}",
             "",
             f"Model: {analysis.get('model', '')}",
-            f"Analyzed: {analysis.get('analyzed_at', '')}"
+            f"Provider: {analysis.get('provider', '')}",
+            f"Duration: {analysis.get('analysis_duration', 0):.2f}s",
+            f"Retries: {analysis.get('retry_count', 0)}",
+            f"Failure: {analysis.get('failure_reason', '')}",
+            f"Analyzed: {analysis.get('last_analyzed') or analysis.get('analyzed_at', '')}"
         ]
 
         self.analysis_text.configure(state="normal")

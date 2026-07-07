@@ -1,5 +1,6 @@
 import threading
 from pathlib import Path
+import os
 
 import customtkinter as ctk
 
@@ -17,6 +18,7 @@ class ScanPage(ctk.CTkFrame):
 
         self.service = ScanService()
         self.pictures_folder = DEFAULT_LIBRARY
+        self.last_report_path = None
 
         self.build_page()
 
@@ -89,6 +91,18 @@ class ScanPage(ctk.CTkFrame):
             pady=20
         )
 
+        self.report_button = ctk.CTkButton(
+            self,
+            text="View Scan Report",
+            command=self.open_scan_report,
+            state="disabled"
+        )
+
+        self.report_button.pack(
+            padx=20,
+            pady=(0, 20)
+        )
+
     ###########################################################
 
     def start_scan(self):
@@ -102,6 +116,8 @@ class ScanPage(ctk.CTkFrame):
             return
 
         self.scan_button.configure(state="disabled")
+        self.report_button.configure(state="disabled")
+        self.last_report_path = None
 
         self.progress.set(0)
 
@@ -120,14 +136,14 @@ class ScanPage(ctk.CTkFrame):
 
         try:
 
-            total = self.service.scan(
+            stats = self.service.scan(
                 str(self.pictures_folder),
                 self.update_progress
             )
 
             self.after(
                 0,
-                lambda: self.scan_complete(total)
+                lambda: self.scan_complete(stats)
             )
 
         except Exception as e:
@@ -157,17 +173,29 @@ class ScanPage(ctk.CTkFrame):
 
     ###########################################################
 
-    def scan_complete(self, total):
+    def scan_complete(self, stats):
 
         self.progress.set(1)
+        self.last_report_path = stats.get("report_path")
 
         self.status.configure(
-            text=f"Scan complete. {total:,} media files indexed."
+            text=(
+                "Scan complete. "
+                f"{stats['inserted']:,} new, "
+                f"{stats['duplicates']:,} duplicates, "
+                f"{stats['failed']:,} failed, "
+                f"{stats['skipped']:,} skipped."
+            )
         )
 
         self.scan_button.configure(
             state="normal"
         )
+
+        if self.last_report_path:
+            self.report_button.configure(
+                state="normal"
+            )
 
     ###########################################################
 
@@ -182,3 +210,12 @@ class ScanPage(ctk.CTkFrame):
         self.scan_button.configure(
             state="normal"
         )
+
+    ###########################################################
+
+    def open_scan_report(self):
+
+        if not self.last_report_path:
+            return
+
+        os.startfile(self.last_report_path)

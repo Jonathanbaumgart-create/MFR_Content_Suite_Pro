@@ -1,5 +1,6 @@
 import customtkinter as ctk
 
+from gui.ai_dashboard_page import AIDashboardPage
 from gui.dashboard_page import DashboardPage
 from gui.gallery_page import GalleryPage
 from gui.scan_page import ScanPage
@@ -100,7 +101,7 @@ class MainWindow(ctk.CTk):
 
             ("Collections", self.not_implemented),
 
-            ("AI", self.not_implemented),
+            ("AI", self.show_ai_dashboard),
 
             ("Analytics", self.not_implemented),
 
@@ -178,6 +179,24 @@ class MainWindow(ctk.CTk):
         self.clear_page()
 
         self.current_page = ScanPage(
+            self.workspace
+        )
+
+        self.current_page.grid(
+            row=0,
+            column=0,
+            sticky="nsew",
+            padx=25,
+            pady=25
+        )
+
+    ##########################################################
+
+    def show_ai_dashboard(self):
+
+        self.clear_page()
+
+        self.current_page = AIDashboardPage(
             self.workspace
         )
 

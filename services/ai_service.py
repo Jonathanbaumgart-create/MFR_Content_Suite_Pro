@@ -1,21 +1,21 @@
-import json
 import re
+import json
 
-from services.vision_service import VisionService
+from services.logging_service import LoggingService
+
+
+logger = LoggingService.get_logger("ai")
 
 
 class AIService:
 
-    def __init__(self, vision_service=None):
-        self._vision = vision_service or VisionService()
-
-    def analyze_image(self, image_path):
-
-        text = self._vision.analyze(image_path)
+    def parse_analysis(self, text, model="unknown"):
 
         try:
             data = json.loads(self._clean_json(text))
         except Exception:
+            logger.exception("AI response was not valid JSON")
+
             data = {
                 "description": text,
                 "scene_type": "",
@@ -31,7 +31,7 @@ class AIService:
                 "overall_score": 50,
                 "facebook_caption": "",
                 "instagram_caption": "",
-                "model": "unknown"
+                "model": model
             }
 
         defaults = {
@@ -49,7 +49,7 @@ class AIService:
             "overall_score": 0,
             "facebook_caption": "",
             "instagram_caption": "",
-            "model": "unknown"
+            "model": model
         }
 
         for k, v in defaults.items():
@@ -70,6 +70,17 @@ class AIService:
             data[key] = self._ensure_int(data.get(key))
 
         return data
+
+    ############################################################
+
+    def analyze_image(self, image_path, vision_service):
+
+        text = vision_service.analyze(image_path)
+
+        return self.parse_analysis(
+            text,
+            vision_service.model_name()
+        )
 
     ############################################################
 

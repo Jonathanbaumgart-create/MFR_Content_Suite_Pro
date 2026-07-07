@@ -12,13 +12,15 @@ class PhotoCard(ctk.CTkFrame):
         parent,
         media_id,
         filename,
-        filepath
+        filepath,
+        thumbnail_cache=None,
+        selection_callback=None
     ):
 
         super().__init__(
             parent,
             width=190,
-            height=220,
+            height=245,
             corner_radius=8
         )
 
@@ -27,8 +29,9 @@ class PhotoCard(ctk.CTkFrame):
         self.filename = filename
         self.filepath = filepath
         self.media_id = media_id
+        self.selection_callback = selection_callback
 
-        cache = ThumbnailCache()
+        cache = thumbnail_cache or ThumbnailCache()
 
         thumb = cache.get_thumbnail(filepath)
 
@@ -71,6 +74,19 @@ class PhotoCard(ctk.CTkFrame):
             pady=(0, 8)
         )
 
+        self.selected = ctk.BooleanVar(value=False)
+
+        self.select_box = ctk.CTkCheckBox(
+            self,
+            text="Select",
+            variable=self.selected,
+            command=self.selection_changed
+        )
+
+        self.select_box.pack(
+            pady=(0, 6)
+        )
+
         ##########################################
 
         for widget in (
@@ -94,3 +110,13 @@ class PhotoCard(ctk.CTkFrame):
             self.filename,
             self.filepath
         )
+
+    ##########################################################
+
+    def selection_changed(self):
+
+        if self.selection_callback:
+            self.selection_callback(
+                self.media_id,
+                self.selected.get()
+            )

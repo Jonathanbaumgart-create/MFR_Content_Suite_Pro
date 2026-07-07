@@ -29,6 +29,7 @@ dist/
 
 # Logs
 *.log
+logs/scan_report_*.json
 # User database
 
 database/*.db
