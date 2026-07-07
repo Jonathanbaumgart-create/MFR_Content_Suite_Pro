@@ -3,6 +3,7 @@ import customtkinter as ctk
 from gui.ai_dashboard_page import AIDashboardPage
 from gui.dashboard_page import DashboardPage
 from gui.gallery_page import GalleryPage
+from gui.intelligence_page import IntelligenceExplorerPage
 from gui.scan_page import ScanPage
 
 
@@ -94,6 +95,8 @@ class MainWindow(ctk.CTk):
             ("Scanner", self.show_scanner),
 
             ("Gallery", self.show_gallery),
+
+            ("Intelligence", self.show_intelligence),
 
             ("Videos", self.not_implemented),
 
@@ -197,6 +200,24 @@ class MainWindow(ctk.CTk):
         self.clear_page()
 
         self.current_page = AIDashboardPage(
+            self.workspace
+        )
+
+        self.current_page.grid(
+            row=0,
+            column=0,
+            sticky="nsew",
+            padx=25,
+            pady=25
+        )
+
+    ##########################################################
+
+    def show_intelligence(self):
+
+        self.clear_page()
+
+        self.current_page = IntelligenceExplorerPage(
             self.workspace
         )
 

@@ -1387,6 +1387,298 @@ class DatabaseManager:
 
     ############################################################
 
+    def intelligence_filter_counts(self, filters=None):
+
+        filters = filters or {}
+
+        return {
+            "incident_type": self._intelligence_scalar_counts(
+                "incident_type",
+                filters
+            ),
+            "apparatus_tags": self._intelligence_json_counts(
+                "apparatus_tags",
+                filters
+            ),
+            "equipment_tags": self._intelligence_json_counts(
+                "equipment_tags",
+                filters
+            ),
+            "primary_activity": self._intelligence_scalar_counts(
+                "primary_activity",
+                filters
+            ),
+            "recommended_uses": self._intelligence_json_counts(
+                "recommended_uses",
+                filters
+            ),
+            "content_themes": self._intelligence_json_counts(
+                "content_themes",
+                filters
+            ),
+            "content_tags": self._intelligence_json_counts(
+                "content_tags",
+                filters
+            )
+        }
+
+    ############################################################
+
+    def intelligence_media_count(self, filters=None):
+
+        where, params = self._intelligence_where(filters or {})
+
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        cur.execute(f"""
+
+        SELECT COUNT(*)
+
+        FROM media
+
+        JOIN media_intelligence
+        ON media_intelligence.media_id = media.id
+
+        {where}
+
+        """,
+
+        params)
+
+        count = cur.fetchone()[0]
+
+        conn.close()
+
+        return count
+
+    ############################################################
+
+    def get_intelligence_media_page(
+        self,
+        filters=None,
+        sort_by="filename",
+        limit=200,
+        offset=0
+    ):
+
+        where, params = self._intelligence_where(filters or {})
+        order_by = self._intelligence_order_by(sort_by)
+
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        cur.execute(f"""
+
+        SELECT
+
+            media.id,
+
+            media.filename,
+
+            media.path,
+
+            media.media_type
+
+        FROM media
+
+        JOIN media_intelligence
+        ON media_intelligence.media_id = media.id
+
+        {where}
+
+        ORDER BY {order_by}
+
+        LIMIT ? OFFSET ?
+
+        """,
+
+        params + [
+            limit,
+            offset
+        ])
+
+        rows = cur.fetchall()
+
+        conn.close()
+
+        return rows
+
+    ############################################################
+
+    def _intelligence_scalar_counts(self, field, filters):
+
+        section_filters = dict(filters or {})
+        section_filters.pop(field, None)
+        where, params = self._intelligence_where(section_filters)
+
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        cur.execute(f"""
+
+        SELECT
+
+            media_intelligence.{field},
+
+            COUNT(*)
+
+        FROM media_intelligence
+
+        JOIN media
+        ON media.id = media_intelligence.media_id
+
+        {where}
+
+        GROUP BY media_intelligence.{field}
+
+        HAVING media_intelligence.{field} IS NOT NULL
+        AND media_intelligence.{field} != ''
+
+        ORDER BY COUNT(*) DESC, media_intelligence.{field}
+
+        """,
+
+        params)
+
+        rows = cur.fetchall()
+
+        conn.close()
+
+        return rows
+
+    ############################################################
+
+    def _intelligence_json_counts(self, field, filters):
+
+        section_filters = dict(filters or {})
+        section_filters.pop(field, None)
+        where, params = self._intelligence_where(section_filters)
+
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        cur.execute(f"""
+
+        SELECT
+
+            json_each.value,
+
+            COUNT(DISTINCT media_intelligence.media_id)
+
+        FROM media_intelligence
+
+        JOIN media
+        ON media.id = media_intelligence.media_id
+
+        JOIN json_each(media_intelligence.{field})
+
+        {where}
+
+        GROUP BY json_each.value
+
+        HAVING json_each.value IS NOT NULL
+        AND json_each.value != ''
+
+        ORDER BY COUNT(DISTINCT media_intelligence.media_id) DESC,
+        json_each.value
+
+        """,
+
+        params)
+
+        rows = cur.fetchall()
+
+        conn.close()
+
+        return rows
+
+    ############################################################
+
+    def _intelligence_where(self, filters):
+
+        clauses = []
+        params = []
+
+        list_fields = {
+            "apparatus_tags",
+            "equipment_tags",
+            "ppe_tags",
+            "people_tags",
+            "content_tags",
+            "content_themes",
+            "recommended_uses"
+        }
+
+        scalar_fields = {
+            "normalized_scene",
+            "incident_type",
+            "primary_activity"
+        }
+
+        for field, values in (filters or {}).items():
+
+            values = [
+                value
+                for value in values
+                if value
+            ]
+
+            if not values:
+                continue
+
+            placeholders = ",".join("?" for _ in values)
+
+            if field in scalar_fields:
+                clauses.append(
+                    f"media_intelligence.{field} IN ({placeholders})"
+                )
+                params.extend(values)
+
+            elif field in list_fields:
+                clauses.append(f"""
+                EXISTS (
+                    SELECT 1
+                    FROM json_each(media_intelligence.{field})
+                    WHERE json_each.value IN ({placeholders})
+                )
+                """)
+                params.extend(values)
+
+        if not clauses:
+            return "", []
+
+        return (
+            "WHERE " + " AND ".join(clauses),
+            params
+        )
+
+    ############################################################
+
+    def _intelligence_order_by(self, sort_by):
+
+        sort_options = {
+            "filename": "media.filename ASC",
+            "date": "media.date_added DESC",
+            "intelligence_score": (
+                "media_intelligence.intelligence_score DESC, "
+                "media.filename ASC"
+            ),
+            "newest": "media.date_added DESC",
+            "oldest": "media.date_added ASC"
+        }
+
+        return sort_options.get(
+            sort_by,
+            sort_options["filename"]
+        )
+
+    ############################################################
+
     def _media_by_intelligence_field(self, field, value, limit):
 
         if field not in (
