@@ -1,15 +1,17 @@
 import customtkinter as ctk
 from tkinter import messagebox
+from collections import deque
 
 from gui.photo_card import PhotoCard
-from media.thumbnail_cache import ThumbnailCache
 from services.brain_service import BrainService
 from services.gallery_service import GalleryService
+from services.thumbnail_service import ThumbnailService
 
 
 class GalleryPage(ctk.CTkFrame):
 
     PAGE_SIZE = 200
+    CARD_RENDER_CHUNK = 10
 
     def __init__(self, parent):
 
@@ -23,7 +25,9 @@ class GalleryPage(ctk.CTkFrame):
         self.loaded = 0
         self.total = 0
         self.selected = set()
-        self.thumbnail_cache = ThumbnailCache()
+        self.thumbnail_service = ThumbnailService()
+        self.loading_cards = False
+        self.pending_cards = deque()
 
         self.build_page()
 
@@ -120,20 +124,40 @@ class GalleryPage(ctk.CTkFrame):
 
     def load_more(self):
 
-        end = min(
-            self.loaded + self.PAGE_SIZE,
-            self.total
-        )
+        if self.loading_cards:
+            return
 
         media = self.service.get_media_page(
             self.PAGE_SIZE,
             self.loaded
         )
 
-        for page_index, item in enumerate(media):
+        self.pending_cards = deque(
+            (
+                self.loaded + page_index,
+                item
+            )
+            for page_index, item in enumerate(media)
+        )
+        self.loading_cards = True
+        self.more.configure(
+            state="disabled",
+            text="Loading..."
+        )
+
+        self.render_card_chunk()
+
+    ########################################################
+
+    def render_card_chunk(self):
+
+        rendered = 0
+
+        while self.pending_cards and rendered < self.CARD_RENDER_CHUNK:
+
+            index, item = self.pending_cards.popleft()
 
             media_id, filename, path, media_type = item
-            index = self.loaded + page_index
 
             try:
 
@@ -142,7 +166,7 @@ class GalleryPage(ctk.CTkFrame):
                     media_id,
                     filename,
                     path,
-                    thumbnail_cache=self.thumbnail_cache,
+                    thumbnail_service=self.thumbnail_service,
                     selection_callback=self.selection_changed
                 )
 
@@ -161,17 +185,35 @@ class GalleryPage(ctk.CTkFrame):
                 print(path)
                 print(ex)
 
-        self.loaded = end
+            rendered += 1
+
+        self.loaded += rendered
 
         self.info.configure(
             text=f"Showing {self.loaded:,} of {self.total:,} media"
         )
+
+        if self.pending_cards:
+
+            self.after(
+                50,
+                self.render_card_chunk
+            )
+            return
+
+        self.loading_cards = False
 
         if self.loaded >= self.total:
 
             self.more.configure(
                 state="disabled",
                 text="All Media Loaded"
+            )
+
+        else:
+            self.more.configure(
+                state="normal",
+                text="Load More"
             )
 
     ########################################################
@@ -232,12 +274,32 @@ class GalleryPage(ctk.CTkFrame):
 
     def analysis_progress(self, progress):
 
+        bulk_total = progress.get("bulk_total", 0)
+        bulk_processed = progress.get("bulk_processed", 0)
+
+        if bulk_total:
+            text = (
+                f"AI bulk: {bulk_processed:,} of "
+                f"{bulk_total:,} processed"
+            )
+        else:
+            text = (
+                f"AI queue: {progress.get('queued', 0):,} queued, "
+                f"{progress.get('running', 0):,} running"
+            )
+
         self.after(
             0,
             lambda: self.info.configure(
-                text=(
-                    f"AI queue: {progress.get('queued', 0):,} queued, "
-                    f"{progress.get('running', 0):,} running"
-                )
+                text=text
             )
         )
+
+    ########################################################
+
+    def destroy(self):
+
+        if hasattr(self, "thumbnail_service"):
+            self.thumbnail_service.shutdown()
+
+        super().destroy()

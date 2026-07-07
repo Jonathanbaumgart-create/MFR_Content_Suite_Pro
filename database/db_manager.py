@@ -608,6 +608,84 @@ class DatabaseManager:
 
     ############################################################
 
+    def media_under_path_count(self, folder_path):
+
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        SELECT COUNT(*)
+
+        FROM media
+
+        WHERE path LIKE ?
+        AND media_type='image'
+
+        """,
+
+        (
+
+            f"{folder_path}%",
+
+        ))
+
+        count = cur.fetchone()[0]
+
+        conn.close()
+
+        return count
+
+    ############################################################
+
+    def get_media_under_path_page(self, folder_path, limit, offset=0):
+
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        SELECT
+
+            id,
+
+            filename,
+
+            path,
+
+            media_type
+
+        FROM media
+
+        WHERE path LIKE ?
+        AND media_type='image'
+
+        ORDER BY filename
+
+        LIMIT ? OFFSET ?
+
+        """,
+
+        (
+
+            f"{folder_path}%",
+
+            limit,
+
+            offset
+
+        ))
+
+        rows = cur.fetchall()
+
+        conn.close()
+
+        return rows
+
+    ############################################################
+
     def get_image_media(self):
 
         conn = self.connection()
@@ -633,6 +711,68 @@ class DatabaseManager:
         ORDER BY filename
 
         """)
+
+        rows = cur.fetchall()
+
+        conn.close()
+
+        return rows
+
+    ############################################################
+
+    def image_media_count(self):
+
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        cur.execute(
+            "SELECT COUNT(*) FROM media WHERE media_type='image'"
+        )
+
+        count = cur.fetchone()[0]
+
+        conn.close()
+
+        return count
+
+    ############################################################
+
+    def get_image_media_page(self, limit, offset=0):
+
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        SELECT
+
+            id,
+
+            filename,
+
+            path,
+
+            media_type
+
+        FROM media
+
+        WHERE media_type='image'
+
+        ORDER BY filename
+
+        LIMIT ? OFFSET ?
+
+        """,
+
+        (
+
+            limit,
+
+            offset
+
+        ))
 
         rows = cur.fetchall()
 

@@ -1,11 +1,25 @@
 import customtkinter as ctk
+import threading
 
-from media.thumbnail_cache import ThumbnailCache
-from media.image_loader import ImageLoader
 from gui.photo_viewer import PhotoViewer
 
 
 class PhotoCard(ctk.CTkFrame):
+
+    _thumbnail_update_lock = threading.Lock()
+    _thumbnail_update_counter = 0
+
+    IMAGE_EXTENSIONS = {
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".bmp",
+        ".gif",
+        ".webp",
+        ".tif",
+        ".tiff",
+        ".heic"
+    }
 
     def __init__(
         self,
@@ -13,7 +27,7 @@ class PhotoCard(ctk.CTkFrame):
         media_id,
         filename,
         filepath,
-        thumbnail_cache=None,
+        thumbnail_service=None,
         selection_callback=None
     ):
 
@@ -30,22 +44,16 @@ class PhotoCard(ctk.CTkFrame):
         self.filepath = filepath
         self.media_id = media_id
         self.selection_callback = selection_callback
+        self.thumbnail_service = thumbnail_service
+        self.image = None
 
-        cache = thumbnail_cache or ThumbnailCache()
-
-        thumb = cache.get_thumbnail(filepath)
-
-        if thumb:
-
-            self.image = ImageLoader.load_image(
-                thumb,
-                (170, 170)
-            )
+        if self.is_image():
 
             self.preview = ctk.CTkLabel(
                 self,
-                image=self.image,
-                text=""
+                text="Loading...",
+                width=170,
+                height=170
             )
 
         else:
@@ -98,6 +106,70 @@ class PhotoCard(ctk.CTkFrame):
             widget.bind(
                 "<Double-Button-1>",
                 self.open_viewer
+            )
+
+        if self.is_image() and self.thumbnail_service:
+            self.thumbnail_service.load_thumbnail(
+                self.filepath,
+                self.thumbnail_ready
+            )
+
+    ##########################################################
+
+    def is_image(self):
+
+        return self.filepath.lower().endswith(
+            tuple(self.IMAGE_EXTENSIONS)
+        )
+
+    ##########################################################
+
+    def thumbnail_ready(self, media_path, thumbnail_image):
+
+        with self._thumbnail_update_lock:
+            delay = (self._thumbnail_update_counter % 40) * 25
+            self.__class__._thumbnail_update_counter += 1
+
+        try:
+            self.after(
+                delay,
+                lambda: self.show_thumbnail(thumbnail_image)
+            )
+        except Exception:
+            pass
+
+    ##########################################################
+
+    def show_thumbnail(self, thumbnail_image):
+
+        try:
+            if not self.winfo_exists():
+                return
+        except Exception:
+            return
+
+        if thumbnail_image is None:
+            self.preview.configure(
+                text="No Preview",
+                image=None
+            )
+            return
+
+        try:
+            self.image = ctk.CTkImage(
+                light_image=thumbnail_image,
+                dark_image=thumbnail_image,
+                size=(170, 170)
+            )
+
+            self.preview.configure(
+                image=self.image,
+                text=""
+            )
+        except Exception:
+            self.preview.configure(
+                text="No Preview",
+                image=None
             )
 
     ##########################################################

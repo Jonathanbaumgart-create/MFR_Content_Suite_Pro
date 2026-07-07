@@ -413,6 +413,20 @@ class AIDashboardPage(ctk.CTkFrame):
 
     def progress_update(self, progress):
 
+        bulk_total = progress.get("bulk_total", 0)
+        bulk_processed = progress.get("bulk_processed", 0)
+
+        if bulk_total:
+            self.after(
+                0,
+                lambda: self.status.configure(
+                    text=(
+                        f"Bulk analysis: {bulk_processed:,} of "
+                        f"{bulk_total:,} processed"
+                    )
+                )
+            )
+
         self.after(
             0,
             self.refresh_metrics

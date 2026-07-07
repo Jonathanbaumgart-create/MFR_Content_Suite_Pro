@@ -220,6 +220,11 @@ def main():
             assert rebuilt["completed"] == 2, rebuilt
             assert rebuilt["failed"] == 0, rebuilt
 
+            bulk = brain.analyze_entire_library()
+            assert len(bulk) == db.image_media_count(), bulk
+            bulk_result = bulk.future.result(timeout=20)
+            assert bulk_result["total"] == len(bulk), bulk_result
+
             cleared = brain.clear_mock_analysis()
             assert cleared["analysis_deleted"] >= 4, cleared
             assert cleared["intelligence_deleted"] >= 1, cleared

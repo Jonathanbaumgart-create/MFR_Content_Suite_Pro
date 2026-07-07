@@ -15,10 +15,24 @@ logger = LoggingService.get_logger("ai")
 intelligence_logger = LoggingService.get_logger("intelligence")
 
 
+class BulkAnalysisHandle:
+
+    def __init__(self, future, count):
+
+        self.future = future
+        self.count = count
+
+    def __len__(self):
+
+        return self.count
+
+
 class BrainService:
 
     _active_jobs = {}
     _active_jobs_lock = threading.Lock()
+    _bulk_cancel = threading.Event()
+    BULK_BATCH_SIZE = 200
 
     def __init__(
         self,
@@ -103,6 +117,8 @@ class BrainService:
     ############################################################
 
     def cancel_queued_jobs(self):
+
+        self._bulk_cancel.set()
 
         canceled = self.jobs.cancel_queued()
 
@@ -223,28 +239,30 @@ class BrainService:
         progress_callback=None
     ):
 
-        futures = []
+        media_items = [
+            item
+            for item in media_items
+            if item[3] == "image"
+        ]
 
-        for media_id, filename, path, media_type in media_items:
+        self._bulk_cancel.clear()
 
-            if media_type != "image":
-                continue
-
-            future = self.analyze_photo(
-                media_id,
-                path,
-                force=force,
-                progress_callback=progress_callback
-            )
-
-            futures.append(future)
+        future = self.jobs.submit(
+            self._analyze_media_batch,
+            media_items,
+            force,
+            progress_callback
+        )
 
         self._report_progress(
             progress_callback,
             "bulk queued"
         )
 
-        return futures
+        return BulkAnalysisHandle(
+            future,
+            len(media_items)
+        )
 
     ############################################################
 
@@ -272,12 +290,25 @@ class BrainService:
         progress_callback=None
     ):
 
-        media_items = self.db.get_media_under_path(folder_path)
+        total = self.db.media_under_path_count(folder_path)
+        self._bulk_cancel.clear()
 
-        return self.analyze_media_items(
-            media_items,
-            force=force,
-            progress_callback=progress_callback
+        future = self.jobs.submit(
+            self._analyze_folder_batch,
+            folder_path,
+            total,
+            force,
+            progress_callback
+        )
+
+        self._report_progress(
+            progress_callback,
+            "bulk queued"
+        )
+
+        return BulkAnalysisHandle(
+            future,
+            total
         )
 
     ############################################################
@@ -288,12 +319,24 @@ class BrainService:
         progress_callback=None
     ):
 
-        media_items = self.db.get_image_media()
+        total = self.db.image_media_count()
+        self._bulk_cancel.clear()
 
-        return self.analyze_media_items(
-            media_items,
-            force=force,
-            progress_callback=progress_callback
+        future = self.jobs.submit(
+            self._analyze_library_batch,
+            total,
+            force,
+            progress_callback
+        )
+
+        self._report_progress(
+            progress_callback,
+            "bulk queued"
+        )
+
+        return BulkAnalysisHandle(
+            future,
+            total
         )
 
     ############################################################
@@ -340,6 +383,215 @@ class BrainService:
             )
 
             raise
+
+    ############################################################
+
+    def _analyze_media_batch(self, media_items, force, progress_callback):
+
+        return self._run_bulk_items(
+            media_items,
+            len(media_items),
+            force,
+            progress_callback
+        )
+
+    ############################################################
+
+    def _analyze_folder_batch(
+        self,
+        folder_path,
+        total,
+        force,
+        progress_callback
+    ):
+
+        processed = 0
+        analyzed = 0
+        skipped = 0
+        failed = 0
+        offset = 0
+
+        while offset < total and not self._bulk_cancel.is_set():
+
+            self.jobs.wait_if_paused()
+
+            media_items = self.db.get_media_under_path_page(
+                folder_path,
+                self.BULK_BATCH_SIZE,
+                offset
+            )
+
+            if not media_items:
+                break
+
+            result = self._run_bulk_items(
+                media_items,
+                total,
+                force,
+                progress_callback,
+                processed
+            )
+
+            processed = result["processed"]
+            analyzed += result["analyzed"]
+            skipped += result["skipped"]
+            failed += result["failed"]
+            offset += len(media_items)
+
+        return {
+            "total": total,
+            "processed": processed,
+            "analyzed": analyzed,
+            "skipped": skipped,
+            "failed": failed,
+            "canceled": self._bulk_cancel.is_set()
+        }
+
+    ############################################################
+
+    def _analyze_library_batch(self, total, force, progress_callback):
+
+        processed = 0
+        analyzed = 0
+        skipped = 0
+        failed = 0
+        offset = 0
+
+        while offset < total and not self._bulk_cancel.is_set():
+
+            self.jobs.wait_if_paused()
+
+            media_items = self.db.get_image_media_page(
+                self.BULK_BATCH_SIZE,
+                offset
+            )
+
+            if not media_items:
+                break
+
+            result = self._run_bulk_items(
+                media_items,
+                total,
+                force,
+                progress_callback,
+                processed
+            )
+
+            processed = result["processed"]
+            analyzed += result["analyzed"]
+            skipped += result["skipped"]
+            failed += result["failed"]
+            offset += len(media_items)
+
+        return {
+            "total": total,
+            "processed": processed,
+            "analyzed": analyzed,
+            "skipped": skipped,
+            "failed": failed,
+            "canceled": self._bulk_cancel.is_set()
+        }
+
+    ############################################################
+
+    def _run_bulk_items(
+        self,
+        media_items,
+        total,
+        force,
+        progress_callback,
+        processed_offset=0
+    ):
+
+        processed = processed_offset
+        analyzed = 0
+        skipped = 0
+        failed = 0
+
+        for media_id, filename, path, media_type in media_items:
+
+            if self._bulk_cancel.is_set():
+                break
+
+            self.jobs.wait_if_paused()
+
+            processed += 1
+
+            try:
+                cached = self.get_analysis(media_id)
+
+                if (
+                    self.is_mock_provider() and
+                    self._is_non_mock_success(cached)
+                ):
+                    skipped += 1
+                    continue
+
+                if not force and cached and not cached.get("failure_reason"):
+                    skipped += 1
+                    continue
+
+                self._analyze_and_save(
+                    media_id,
+                    path
+                )
+                analyzed += 1
+
+            except Exception:
+                failed += 1
+
+            if processed % 10 == 0:
+                self._report_bulk_progress(
+                    progress_callback,
+                    total,
+                    processed,
+                    analyzed,
+                    skipped,
+                    failed
+                )
+
+        self._report_bulk_progress(
+            progress_callback,
+            total,
+            processed,
+            analyzed,
+            skipped,
+            failed
+        )
+
+        return {
+            "total": total,
+            "processed": processed,
+            "analyzed": analyzed,
+            "skipped": skipped,
+            "failed": failed,
+            "canceled": self._bulk_cancel.is_set()
+        }
+
+    ############################################################
+
+    def _report_bulk_progress(
+        self,
+        progress_callback,
+        total,
+        processed,
+        analyzed,
+        skipped,
+        failed
+    ):
+
+        if not progress_callback:
+            return
+
+        progress = self.queue_progress()
+        progress["status"] = "bulk running"
+        progress["bulk_total"] = total
+        progress["bulk_processed"] = processed
+        progress["bulk_analyzed"] = analyzed
+        progress["bulk_skipped"] = skipped
+        progress["bulk_failed"] = failed
+
+        progress_callback(progress)
 
     ############################################################
 

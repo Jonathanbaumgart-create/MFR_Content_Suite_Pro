@@ -22,7 +22,7 @@ class ScanService:
         started = time.perf_counter()
         started_at = datetime.now()
         total_files = self.scanner.count_files(folder)
-        total = self.scanner.count_media(folder)
+        total = total_files
         processed = 0
         inserted = 0
         duplicate_path = 0
@@ -30,12 +30,11 @@ class ScanService:
         failed = 0
         existing_paths, existing_hashes = self._media_identity_sets()
 
-        print(f"Found {total} supported media files.")
+        print(f"Found {total_files} files.")
         logger.info(
-            "Starting media scan folder=%s files=%s supported=%s",
+            "Starting media scan folder=%s files=%s",
             folder,
-            total_files,
-            total
+            total_files
         )
 
         for item in self.scanner.scan_folder(
@@ -131,7 +130,7 @@ class ScanService:
 
         stats = {
             "total": total_files,
-            "supported": total,
+            "supported": processed,
             "processed": processed,
             "inserted": inserted,
             "duplicates": duplicates,

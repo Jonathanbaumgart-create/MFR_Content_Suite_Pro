@@ -140,6 +140,15 @@ class JobManager:
 
     # ---------------------------------------------------------
 
+    def wait_if_paused(self):
+
+        with self._condition:
+
+            while self._paused and not self._shutdown.is_set():
+                self._condition.wait()
+
+    # ---------------------------------------------------------
+
     def _worker_loop(self):
 
         while not self._shutdown.is_set():
