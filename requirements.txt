@@ -1,0 +1,13 @@
+customtkinter
+pillow
+watchdog
+requests
+sqlite-utils
+sqlite-fts4
+opencv-python
+imagehash
+piexif
+ffmpeg-python
+pymediainfo
+tqdm
+numpyok

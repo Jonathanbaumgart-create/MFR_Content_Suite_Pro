@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual Environment
+venv/
+
+# VS Code
+.vscode/
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# SQLite temporary files
+*.db-wal
+*.db-shm
+
+# Generated thumbnails (optional)
+
+# Python cache
+.pytest_cache/
+.mypy_cache/
+
+# Distribution
+build/
+dist/
+
+# Logs
+*.log
+# User database
+
+database/*.db
+database/*.sqlite
+database/*.sqlite3
