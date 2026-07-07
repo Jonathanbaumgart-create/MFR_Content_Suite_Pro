@@ -84,6 +84,7 @@ class GalleryPage(ctk.CTkFrame):
 
                 card = PhotoCard(
                     self.scroll,
+                    media_id,
                     filename,
                     path
                 )

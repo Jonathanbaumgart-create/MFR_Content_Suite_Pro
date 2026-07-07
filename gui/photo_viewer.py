@@ -1,11 +1,12 @@
 import customtkinter as ctk
 
 from media.image_loader import ImageLoader
+from services.brain_service import BrainService
 
 
 class PhotoViewer(ctk.CTkToplevel):
 
-    def __init__(self, parent, filename, filepath):
+    def __init__(self, parent, media_id, filename, filepath):
 
         super().__init__(parent)
 
@@ -23,8 +24,12 @@ class PhotoViewer(ctk.CTkToplevel):
 
         self.filename = filename
         self.filepath = filepath
+        self.media_id = media_id
+        self.brain = BrainService()
+        self.analysis = None
 
         self.build_ui()
+        self.load_analysis()
 
     ##########################################################
 
@@ -164,20 +169,135 @@ class PhotoViewer(ctk.CTkToplevel):
             pady=5
         )
 
-        ctk.CTkTextbox(
+        self.analysis_text = ctk.CTkTextbox(
             ai,
             height=420
-        ).pack(
+        )
+
+        self.analysis_text.pack(
             fill="both",
             expand=True,
             padx=20,
             pady=20
         )
 
+        self.analysis_text.configure(state="disabled")
+
     ##########################################################
 
     def analyze_photo(self):
 
-        self.status.configure(
-            text="Status: AI coming next..."
+        self.analyze_button.configure(
+            state="disabled"
         )
+
+        self.status.configure(
+            text="Status: Analyzing..."
+        )
+
+        self.brain.analyze_photo(
+            self.media_id,
+            self.filepath,
+            callback=self.analysis_complete,
+            error_callback=self.analysis_failed
+        )
+
+    ##########################################################
+
+    def load_analysis(self):
+
+        analysis = self.brain.get_analysis(self.media_id)
+
+        if analysis is None:
+            return
+
+        self.show_analysis(analysis)
+
+    ##########################################################
+
+    def analysis_complete(self, analysis):
+
+        self.after(
+            0,
+            lambda: self.show_analysis(analysis)
+        )
+
+    ##########################################################
+
+    def analysis_failed(self, error):
+
+        self.after(
+            0,
+            lambda: self.show_error(error)
+        )
+
+    ##########################################################
+
+    def show_analysis(self, analysis):
+
+        self.analysis = analysis
+
+        self.status.configure(
+            text="Status: Analyzed"
+        )
+
+        self.analyze_button.configure(
+            state="normal",
+            text="Analyze Again"
+        )
+
+        self.facebook_button.configure(state="normal")
+        self.instagram_button.configure(state="normal")
+        self.both_button.configure(state="normal")
+
+        lines = [
+            analysis.get("description", ""),
+            "",
+            f"Scene: {analysis.get('scene_type', '')}",
+            f"Activity: {analysis.get('activity', '')}",
+            f"People: {analysis.get('people_count', 0)}",
+            "",
+            "Apparatus: " + self.format_list(analysis.get("apparatus")),
+            "Equipment: " + self.format_list(analysis.get("equipment")),
+            "Keywords: " + self.format_list(analysis.get("keywords")),
+            "",
+            f"Community Score: {analysis.get('community_score', 0)}",
+            f"Recruitment Score: {analysis.get('recruitment_score', 0)}",
+            f"Education Score: {analysis.get('education_score', 0)}",
+            f"Technical Score: {analysis.get('technical_score', 0)}",
+            f"Overall Score: {analysis.get('overall_score', 0)}",
+            "",
+            f"Model: {analysis.get('model', '')}",
+            f"Analyzed: {analysis.get('analyzed_at', '')}"
+        ]
+
+        self.analysis_text.configure(state="normal")
+        self.analysis_text.delete("1.0", "end")
+        self.analysis_text.insert("1.0", "\n".join(lines))
+        self.analysis_text.configure(state="disabled")
+
+    ##########################################################
+
+    def show_error(self, error):
+
+        self.status.configure(
+            text=f"Status: Analysis failed"
+        )
+
+        self.analyze_button.configure(
+            state="normal"
+        )
+
+        self.analysis_text.configure(state="normal")
+        self.analysis_text.delete("1.0", "end")
+        self.analysis_text.insert("1.0", str(error))
+        self.analysis_text.configure(state="disabled")
+
+    ##########################################################
+
+    def format_list(self, value):
+
+        if not value:
+            return "None"
+
+        return ", ".join(str(item) for item in value)

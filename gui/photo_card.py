@@ -10,6 +10,7 @@ class PhotoCard(ctk.CTkFrame):
     def __init__(
         self,
         parent,
+        media_id,
         filename,
         filepath
     ):
@@ -25,6 +26,7 @@ class PhotoCard(ctk.CTkFrame):
 
         self.filename = filename
         self.filepath = filepath
+        self.media_id = media_id
 
         cache = ThumbnailCache()
 
@@ -88,6 +90,7 @@ class PhotoCard(ctk.CTkFrame):
 
         PhotoViewer(
             self,
+            self.media_id,
             self.filename,
             self.filepath
         )

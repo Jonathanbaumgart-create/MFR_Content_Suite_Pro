@@ -1,5 +1,6 @@
 import sqlite3
 from pathlib import Path
+import json
 
 
 class DatabaseManager:
@@ -343,6 +344,7 @@ class DatabaseManager:
     def get_ai_analysis(self, media_id):
 
         conn = self.connection()
+        conn.row_factory = sqlite3.Row
 
         cur = conn.cursor()
 
@@ -362,7 +364,10 @@ class DatabaseManager:
 
         conn.close()
 
-        return row
+        if row is None:
+            return None
+
+        return self._analysis_from_row(row)
 
     ############################################################
 
@@ -402,11 +407,17 @@ class DatabaseManager:
 
             overall_score,
 
+            facebook_caption,
+
+            instagram_caption,
+
+            analyzed_at,
+
             model
 
         )
 
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,?)
 
         """,
 
@@ -420,23 +431,27 @@ class DatabaseManager:
 
             analysis.get("activity"),
 
-            analysis.get("people_count"),
+            self._to_int(analysis.get("people_count")),
 
-            analysis.get("apparatus"),
+            self._to_json(analysis.get("apparatus")),
 
-            analysis.get("equipment"),
+            self._to_json(analysis.get("equipment")),
 
-            analysis.get("keywords"),
+            self._to_json(analysis.get("keywords")),
 
-            analysis.get("community_score"),
+            self._to_int(analysis.get("community_score")),
 
-            analysis.get("recruitment_score"),
+            self._to_int(analysis.get("recruitment_score")),
 
-            analysis.get("education_score"),
+            self._to_int(analysis.get("education_score")),
 
-            analysis.get("technical_score"),
+            self._to_int(analysis.get("technical_score")),
 
-            analysis.get("overall_score"),
+            self._to_int(analysis.get("overall_score")),
+
+            analysis.get("facebook_caption"),
+
+            analysis.get("instagram_caption"),
 
             analysis.get("model")
 
@@ -445,3 +460,57 @@ class DatabaseManager:
         conn.commit()
 
         conn.close()
+
+    ############################################################
+
+    def _analysis_from_row(self, row):
+
+        return {
+            "media_id": row["media_id"],
+            "description": row["description"] or "",
+            "scene_type": row["scene_type"] or "",
+            "activity": row["activity"] or "",
+            "people_count": row["people_count"] or 0,
+            "apparatus": self._from_json(row["apparatus"]),
+            "equipment": self._from_json(row["equipment"]),
+            "keywords": self._from_json(row["keywords"]),
+            "community_score": row["community_score"] or 0,
+            "recruitment_score": row["recruitment_score"] or 0,
+            "education_score": row["education_score"] or 0,
+            "technical_score": row["technical_score"] or 0,
+            "overall_score": row["overall_score"] or 0,
+            "facebook_caption": row["facebook_caption"] or "",
+            "instagram_caption": row["instagram_caption"] or "",
+            "analyzed_at": row["analyzed_at"],
+            "model": row["model"] or ""
+        }
+
+    ############################################################
+
+    def _to_json(self, value):
+
+        if value is None:
+            value = []
+
+        return json.dumps(value)
+
+    ############################################################
+
+    def _from_json(self, value):
+
+        if not value:
+            return []
+
+        try:
+            return json.loads(value)
+        except Exception:
+            return [value]
+
+    ############################################################
+
+    def _to_int(self, value):
+
+        try:
+            return int(value)
+        except Exception:
+            return 0

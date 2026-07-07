@@ -1,118 +1,110 @@
-import base64
 import json
-import requests
+import re
+
+from services.vision_service import VisionService
 
 
 class AIService:
 
-    OLLAMA_URL = "http://localhost:11434/api/generate"
-
-    ############################################################
+    def __init__(self, vision_service=None):
+        self._vision = vision_service or VisionService()
 
     def analyze_image(self, image_path):
 
-        with open(image_path, "rb") as image:
-
-            encoded = base64.b64encode(
-                image.read()
-            ).decode("utf-8")
-
-        prompt = """
-You are the AI assistant for Morden Fire & Rescue.
-
-Analyze this image.
-
-Return ONLY valid JSON.
-
-Do not wrap the JSON in markdown.
-
-Return this exact structure:
-
-{
-  "description":"",
-  "scene_type":"",
-  "activity":"",
-  "people_count":0,
-  "apparatus":[],
-  "equipment":[],
-  "keywords":[],
-  "community_score":0,
-  "recruitment_score":0,
-  "education_score":0,
-  "technical_score":0,
-  "overall_score":0,
-  "model":"qwen2.5vl:7b"
-}
-
-Rules:
-
-- Be factual.
-- Do not invent information.
-- Estimate scores from 0-100.
-- Apparatus, equipment and keywords MUST be arrays.
-- Return JSON only.
-"""
-
-        response = requests.post(
-
-            self.OLLAMA_URL,
-
-            json={
-
-                "model": "qwen2.5vl:7b",
-
-                "prompt": prompt,
-
-                "images": [
-
-                    encoded
-
-                ],
-
-                "stream": False
-
-            },
-
-            timeout=300
-
-        )
-
-        response.raise_for_status()
-
-        text = response.json()["response"]
+        text = self._vision.analyze(image_path)
 
         try:
-
-            return json.loads(text)
-
+            data = json.loads(self._clean_json(text))
         except Exception:
-
-            return {
-
+            data = {
                 "description": text,
-
                 "scene_type": "",
-
                 "activity": "",
-
                 "people_count": 0,
-
                 "apparatus": [],
-
                 "equipment": [],
-
                 "keywords": [],
-
                 "community_score": 50,
-
                 "recruitment_score": 50,
-
                 "education_score": 50,
-
                 "technical_score": 50,
-
                 "overall_score": 50,
-
-                "model": "qwen2.5vl:7b"
-
+                "facebook_caption": "",
+                "instagram_caption": "",
+                "model": "unknown"
             }
+
+        defaults = {
+            "description": "",
+            "scene_type": "",
+            "activity": "",
+            "people_count": 0,
+            "apparatus": [],
+            "equipment": [],
+            "keywords": [],
+            "community_score": 0,
+            "recruitment_score": 0,
+            "education_score": 0,
+            "technical_score": 0,
+            "overall_score": 0,
+            "facebook_caption": "",
+            "instagram_caption": "",
+            "model": "unknown"
+        }
+
+        for k, v in defaults.items():
+            data.setdefault(k, v)
+
+        data["apparatus"] = self._ensure_list(data.get("apparatus"))
+        data["equipment"] = self._ensure_list(data.get("equipment"))
+        data["keywords"] = self._ensure_list(data.get("keywords"))
+        data["people_count"] = self._ensure_int(data.get("people_count"))
+
+        for key in (
+            "community_score",
+            "recruitment_score",
+            "education_score",
+            "technical_score",
+            "overall_score"
+        ):
+            data[key] = self._ensure_int(data.get(key))
+
+        return data
+
+    ############################################################
+
+    def _clean_json(self, text):
+
+        text = text.strip()
+
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:json)?", "", text)
+            text = re.sub(r"```$", "", text)
+
+        return text.strip()
+
+    ############################################################
+
+    def _ensure_list(self, value):
+
+        if value is None:
+            return []
+
+        if isinstance(value, list):
+            return value
+
+        if isinstance(value, str):
+            if not value.strip():
+                return []
+            return [value]
+
+        return [str(value)]
+
+    ############################################################
+
+    def _ensure_int(self, value):
+
+        try:
+            return int(value)
+        except Exception:
+            return 0
