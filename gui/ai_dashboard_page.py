@@ -1,4 +1,5 @@
 import customtkinter as ctk
+from tkinter import messagebox
 
 from services.brain_service import BrainService
 
@@ -37,6 +38,18 @@ class AIDashboardPage(ctk.CTkFrame):
         )
 
         self.status.pack(
+            anchor="w",
+            padx=20,
+            pady=(0, 5)
+        )
+
+        self.mock_notice = ctk.CTkLabel(
+            self,
+            text="",
+            text_color="#f5c542"
+        )
+
+        self.mock_notice.pack(
             anchor="w",
             padx=20,
             pady=(0, 15)
@@ -131,7 +144,8 @@ class AIDashboardPage(ctk.CTkFrame):
             ("Pause Queue", self.pause_queue),
             ("Resume Queue", self.resume_queue),
             ("Cancel Queued Jobs", self.cancel_jobs),
-            ("Clear Completed Jobs", self.clear_completed)
+            ("Clear Completed Jobs", self.clear_completed),
+            ("Clear Mock Analysis", self.clear_mock_analysis)
         )
 
         for text, command in controls:
@@ -214,6 +228,17 @@ class AIDashboardPage(ctk.CTkFrame):
             side="left"
         )
 
+        intelligence_button = ctk.CTkButton(
+            actions,
+            text="Build Intelligence Index",
+            command=self.build_intelligence_index
+        )
+
+        intelligence_button.pack(
+            side="left",
+            padx=(10, 0)
+        )
+
     ##########################################################
 
     def pause_queue(self):
@@ -257,6 +282,9 @@ class AIDashboardPage(ctk.CTkFrame):
             )
             return
 
+        if not self.confirm_mock_bulk_analysis():
+            return
+
         futures = self.brain.analyze_folder(
             folder,
             progress_callback=self.progress_update
@@ -270,12 +298,115 @@ class AIDashboardPage(ctk.CTkFrame):
 
     def analyze_library(self):
 
+        if not self.confirm_mock_bulk_analysis():
+            return
+
         futures = self.brain.analyze_entire_library(
             progress_callback=self.progress_update
         )
 
         self.status.configure(
             text=f"Queued {len(futures):,} library analysis jobs"
+        )
+
+    ##########################################################
+
+    def build_intelligence_index(self):
+
+        self.brain.build_intelligence_index(
+            progress_callback=self.intelligence_progress,
+            callback=self.intelligence_complete,
+            error_callback=self.intelligence_failed
+        )
+
+        self.status.configure(
+            text="Building intelligence index..."
+        )
+
+    ##########################################################
+
+    def clear_mock_analysis(self):
+
+        if not messagebox.askyesno(
+            "Clear Mock Analysis",
+            (
+                "Clear all mock provider analysis and related "
+                "Media Intelligence rows?"
+            )
+        ):
+            return
+
+        result = self.brain.clear_mock_analysis()
+
+        self.status.configure(
+            text=(
+                f"Cleared {result.get('analysis_deleted', 0):,} mock "
+                f"analysis rows and "
+                f"{result.get('intelligence_deleted', 0):,} intelligence rows"
+            )
+        )
+
+        self.refresh_metrics()
+
+    ##########################################################
+
+    def confirm_mock_bulk_analysis(self):
+
+        if not self.brain.is_mock_provider():
+            return True
+
+        return messagebox.askyesno(
+            "Mock Provider Active",
+            (
+                "Mock provider active - test data only.\n\n"
+                "Bulk analysis will save the same test analysis for each "
+                "photo that does not already have real analysis. Continue?"
+            )
+        )
+
+    ##########################################################
+
+    def intelligence_progress(self, progress):
+
+        completed = progress.get("completed", 0)
+        total = progress.get("total", 0)
+        failed = progress.get("failed", 0)
+
+        self.after(
+            0,
+            lambda: self.status.configure(
+                text=(
+                    "Building intelligence index: "
+                    f"{completed:,} of {total:,} "
+                    f"({failed:,} failed)"
+                )
+            )
+        )
+
+    ##########################################################
+
+    def intelligence_complete(self, result):
+
+        self.after(
+            0,
+            lambda: self.status.configure(
+                text=(
+                    "Intelligence index complete. "
+                    f"{result.get('completed', 0):,} built, "
+                    f"{result.get('failed', 0):,} failed."
+                )
+            )
+        )
+
+    ##########################################################
+
+    def intelligence_failed(self, error):
+
+        self.after(
+            0,
+            lambda: self.status.configure(
+                text=f"Intelligence index failed: {error}"
+            )
         )
 
     ##########################################################
@@ -305,6 +436,15 @@ class AIDashboardPage(ctk.CTkFrame):
             )
 
         paused = metrics.get("paused")
+
+        if metrics.get("provider") == "mock":
+            self.mock_notice.configure(
+                text="Mock provider active - test data only"
+            )
+        else:
+            self.mock_notice.configure(
+                text=""
+            )
 
         if paused:
             self.status.configure(

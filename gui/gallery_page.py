@@ -1,4 +1,5 @@
 import customtkinter as ctk
+from tkinter import messagebox
 
 from gui.photo_card import PhotoCard
 from media.thumbnail_cache import ThumbnailCache
@@ -204,6 +205,19 @@ class GalleryPage(ctk.CTkFrame):
     ########################################################
 
     def analyze_selected(self):
+
+        if self.brain.is_mock_provider():
+
+            if not messagebox.askyesno(
+                "Mock Provider Active",
+                (
+                    "Mock provider active - test data only.\n\n"
+                    "Selected-photo analysis will save the same test "
+                    "analysis for each photo that does not already have "
+                    "real analysis. Continue?"
+                )
+            ):
+                return
 
         futures = self.brain.analyze_selected(
             list(self.selected),

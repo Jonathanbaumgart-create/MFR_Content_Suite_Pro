@@ -132,7 +132,50 @@ class DatabaseManager:
 
         """)
 
+        ########################################################
+        # Media Intelligence
+        ########################################################
+
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS media_intelligence(
+
+            media_id INTEGER PRIMARY KEY,
+
+            normalized_scene TEXT,
+
+            incident_type TEXT,
+
+            primary_activity TEXT,
+
+            apparatus_tags TEXT,
+
+            equipment_tags TEXT,
+
+            ppe_tags TEXT,
+
+            people_tags TEXT,
+
+            content_tags TEXT,
+
+            content_themes TEXT,
+
+            recommended_uses TEXT,
+
+            search_text TEXT,
+
+            intelligence_score INTEGER,
+
+            generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+            source_model TEXT
+
+        )
+
+        """)
+
         self._ensure_ai_analysis_columns(cur)
+        self._ensure_media_intelligence_columns(cur)
         self._ensure_indexes(cur)
 
         conn.commit()
@@ -823,6 +866,15 @@ class DatabaseManager:
 
         existing = self.get_ai_analysis(media_id)
 
+        if existing and not existing.get("failure_reason"):
+            logger.error(
+                "AI failure preserved existing analysis media_id=%s provider=%s reason=%s",
+                media_id,
+                failure.get("provider"),
+                failure.get("failure_reason")
+            )
+            return
+
         analysis = existing or {
             "description": "",
             "scene_type": "",
@@ -854,6 +906,407 @@ class DatabaseManager:
 
     ############################################################
 
+    def clear_mock_analysis(self):
+
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        DELETE FROM media_intelligence
+
+        WHERE source_model LIKE 'mock%'
+        OR media_id IN (
+            SELECT media_id
+            FROM ai_analysis
+            WHERE provider='mock'
+            OR model LIKE 'mock%'
+            OR description LIKE 'MOCK TEST ANALYSIS%'
+        )
+
+        """)
+
+        intelligence_deleted = cur.rowcount
+
+        cur.execute("""
+
+        DELETE FROM ai_analysis
+
+        WHERE provider='mock'
+        OR model LIKE 'mock%'
+        OR description LIKE 'MOCK TEST ANALYSIS%'
+
+        """)
+
+        analysis_deleted = cur.rowcount
+
+        conn.commit()
+
+        conn.close()
+
+        logger.info(
+            "Cleared mock analysis rows analysis=%s intelligence=%s",
+            analysis_deleted,
+            intelligence_deleted
+        )
+
+        return {
+            "analysis_deleted": analysis_deleted,
+            "intelligence_deleted": intelligence_deleted
+        }
+
+    ############################################################
+
+    def save_media_intelligence(self, media_id, intelligence):
+
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        INSERT OR REPLACE INTO media_intelligence(
+
+            media_id,
+
+            normalized_scene,
+
+            incident_type,
+
+            primary_activity,
+
+            apparatus_tags,
+
+            equipment_tags,
+
+            ppe_tags,
+
+            people_tags,
+
+            content_tags,
+
+            content_themes,
+
+            recommended_uses,
+
+            search_text,
+
+            intelligence_score,
+
+            generated_at,
+
+            source_model
+
+        )
+
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,?)
+
+        """,
+
+        (
+
+            media_id,
+
+            intelligence.get("normalized_scene"),
+
+            intelligence.get("incident_type"),
+
+            intelligence.get("primary_activity"),
+
+            self._to_json(intelligence.get("apparatus_tags")),
+
+            self._to_json(intelligence.get("equipment_tags")),
+
+            self._to_json(intelligence.get("ppe_tags")),
+
+            self._to_json(intelligence.get("people_tags")),
+
+            self._to_json(intelligence.get("content_tags")),
+
+            self._to_json(intelligence.get("content_themes")),
+
+            self._to_json(intelligence.get("recommended_uses")),
+
+            intelligence.get("search_text"),
+
+            self._to_int(intelligence.get("intelligence_score")),
+
+            intelligence.get("source_model")
+
+        ))
+
+        conn.commit()
+
+        conn.close()
+
+    ############################################################
+
+    def get_media_intelligence(self, media_id):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        SELECT *
+
+        FROM media_intelligence
+
+        WHERE media_id=?
+
+        """,
+
+        (media_id,))
+
+        row = cur.fetchone()
+
+        conn.close()
+
+        if row is None:
+            return None
+
+        return self._intelligence_from_row(row)
+
+    ############################################################
+
+    def media_intelligence_exists(self, media_id):
+
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        cur.execute(
+
+            "SELECT media_id FROM media_intelligence WHERE media_id=?",
+
+            (media_id,)
+
+        )
+
+        exists = cur.fetchone() is not None
+
+        conn.close()
+
+        return exists
+
+    ############################################################
+
+    def get_media_needing_intelligence(self, limit=None):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+
+        cur = conn.cursor()
+
+        sql = """
+
+        SELECT ai_analysis.*
+
+        FROM ai_analysis
+
+        LEFT JOIN media_intelligence
+        ON media_intelligence.media_id = ai_analysis.media_id
+
+        WHERE media_intelligence.media_id IS NULL
+        AND (
+            ai_analysis.failure_reason IS NULL OR
+            ai_analysis.failure_reason=''
+        )
+
+        ORDER BY ai_analysis.last_analyzed DESC
+
+        """
+
+        params = ()
+
+        if limit is not None:
+            sql += " LIMIT ?"
+            params = (self._to_int(limit),)
+
+        cur.execute(sql, params)
+
+        rows = cur.fetchall()
+
+        conn.close()
+
+        return [
+            self._analysis_from_row(row)
+            for row in rows
+        ]
+
+    ############################################################
+
+    def search_intelligence(self, query, limit=100):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+
+        cur = conn.cursor()
+
+        pattern = f"%{query}%"
+
+        cur.execute("""
+
+        SELECT *
+
+        FROM media_intelligence
+
+        WHERE search_text LIKE ?
+        OR content_tags LIKE ?
+        OR content_themes LIKE ?
+        OR recommended_uses LIKE ?
+
+        ORDER BY intelligence_score DESC
+
+        LIMIT ?
+
+        """,
+
+        (
+            pattern,
+            pattern,
+            pattern,
+            pattern,
+            self._to_int(limit)
+        ))
+
+        rows = cur.fetchall()
+
+        conn.close()
+
+        return [
+            self._intelligence_from_row(row)
+            for row in rows
+        ]
+
+    ############################################################
+
+    def get_media_by_incident_type(self, incident_type, limit=100):
+
+        return self._media_by_intelligence_field(
+            "incident_type",
+            incident_type,
+            limit
+        )
+
+    ############################################################
+
+    def get_media_by_recommended_use(self, recommended_use, limit=100):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        SELECT
+
+            media.id,
+
+            media.filename,
+
+            media.path,
+
+            media.media_type
+
+        FROM media
+
+        JOIN media_intelligence
+        ON media_intelligence.media_id = media.id
+
+        WHERE media_intelligence.recommended_uses LIKE ?
+
+        ORDER BY media.filename
+
+        LIMIT ?
+
+        """,
+
+        (
+            f"%{recommended_use}%",
+            self._to_int(limit)
+        ))
+
+        rows = cur.fetchall()
+
+        conn.close()
+
+        return [
+            (
+                row["id"],
+                row["filename"],
+                row["path"],
+                row["media_type"]
+            )
+            for row in rows
+        ]
+
+    ############################################################
+
+    def _media_by_intelligence_field(self, field, value, limit):
+
+        if field not in (
+            "normalized_scene",
+            "incident_type",
+            "primary_activity"
+        ):
+            raise ValueError("Unsupported intelligence field")
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+
+        cur = conn.cursor()
+
+        cur.execute(f"""
+
+        SELECT
+
+            media.id,
+
+            media.filename,
+
+            media.path,
+
+            media.media_type
+
+        FROM media
+
+        JOIN media_intelligence
+        ON media_intelligence.media_id = media.id
+
+        WHERE media_intelligence.{field}=?
+
+        ORDER BY media.filename
+
+        LIMIT ?
+
+        """,
+
+        (
+            value,
+            self._to_int(limit)
+        ))
+
+        rows = cur.fetchall()
+
+        conn.close()
+
+        return [
+            (
+                row["id"],
+                row["filename"],
+                row["path"],
+                row["media_type"]
+            )
+            for row in rows
+        ]
+
+    ############################################################
+
     def _analysis_from_row(self, row):
 
         return {
@@ -879,6 +1332,28 @@ class DatabaseManager:
             "retry_count": row["retry_count"] or 0,
             "failure_reason": row["failure_reason"] or "",
             "last_analyzed": row["last_analyzed"] or ""
+        }
+
+    ############################################################
+
+    def _intelligence_from_row(self, row):
+
+        return {
+            "media_id": row["media_id"],
+            "normalized_scene": row["normalized_scene"] or "",
+            "incident_type": row["incident_type"] or "",
+            "primary_activity": row["primary_activity"] or "",
+            "apparatus_tags": self._from_json(row["apparatus_tags"]),
+            "equipment_tags": self._from_json(row["equipment_tags"]),
+            "ppe_tags": self._from_json(row["ppe_tags"]),
+            "people_tags": self._from_json(row["people_tags"]),
+            "content_tags": self._from_json(row["content_tags"]),
+            "content_themes": self._from_json(row["content_themes"]),
+            "recommended_uses": self._from_json(row["recommended_uses"]),
+            "search_text": row["search_text"] or "",
+            "intelligence_score": row["intelligence_score"] or 0,
+            "generated_at": row["generated_at"] or "",
+            "source_model": row["source_model"] or ""
         }
 
     ############################################################
@@ -955,6 +1430,35 @@ class DatabaseManager:
 
     ############################################################
 
+    def _ensure_media_intelligence_columns(self, cur):
+
+        cur.execute("PRAGMA table_info(media_intelligence)")
+
+        columns = {
+            row[1]
+            for row in cur.fetchall()
+        }
+
+        additions = {
+            "source_model": "TEXT"
+        }
+
+        for name, definition in additions.items():
+
+            if name in columns:
+                continue
+
+            cur.execute(
+                f"ALTER TABLE media_intelligence ADD COLUMN {name} {definition}"
+            )
+
+            logger.info(
+                "Added media_intelligence column %s",
+                name
+            )
+
+    ############################################################
+
     def _ensure_indexes(self, cur):
 
         indexes = (
@@ -963,7 +1467,12 @@ class DatabaseManager:
             "CREATE INDEX IF NOT EXISTS idx_media_path ON media(path)",
             "CREATE INDEX IF NOT EXISTS idx_ai_model ON ai_analysis(model)",
             "CREATE INDEX IF NOT EXISTS idx_ai_provider ON ai_analysis(provider)",
-            "CREATE INDEX IF NOT EXISTS idx_ai_last_analyzed ON ai_analysis(last_analyzed)"
+            "CREATE INDEX IF NOT EXISTS idx_ai_last_analyzed ON ai_analysis(last_analyzed)",
+            "CREATE INDEX IF NOT EXISTS idx_intelligence_media ON media_intelligence(media_id)",
+            "CREATE INDEX IF NOT EXISTS idx_intelligence_scene ON media_intelligence(normalized_scene)",
+            "CREATE INDEX IF NOT EXISTS idx_intelligence_incident ON media_intelligence(incident_type)",
+            "CREATE INDEX IF NOT EXISTS idx_intelligence_activity ON media_intelligence(primary_activity)",
+            "CREATE INDEX IF NOT EXISTS idx_intelligence_score ON media_intelligence(intelligence_score)"
         )
 
         for statement in indexes:

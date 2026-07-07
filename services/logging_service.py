@@ -37,6 +37,7 @@ class LoggingService:
             "ai",
             "database",
             "gallery",
+            "intelligence",
             "application"
         ):
 

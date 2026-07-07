@@ -27,6 +27,7 @@ class PhotoViewer(ctk.CTkToplevel):
         self.media_id = media_id
         self.brain = BrainService()
         self.analysis = None
+        self.intelligence = None
 
         self.build_ui()
         self.load_analysis()
@@ -109,7 +110,19 @@ class PhotoViewer(ctk.CTkToplevel):
         )
 
         heading.pack(
-            pady=(20, 15)
+            pady=(20, 8)
+        )
+
+        self.mock_notice = ctk.CTkLabel(
+            ai,
+            text="",
+            text_color="#f5c542",
+            wraplength=300
+        )
+
+        self.mock_notice.pack(
+            padx=20,
+            pady=(0, 8)
         )
 
         self.status = ctk.CTkLabel(
@@ -182,6 +195,7 @@ class PhotoViewer(ctk.CTkToplevel):
         )
 
         self.analysis_text.configure(state="disabled")
+        self.update_mock_notice()
 
     ##########################################################
 
@@ -253,6 +267,14 @@ class PhotoViewer(ctk.CTkToplevel):
     def show_analysis(self, analysis):
 
         self.analysis = analysis
+        self.intelligence = self.brain.get_intelligence(self.media_id)
+        self.update_mock_notice(analysis)
+
+        failure = analysis.get("failure_reason", "")
+
+        if failure:
+            self.show_provider_failure(analysis)
+            return
 
         self.status.configure(
             text="Status: Analyzed"
@@ -292,6 +314,16 @@ class PhotoViewer(ctk.CTkToplevel):
             f"Analyzed: {analysis.get('last_analyzed') or analysis.get('analyzed_at', '')}"
         ]
 
+        intelligence_lines = self.intelligence_lines()
+
+        if intelligence_lines:
+            lines.extend(
+                [
+                    "",
+                    "Media Intelligence"
+                ] + intelligence_lines
+            )
+
         self.analysis_text.configure(state="normal")
         self.analysis_text.delete("1.0", "end")
         self.analysis_text.insert("1.0", "\n".join(lines))
@@ -301,8 +333,10 @@ class PhotoViewer(ctk.CTkToplevel):
 
     def show_error(self, error):
 
+        self.update_mock_notice()
+
         self.status.configure(
-            text=f"Status: Analysis failed"
+            text="Status: Provider failure"
         )
 
         self.analyze_button.configure(
@@ -311,7 +345,42 @@ class PhotoViewer(ctk.CTkToplevel):
 
         self.analysis_text.configure(state="normal")
         self.analysis_text.delete("1.0", "end")
-        self.analysis_text.insert("1.0", str(error))
+        self.analysis_text.insert(
+            "1.0",
+            f"Provider failure:\n{error}"
+        )
+        self.analysis_text.configure(state="disabled")
+
+    ##########################################################
+
+    def show_provider_failure(self, analysis):
+
+        self.update_mock_notice(analysis)
+
+        self.status.configure(
+            text="Status: Provider failure"
+        )
+
+        self.analyze_button.configure(
+            state="normal",
+            text="Analyze Again"
+        )
+
+        lines = [
+            "Provider failure",
+            "",
+            analysis.get("failure_reason", ""),
+            "",
+            f"Model: {analysis.get('model', '')}",
+            f"Provider: {analysis.get('provider', '')}",
+            f"Duration: {analysis.get('analysis_duration', 0):.2f}s",
+            f"Retries: {analysis.get('retry_count', 0)}",
+            f"Last Attempt: {analysis.get('last_analyzed') or analysis.get('analyzed_at', '')}"
+        ]
+
+        self.analysis_text.configure(state="normal")
+        self.analysis_text.delete("1.0", "end")
+        self.analysis_text.insert("1.0", "\n".join(lines))
         self.analysis_text.configure(state="disabled")
 
     ##########################################################
@@ -322,3 +391,54 @@ class PhotoViewer(ctk.CTkToplevel):
             return "None"
 
         return ", ".join(str(item) for item in value)
+
+    ##########################################################
+
+    def update_mock_notice(self, analysis=None):
+
+        provider = ""
+        model = ""
+        description = ""
+
+        if analysis:
+            provider = analysis.get("provider", "")
+            model = analysis.get("model", "")
+            description = analysis.get("description", "")
+
+        if (
+            self.brain.is_mock_provider() or
+            provider == "mock" or
+            model.startswith("mock") or
+            description.startswith("MOCK TEST ANALYSIS")
+        ):
+            self.mock_notice.configure(
+                text="Mock provider active - test data only"
+            )
+        else:
+            self.mock_notice.configure(
+                text=""
+            )
+
+    ##########################################################
+
+    def intelligence_lines(self):
+
+        if not self.intelligence:
+            return []
+
+        top_tags = (
+            self.intelligence.get("content_tags") or []
+        )[:8]
+
+        return [
+            f"Scene: {self.intelligence.get('normalized_scene', '')}",
+            f"Incident: {self.intelligence.get('incident_type', '')}",
+            f"Activity: {self.intelligence.get('primary_activity', '')}",
+            "Top Tags: " + self.format_list(top_tags),
+            (
+                "Recommended Uses: " +
+                self.format_list(
+                    self.intelligence.get("recommended_uses")
+                )
+            )
+        ]

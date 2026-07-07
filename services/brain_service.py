@@ -7,10 +7,12 @@ from config.ai_config import AI_CONFIG
 from core.app_context import context
 from services.ai_service import AIService
 from services.logging_service import LoggingService
+from services.media_intelligence_service import MediaIntelligenceService
 from services.vision_service import VisionService
 
 
 logger = LoggingService.get_logger("ai")
+intelligence_logger = LoggingService.get_logger("intelligence")
 
 
 class BrainService:
@@ -24,6 +26,7 @@ class BrainService:
         job_manager=None,
         ai_service=None,
         vision_service=None,
+        intelligence_service=None,
         config=None
     ):
 
@@ -31,6 +34,10 @@ class BrainService:
         self.jobs = job_manager or context.job_manager
         self.ai = ai_service or AIService()
         self.vision = vision_service or VisionService()
+        self.intelligence = (
+            intelligence_service or
+            MediaIntelligenceService(self.db)
+        )
         self.config = config or AI_CONFIG
 
     ############################################################
@@ -38,6 +45,24 @@ class BrainService:
     def get_analysis(self, media_id):
 
         return self.db.get_ai_analysis(media_id)
+
+    ############################################################
+
+    def get_intelligence(self, media_id):
+
+        return self.db.get_media_intelligence(media_id)
+
+    ############################################################
+
+    def is_mock_provider(self):
+
+        return self.vision.provider_key() == "mock"
+
+    ############################################################
+
+    def clear_mock_analysis(self):
+
+        return self.db.clear_mock_analysis()
 
     ############################################################
 
@@ -97,6 +122,24 @@ class BrainService:
 
     ############################################################
 
+    def build_intelligence_index(
+        self,
+        limit=None,
+        callback=None,
+        error_callback=None,
+        progress_callback=None
+    ):
+
+        return self.jobs.submit(
+            self._rebuild_intelligence_index,
+            limit,
+            progress_callback,
+            callback=callback,
+            error_callback=error_callback
+        )
+
+    ############################################################
+
     def analyze_photo(
         self,
         media_id,
@@ -107,10 +150,17 @@ class BrainService:
         progress_callback=None
     ):
 
-        if not force:
-            cached = self.get_analysis(media_id)
+        cached = self.get_analysis(media_id)
 
-            if cached is not None:
+        if self.is_mock_provider() and self._is_non_mock_success(cached):
+            return self._completed_future(
+                cached,
+                callback,
+                progress_callback
+            )
+
+        if not force:
+            if cached is not None and not cached.get("failure_reason"):
                 return self._completed_future(
                     cached,
                     callback,
@@ -265,7 +315,14 @@ class BrainService:
                 analysis
             )
 
-            return self.db.get_ai_analysis(media_id)
+            saved = self.db.get_ai_analysis(media_id)
+
+            self._generate_intelligence(
+                media_id,
+                saved
+            )
+
+            return saved
 
         except Exception as error:
 
@@ -283,6 +340,38 @@ class BrainService:
             )
 
             raise
+
+    ############################################################
+
+    def _generate_intelligence(self, media_id, analysis):
+
+        try:
+
+            self.intelligence.generate_and_save(
+                media_id,
+                analysis
+            )
+
+        except Exception as error:
+
+            intelligence_logger.error(
+                "Media intelligence generation failed media_id=%s",
+                media_id,
+                exc_info=(
+                    type(error),
+                    error,
+                    error.__traceback__
+                )
+            )
+
+    ############################################################
+
+    def _rebuild_intelligence_index(self, limit=None, progress_callback=None):
+
+        return self.intelligence.rebuild_missing(
+            limit=limit,
+            progress_callback=progress_callback
+        )
 
     ############################################################
 
@@ -326,6 +415,31 @@ class BrainService:
                 time.sleep(delay)
 
         raise RuntimeError(last_error or "Vision analysis failed")
+
+    ############################################################
+
+    def _is_non_mock_success(self, analysis):
+
+        if not analysis:
+            return False
+
+        if analysis.get("failure_reason"):
+            return False
+
+        provider = analysis.get("provider", "")
+        model = analysis.get("model", "")
+        description = analysis.get("description", "")
+
+        if provider == "mock":
+            return False
+
+        if model.startswith("mock"):
+            return False
+
+        if description.startswith("MOCK TEST ANALYSIS"):
+            return False
+
+        return True
 
     ############################################################
 
