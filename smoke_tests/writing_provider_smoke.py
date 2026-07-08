@@ -27,6 +27,56 @@ class FailingWritingProvider(WritingProvider):
         raise RuntimeError("simulated local writing failure")
 
 
+class MetadataWritingProvider(WritingProvider):
+
+    def available(self):
+
+        return True
+
+    def generate(self, request):
+
+        return {
+            "facebook_caption": (
+                "A safety campaign message from MFR, Morden, City of Morden. "
+                "Selected media is supported by incident type: training; "
+                "activity: recruitment training; stored tags: scba, hose."
+            ),
+            "instagram_caption": (
+                "A practical reminder. Selected media is supported by stored tags."
+            ),
+            "linkedin_caption": "Incident type: training.",
+            "short_version": "Selected media is supported by stored tags.",
+            "long_version": "Activity: recruitment training.",
+            "call_to_action": "Learn more about serving your community.",
+            "facebook_hashtags": ["#One", "#Two", "#Three", "#Four", "#Five", "#Six"],
+            "instagram_hashtags": ["#One", "#Two", "#Three", "#Four", "#Five", "#Six"],
+            "hashtags": ["#One", "#Two", "#Three", "#Four", "#Five", "#Six"],
+            "emoji_suggestions": ["\U0001fa96"],
+            "reasoning": ["Simulated bad provider output."]
+        }
+
+
+BANNED_PUBLIC_PHRASES = (
+    "selected media",
+    "stored tags",
+    "incident type:",
+    "activity:",
+    "supported by",
+    "a safety campaign message",
+    "a practical reminder"
+)
+
+
+def assert_clean_public_text(value):
+
+    lower = value.lower()
+
+    for phrase in BANNED_PUBLIC_PHRASES:
+        assert phrase not in lower, value
+
+    assert "city of morden" not in lower, value
+
+
 def base_request():
 
     package = {
@@ -113,6 +163,10 @@ def main():
         "deterministic",
         DeterministicWritingProvider
     )
+    registry.register(
+        "metadata",
+        MetadataWritingProvider
+    )
 
     service = WritingService(
         config={
@@ -144,6 +198,31 @@ def main():
     assert not hasattr(service, "vision")
     assert not hasattr(service, "ai")
     assert not hasattr(service._provider, "analyze")
+
+    metadata_service = WritingService(
+        config={
+            "default_provider": "metadata",
+            "fallback_provider": "deterministic",
+            "providers": {
+                "metadata": {
+                    "model": "metadata-test"
+                },
+                "deterministic": {
+                    "model": "deterministic-template"
+                }
+            }
+        },
+        registry=registry
+    )
+    metadata_package = metadata_service.generate(
+        base_request()
+    )
+
+    assert_clean_public_text(metadata_package["facebook_caption"])
+    assert_clean_public_text(metadata_package["instagram_caption"])
+    assert_clean_public_text(metadata_package["linkedin_caption"])
+    assert len(metadata_package["facebook_hashtags"]) <= 5
+    assert len(metadata_package["instagram_hashtags"]) <= 5
 
     print("writing_provider smoke passed")
 

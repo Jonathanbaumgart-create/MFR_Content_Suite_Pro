@@ -139,6 +139,12 @@ def main():
             assert candidates[0]["filename"] == "recruitment_training.jpg"
             assert isinstance(candidates[0]["content_tags"], list), candidates
 
+            from gui.content_director_page import ContentDirectorPage
+
+            assert hasattr(ContentDirectorPage, "request_package")
+            assert hasattr(ContentDirectorPage, "finish_package")
+            assert hasattr(ContentDirectorPage, "package_cache_key")
+
         finally:
             os.chdir(original)
 

@@ -188,6 +188,16 @@ class WritingProviderRegistry:
 
 class WritingService:
 
+    BANNED_PUBLIC_PHRASES = (
+        "selected media",
+        "stored tags",
+        "incident type:",
+        "activity:",
+        "supported by",
+        "a safety campaign message",
+        "a practical reminder"
+    )
+
     def __init__(
         self,
         provider=None,
@@ -317,8 +327,11 @@ class WritingService:
             "long_version",
             "call_to_action"
         ):
-            package[key] = self._clean(
-                generated.get(key) or package.get(key, "")
+            package[key] = self._safe_public_text(
+                key,
+                generated.get(key),
+                package.get(key, ""),
+                package
             )
 
         package["facebook_hashtags"] = self._hashtags(
@@ -346,6 +359,108 @@ class WritingService:
         )
 
         return package
+
+    def _safe_public_text(self, key, generated_value, fallback_value, package):
+
+        value = self._clean(
+            generated_value or fallback_value
+        )
+
+        if key not in (
+            "facebook_caption",
+            "instagram_caption",
+            "linkedin_caption",
+            "short_version",
+            "long_version"
+        ):
+            return value
+
+        if self._contains_banned_public_phrase(value):
+            logger.warning(
+                "Writing output contained banned public phrase key=%s opportunity=%s",
+                key,
+                package.get("opportunity_type", "")
+            )
+            value = self._clean(
+                fallback_value
+            )
+
+        value = self._remove_forbidden_public_lines(
+            value,
+            package.get("opportunity_type", "")
+        )
+
+        if self._contains_banned_public_phrase(value):
+            value = self._public_fallback_text(
+                key,
+                package
+            )
+
+        return value
+
+    def _contains_banned_public_phrase(self, value):
+
+        lower = str(value or "").lower()
+
+        return any(
+            phrase in lower
+            for phrase in self.BANNED_PUBLIC_PHRASES
+        )
+
+    def _remove_forbidden_public_lines(self, value, opportunity):
+
+        lines = []
+
+        for line in str(value or "").splitlines():
+            lower = line.lower()
+
+            if (
+                "hydrant heroes" in lower and
+                opportunity != "hydrant_heroes"
+            ):
+                continue
+
+            if self._looks_like_alias_list(line):
+                continue
+
+            lines.append(line)
+
+        return self._clean(
+            "\n".join(lines)
+        )
+
+    def _looks_like_alias_list(self, line):
+
+        lower = str(line or "").lower()
+
+        return (
+            "mfr" in lower and
+            "city of morden" in lower and
+            lower.count(",") >= 2
+        )
+
+    def _public_fallback_text(self, key, package):
+
+        body = package.get("short_version") or (
+            "Morden Fire & Rescue is sharing a timely community-safety "
+            "message for residents."
+        )
+        cta = package.get("call_to_action", "")
+        hashtags = " ".join(
+            self._hashtags(
+                package.get("facebook_hashtags") or
+                package.get("hashtags", [])
+            )
+        )
+
+        if key == "linkedin_caption":
+            return self._clean(
+                f"{body}\n\n{cta}"
+            )
+
+        return self._clean(
+            f"{body}\n\n{cta}\n\n{hashtags}"
+        )
 
     def _hashtags(self, values):
 

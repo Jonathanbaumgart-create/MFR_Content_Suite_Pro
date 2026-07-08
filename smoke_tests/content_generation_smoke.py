@@ -31,6 +31,29 @@ def hashtag_count(value):
     )
 
 
+BANNED_PUBLIC_PHRASES = (
+    "selected media",
+    "stored tags",
+    "incident type:",
+    "activity:",
+    "supported by",
+    "a safety campaign message",
+    "a practical reminder"
+)
+
+
+def assert_public_caption(value):
+
+    lower = value.lower()
+
+    for phrase in BANNED_PUBLIC_PHRASES:
+        assert phrase not in lower, value
+
+    assert "hydrant heroes" not in lower, value
+    assert "city of morden" not in lower, value
+    assert "mfr, morden" not in lower, value
+
+
 def deterministic_writing_service():
 
     return WritingService(
@@ -216,6 +239,8 @@ def main():
             assert hashtag_count(package["instagram_caption"]) <= 5, package
             assert len(package["facebook_hashtags"]) <= 5, package
             assert len(package["instagram_hashtags"]) <= 5, package
+            assert_public_caption(package["facebook_caption"])
+            assert_public_caption(package["instagram_caption"])
 
             text = " ".join(
                 [
@@ -246,6 +271,34 @@ def main():
             assert recruitment["writing_style"] == "Recruitment", recruitment
             assert training["writing_style"] == "Training", training
             assert recruitment["facebook_caption"] != training["facebook_caption"]
+
+            heat_recommendation = dict(recommendation)
+            heat_recommendation.update(
+                {
+                    "title": "Heat Warning",
+                    "opportunity_type": "heat_warning",
+                    "caption_theme": "heat safety",
+                    "call_to_action": "Check on neighbours and family.",
+                    "hashtags": ["#HeatSafety", "#MordenFireRescue"],
+                    "reasoning": [
+                        "Summer heat safety is active.",
+                        "Selected media intelligence is weak for this opportunity."
+                    ]
+                }
+            )
+            heat = service.generate_package(
+                heat_recommendation
+            )
+            heat_text = heat["facebook_caption"].lower()
+
+            assert "heat can become dangerous quickly" in heat_text, heat
+            assert "drink water" in heat_text, heat
+            assert "check on neighbours" in heat_text, heat
+            assert "parked vehicle" in heat_text, heat
+            assert_public_caption(heat["facebook_caption"])
+            assert_public_caption(heat["instagram_caption"])
+            assert hashtag_count(heat["facebook_caption"]) <= 5, heat
+            assert hashtag_count(heat["instagram_caption"]) <= 5, heat
             assert package["writing_provider"] == "deterministic", package
             assert package["writing_fallback_used"] is False, package
             assert service.templates(), "default content templates were not stored"

@@ -1,3 +1,6 @@
+from concurrent.futures import ThreadPoolExecutor
+import queue
+
 import customtkinter as ctk
 
 from gui.photo_card import PhotoCard
@@ -26,10 +29,21 @@ class ContentDirectorPage(ctk.CTkFrame):
         self.thumbnail_service = ThumbnailService()
         self.current_results = []
         self.brief = None
+        self.brief_cache = None
+        self.package_cache = {}
+        self.package_jobs = {}
+        self.ui_queue = queue.Queue()
+        self.executor = ThreadPoolExecutor(
+            max_workers=2
+        )
+        self._destroyed = False
 
         self.build_page()
+        self.after(
+            100,
+            self.process_ui_queue
+        )
         self.refresh_brief()
-        self.render_daily_opportunities()
 
     ##########################################################
 
@@ -206,10 +220,82 @@ class ContentDirectorPage(ctk.CTkFrame):
 
     ##########################################################
 
+    def enqueue_ui(self, callback, *args):
+
+        if self._destroyed:
+            return
+
+        self.ui_queue.put(
+            (
+                callback,
+                args
+            )
+        )
+
+    ##########################################################
+
+    def process_ui_queue(self):
+
+        if self._destroyed:
+            return
+
+        while True:
+            try:
+                callback, args = self.ui_queue.get_nowait()
+
+            except queue.Empty:
+                break
+
+            callback(
+                *args
+            )
+
+        self.after(
+            100,
+            self.process_ui_queue
+        )
+
+    ##########################################################
+
     def refresh_brief(self):
 
+        if self.brief_cache:
+            self.brief = self.brief_cache
+            self.render_brief()
+            self.current_results = self.brief.get(
+                "recommendations",
+                []
+            )
+            self.render_results()
+            self.render_daily_opportunities()
+            return
+
+        self.status.configure(
+            text="Loading today's communications brief..."
+        )
+        self.render_loading_results(
+            "Preparing today's recommendations..."
+        )
+        future = self.executor.submit(
+            self.reasoning_service.todays_communications_brief
+        )
+        future.add_done_callback(
+            lambda item: self.enqueue_ui(
+                self.finish_refresh_brief,
+                item
+            )
+        )
+
+    ##########################################################
+
+    def finish_refresh_brief(self, future):
+
+        if self._destroyed:
+            return
+
         try:
-            self.brief = self.reasoning_service.todays_communications_brief()
+            self.brief = future.result()
+            self.brief_cache = self.brief
 
         except Exception as ex:
             logger.error(
@@ -232,6 +318,7 @@ class ContentDirectorPage(ctk.CTkFrame):
             []
         )
         self.render_results()
+        self.render_daily_opportunities()
 
     ##########################################################
 
@@ -411,24 +498,54 @@ class ContentDirectorPage(ctk.CTkFrame):
     def generate_suggestions(self, opportunity_types=None):
 
         prompt = self.prompt_entry.get().strip()
+        self.status.configure(
+            text="Generating communication opportunities..."
+        )
+        self.render_loading_results(
+            "Finding recommendations..."
+        )
+        future = self.executor.submit(
+            self.load_suggestions,
+            prompt,
+            opportunity_types
+        )
+        future.add_done_callback(
+            lambda item: self.enqueue_ui(
+                self.finish_generate_suggestions,
+                item
+            )
+        )
+
+    ##########################################################
+
+    def load_suggestions(self, prompt, opportunity_types=None):
+
+        if opportunity_types:
+            return {
+                "opportunity_types": opportunity_types,
+                "opportunities": self.reasoning_service.generate_recommendations(
+                    opportunity_keys=opportunity_types,
+                    limit=5
+                )
+            }
+
+        return {
+            "opportunity_types": self.director.interpret_prompt(prompt),
+            "opportunities": self.reasoning_service.generate_recommendations(
+                prompt,
+                limit=5
+            )
+        }
+
+    ##########################################################
+
+    def finish_generate_suggestions(self, future):
+
+        if self._destroyed:
+            return
 
         try:
-            if opportunity_types:
-                result = {
-                    "opportunity_types": opportunity_types,
-                    "opportunities": self.reasoning_service.generate_recommendations(
-                        opportunity_keys=opportunity_types,
-                        limit=5
-                    )
-                }
-            else:
-                result = {
-                    "opportunity_types": self.director.interpret_prompt(prompt),
-                    "opportunities": self.reasoning_service.generate_recommendations(
-                        prompt,
-                        limit=5
-                    )
-                }
+            result = future.result()
 
         except Exception as ex:
             logger.error(
@@ -453,6 +570,22 @@ class ContentDirectorPage(ctk.CTkFrame):
             text=f"Opportunity type: {', '.join(labels)}"
         )
         self.render_results()
+
+    ##########################################################
+
+    def render_loading_results(self, message):
+
+        for child in self.results.winfo_children():
+            child.destroy()
+
+        label = ctk.CTkLabel(
+            self.results,
+            text=message
+        )
+
+        label.pack(
+            pady=30
+        )
 
     ##########################################################
 
@@ -571,36 +704,43 @@ class ContentDirectorPage(ctk.CTkFrame):
             " | ".join(opportunity["reasoning"])
         )
 
-        package = self.generate_package(
+        package_frame = ctk.CTkFrame(
+            frame,
+            fg_color="transparent"
+        )
+        package_frame.grid(
+            row=3,
+            column=1,
+            sticky="ew",
+            padx=(0, 12),
+            pady=3
+        )
+        package_frame.grid_columnconfigure(0, weight=1)
+        package_frame.grid_columnconfigure(1, weight=1)
+        key = self.package_cache_key(
             opportunity
+        )
+        package = self.package_cache.get(
+            key
         )
 
         if package:
-            next_row = self.render_package(
-                frame,
+            self.render_package(
+                package_frame,
                 package,
-                start_row=3
+                start_row=0
             )
+            next_row = 4
         else:
-            self.add_caption_line(
-                frame,
-                3,
-                "Caption Theme",
-                opportunity["caption_theme"]
+            self.render_package_placeholder(
+                package_frame,
+                opportunity
             )
-            self.add_caption_line(
-                frame,
-                4,
-                "Hashtags",
-                " ".join(opportunity["hashtags"])
+            self.request_package(
+                opportunity,
+                package_frame
             )
-            self.add_caption_line(
-                frame,
-                5,
-                "Best Time",
-                opportunity["best_posting_time"]
-            )
-            next_row = 6
+            next_row = 4
 
         footer = ctk.CTkFrame(
             frame,
@@ -697,17 +837,66 @@ class ContentDirectorPage(ctk.CTkFrame):
 
     ##########################################################
 
-    def generate_package(self, opportunity):
+    def render_package_placeholder(self, parent, opportunity):
+
+        self.add_caption_line(
+            parent,
+            0,
+            "Complete Communication Package",
+            "Generating captions..."
+        )
+        self.add_caption_line(
+            parent,
+            1,
+            "Caption Theme",
+            opportunity.get("caption_theme", "")
+        )
+        self.add_caption_line(
+            parent,
+            2,
+            "Best Time",
+            opportunity.get("best_posting_time", "")
+        )
+
+    ##########################################################
+
+    def request_package(self, opportunity, parent):
+
+        key = self.package_cache_key(
+            opportunity
+        )
+
+        if key in self.package_jobs:
+            return
+
+        future = self.executor.submit(
+            self.generate_package,
+            opportunity
+        )
+        self.package_jobs[key] = future
+        future.add_done_callback(
+            lambda item: self.enqueue_ui(
+                self.finish_package,
+                key,
+                item,
+                parent
+            )
+        )
+
+    ##########################################################
+
+    def finish_package(self, key, future, parent):
+
+        if self._destroyed:
+            return
+
+        self.package_jobs.pop(
+            key,
+            None
+        )
 
         try:
-            return self.content_generation_service.generate_package(
-                opportunity,
-                context_snapshot=(
-                    self.brief.get("context_snapshot", {})
-                    if self.brief
-                    else None
-                )
-            )
+            package = future.result()
 
         except Exception as ex:
             logger.error(
@@ -721,10 +910,55 @@ class ContentDirectorPage(ctk.CTkFrame):
             self.status.configure(
                 text=f"Package generation error: {ex}"
             )
-            return None
+            return
 
-        finally:
-            self.update_writing_provider_status()
+        if not package:
+            return
+
+        self.package_cache[key] = package
+
+        if not parent.winfo_exists():
+            return
+
+        for child in parent.winfo_children():
+            child.destroy()
+
+        self.render_package(
+            parent,
+            package,
+            start_row=0
+        )
+        self.update_writing_provider_status(
+            package
+        )
+
+    ##########################################################
+
+    def generate_package(self, opportunity):
+
+        return self.content_generation_service.generate_package(
+            opportunity,
+            context_snapshot=(
+                self.brief.get("context_snapshot", {})
+                if self.brief
+                else None
+            )
+        )
+
+    ##########################################################
+
+    def package_cache_key(self, opportunity):
+
+        media_ids = tuple(
+            item.get("media_id")
+            for item in opportunity.get("recommended_media", [])
+        )
+
+        return (
+            opportunity.get("opportunity_type", ""),
+            opportunity.get("title", ""),
+            media_ids
+        )
 
     ##########################################################
 
@@ -1382,16 +1616,20 @@ class ContentDirectorPage(ctk.CTkFrame):
             fallback = status.get("fallback_used", False)
             error = status.get("last_error", "")
 
-        label = f"Writing: {provider or 'unknown'}"
+        if fallback:
+            label = "Captions: deterministic fallback"
+        elif provider == "ollama":
+            label = "Captions: Ollama writing provider"
+        elif provider:
+            label = f"Captions: {provider}"
+        else:
+            label = "Captions: provider unknown"
 
         if model:
             label += f" ({model})"
 
-        if fallback:
-            label += " - fallback"
-
         if error:
-            label += " - local Ollama unavailable"
+            label += " - Ollama failed, fallback used"
 
         return label
 
@@ -1399,7 +1637,15 @@ class ContentDirectorPage(ctk.CTkFrame):
 
     def destroy(self):
 
+        self._destroyed = True
+
         if hasattr(self, "thumbnail_service"):
             self.thumbnail_service.shutdown()
+
+        if hasattr(self, "executor"):
+            self.executor.shutdown(
+                wait=False,
+                cancel_futures=True
+            )
 
         super().destroy()

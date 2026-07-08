@@ -20,7 +20,7 @@ class ContentGenerationService:
         },
         "educational": {
             "label": "Educational",
-            "lead": "A practical public education reminder",
+            "lead": "A public education update",
             "tone": "clear and helpful"
         },
         "recruitment": {
@@ -50,7 +50,7 @@ class ContentGenerationService:
         },
         "safety_campaign": {
             "label": "Safety Campaign",
-            "lead": "A safety campaign message",
+            "lead": "A community safety update",
             "tone": "public-safety focused"
         },
         "holiday": {
@@ -175,7 +175,8 @@ class ContentGenerationService:
         )
         emojis = self._emoji_suggestions(
             writing_style,
-            media
+            media,
+            opportunity_type
         )
         cta = recommendation.get(
             "call_to_action",
@@ -190,7 +191,8 @@ class ContentGenerationService:
             recommendation,
             media,
             terms,
-            profile
+            profile,
+            context_snapshot
         )
         long_version = self._long_version(
             recommendation,
@@ -433,14 +435,46 @@ class ContentGenerationService:
 
     ############################################################
 
-    def _short_version(self, recommendation, media, terms, profile):
+    def _short_version(self, recommendation, media, terms, profile, context_snapshot):
 
-        detail = self._media_detail(media)
-        term_text = self._term_text(terms)
+        opportunity = recommendation.get("opportunity_type", "")
+
+        if opportunity == "heat_warning":
+            return (
+                "Heat can become dangerous quickly, especially for children, "
+                "seniors, outdoor workers, and anyone without access to a cool "
+                "space.\n\n"
+                "Drink water often, check on neighbours and family members, "
+                "avoid strenuous activity during the hottest part of the day, "
+                "and never leave people or pets in a parked vehicle.\n\n"
+                "Small actions can prevent a medical emergency."
+            )
+
+        if opportunity in ("storm_safety", "holiday_safety", "fire_prevention_week"):
+            return (
+                f"{profile['lead']} for Morden residents.\n\n"
+                "Take a few minutes to prepare, talk through your plan, and "
+                "look out for the people around you."
+            )
+
+        if opportunity in ("recruitment", "training_highlight"):
+            return (
+                "Training, teamwork, and service are at the heart of the fire "
+                "department.\n\n"
+                "If serving your community has been on your mind, this is a "
+                "good time to learn more."
+            )
+
+        if self._media_match_score(recommendation, media) < 2:
+            return (
+                f"{profile['lead']} for the Morden community.\n\n"
+                "We are sharing this as a timely reminder to stay prepared, "
+                "stay connected, and look out for one another."
+            )
 
         return (
-            f"{profile['lead']} from {term_text}. "
-            f"{detail}"
+            f"{profile['lead']} for the Morden community.\n\n"
+            f"{self._media_detail(media)}"
         ).strip()
 
     ############################################################
@@ -457,14 +491,18 @@ class ContentGenerationService:
         active_context = self._context_text(
             context_snapshot
         )
-        detail = self._media_detail(media)
-        term_text = self._term_text(terms)
+        detail = self._short_version(
+            recommendation,
+            media,
+            terms,
+            profile,
+            context_snapshot
+        )
         reason = " ".join(
             recommendation.get("reasoning", [])[:2]
         )
 
         return (
-            f"{profile['lead']} for {term_text}. "
             f"{detail} "
             f"{active_context} "
             f"{reason}"
@@ -475,49 +513,41 @@ class ContentGenerationService:
     def _media_detail(self, media):
 
         if not media:
-            return "No selected media is attached yet."
+            return "This message can stand on its own as a public-safety post."
 
         top = media[0]
-        facts = []
+        activity = self._format_label(
+            top.get("primary_activity", "")
+        ).lower()
+        incident = self._format_label(
+            top.get("incident_type", "")
+        ).lower()
 
-        for key, label in (
-            ("incident_type", "incident type"),
-            ("primary_activity", "activity")
-        ):
-            value = top.get(key)
-
-            if value:
-                facts.append(
-                    f"{label}: {self._format_label(value)}"
-                )
-
-        tags = self._unique(
-            (top.get("content_tags") or []) +
-            (top.get("content_themes") or []) +
-            (top.get("recommended_uses") or [])
-        )
-
-        if tags:
-            facts.append(
-                "stored tags: " +
-                ", ".join(self._format_label(tag) for tag in tags[:6])
+        if activity and activity not in ("", "unknown"):
+            return (
+                "The media supports a simple, public-facing story about " +
+                activity + "."
             )
 
-        if not facts:
-            facts.append(
-                top.get("reason", "selected from stored recommendation data")
+        if incident and incident not in ("", "unknown"):
+            return (
+                "The media supports a simple, public-facing story connected "
+                "to " + incident + "."
             )
 
-        return "Selected media is supported by " + "; ".join(facts) + "."
+        return "The media can support a broader community-safety message."
 
     ############################################################
 
     def _facebook_caption(self, headline, short_version, cta, hashtags, emojis):
 
+        emoji_prefix = " ".join(emojis[:2])
+        close = "Stay safe and look out for each other, Morden."
+
         return self._clean(
             (
-                f"{' '.join(emojis[:3])} {headline}\n\n"
-                f"{short_version}\n\n"
+                f"{emoji_prefix} {short_version}\n\n"
+                f"{close}\n\n"
                 f"{cta}\n\n"
                 f"{' '.join(hashtags[:5])}"
             )
@@ -527,10 +557,11 @@ class ContentGenerationService:
 
     def _instagram_caption(self, headline, short_version, cta, hashtags, emojis):
 
+        emoji_prefix = " ".join(emojis[:4])
+
         return self._clean(
             (
-                f"{' '.join(emojis[:3])} {headline}\n\n"
-                f"{short_version}\n\n"
+                f"{emoji_prefix} {short_version}\n\n"
                 f"{cta}\n\n"
                 f"{' '.join(hashtags[:5])}"
             )
@@ -548,10 +579,51 @@ class ContentGenerationService:
 
     def _platform_hashtags(self, recommendation, media, platform):
 
-        tags = list(
-            recommendation.get("hashtags", [])
-        )
-        media_tags = []
+        opportunity = recommendation.get("opportunity_type", "")
+        tags = []
+        defaults = {
+            "heat_warning": [
+                "#HeatSafety",
+                "#MordenFireRescue",
+                "#CommunitySafety",
+                "#SummerSafety",
+                "#Morden"
+            ],
+            "storm_safety": [
+                "#StormSafety",
+                "#MordenFireRescue",
+                "#CommunitySafety",
+                "#EmergencyPreparedness",
+                "#Morden"
+            ],
+            "recruitment": [
+                "#MordenFireRescue",
+                "#Recruitment",
+                "#JoinTheTeam",
+                "#CommunityService",
+                "#Morden"
+            ],
+            "training_highlight": [
+                "#MordenFireRescue",
+                "#Training",
+                "#FireService",
+                "#CommunitySafety",
+                "#Morden"
+            ],
+            "fire_prevention_week": [
+                "#FirePrevention",
+                "#MordenFireRescue",
+                "#CommunitySafety",
+                "#FireSafety",
+                "#Morden"
+            ]
+        }
+
+        for tag in defaults.get(opportunity, []):
+            self._append_unique(tags, tag)
+
+        for tag in recommendation.get("hashtags", []):
+            self._append_unique(tags, tag)
 
         for item in media:
             for value in (
@@ -559,23 +631,35 @@ class ContentGenerationService:
                 item.get("content_themes", []) +
                 item.get("recommended_uses", [])
             ):
+                if len(tags) >= 5:
+                    break
+
+                if not self._tag_allowed(value, opportunity):
+                    continue
+
                 tag = "#" + "".join(
                     part.capitalize()
                     for part in str(value).replace("-", "_").split("_")
                     if part
                 )
-                self._append_unique(media_tags, tag)
+                self._append_unique(tags, tag)
 
-        if platform == "instagram":
-            ordered = media_tags + tags
-        else:
-            ordered = tags + media_tags
+        if "#MordenFireRescue" not in tags:
+            self._append_unique(tags, "#MordenFireRescue")
 
-        return self._unique(ordered)[:5]
+        return self._unique(tags)[:5]
 
     ############################################################
 
-    def _emoji_suggestions(self, writing_style, media):
+    def _emoji_suggestions(self, writing_style, media, opportunity_type=""):
+
+        if opportunity_type == "heat_warning":
+            return [
+                "\u2600\ufe0f",
+                "\U0001f4a7",
+                "\U0001f3e0",
+                "\U0001f692"
+            ]
 
         suggestions = {
             "community": ["\U0001f91d", "\u2764\ufe0f", "\U0001f341"],
@@ -597,6 +681,68 @@ class ContentGenerationService:
             suggestions.append("\U0001f4a7")
 
         return self._unique(suggestions)[:5]
+
+    ############################################################
+
+    def _media_match_score(self, recommendation, media):
+
+        if not media:
+            return 0
+
+        source = " ".join(
+            [
+                recommendation.get("opportunity_type", ""),
+                recommendation.get("title", ""),
+                recommendation.get("caption_theme", ""),
+                " ".join(recommendation.get("recommended_uses", [])),
+                " ".join(recommendation.get("hashtags", []))
+            ]
+        ).lower()
+        score = 0
+
+        for term in self._media_terms(media):
+            plain = term.replace("_", " ").lower()
+
+            if term in source or plain in source:
+                score += 1
+
+        return score
+
+    ############################################################
+
+    def _tag_allowed(self, value, opportunity):
+
+        token = self._token(value)
+
+        if token in (
+            "engine",
+            "hose",
+            "scba",
+            "helmet",
+            "turnout_gear",
+            "apparatus",
+            "equipment",
+            "social_media"
+        ):
+            return False
+
+        if token == "hydrant_heroes" and opportunity != "hydrant_heroes":
+            return False
+
+        return token in (
+            "community",
+            "community_safety",
+            "fire_safety",
+            "public_education",
+            "recruitment",
+            "training",
+            "heat_safety",
+            "summer_safety",
+            "storm_safety",
+            "fire_prevention",
+            "smoke_alarm",
+            "water_safety"
+        )
 
     ############################################################
 
