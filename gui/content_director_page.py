@@ -4,6 +4,7 @@ from gui.photo_card import PhotoCard
 from gui.photo_viewer import PhotoViewer
 from services.communications_director import CommunicationsDirector
 from services.communications_reasoning_service import CommunicationsReasoningService
+from services.content_generation_service import ContentGenerationService
 from services.logging_service import LoggingService
 from services.thumbnail_service import ThumbnailService
 
@@ -21,6 +22,7 @@ class ContentDirectorPage(ctk.CTkFrame):
         self.reasoning_service = CommunicationsReasoningService(
             director=self.director
         )
+        self.content_generation_service = ContentGenerationService()
         self.thumbnail_service = ThumbnailService()
         self.current_results = []
         self.brief = None
@@ -496,7 +498,7 @@ class ContentDirectorPage(ctk.CTkFrame):
             card.grid(
                 row=0,
                 column=0,
-                rowspan=7,
+                rowspan=13,
                 padx=12,
                 pady=12,
                 sticky="nw"
@@ -541,24 +543,36 @@ class ContentDirectorPage(ctk.CTkFrame):
             "Reasoning",
             " | ".join(opportunity["reasoning"])
         )
-        self.add_caption_line(
-            frame,
-            3,
-            "Caption Theme",
-            opportunity["caption_theme"]
+
+        package = self.generate_package(
+            opportunity
         )
-        self.add_caption_line(
-            frame,
-            4,
-            "Hashtags",
-            " ".join(opportunity["hashtags"])
-        )
-        self.add_caption_line(
-            frame,
-            5,
-            "Best Time",
-            opportunity["best_posting_time"]
-        )
+
+        if package:
+            self.render_package(
+                frame,
+                package,
+                start_row=3
+            )
+        else:
+            self.add_caption_line(
+                frame,
+                3,
+                "Caption Theme",
+                opportunity["caption_theme"]
+            )
+            self.add_caption_line(
+                frame,
+                4,
+                "Hashtags",
+                " ".join(opportunity["hashtags"])
+            )
+            self.add_caption_line(
+                frame,
+                5,
+                "Best Time",
+                opportunity["best_posting_time"]
+            )
 
         footer = ctk.CTkFrame(
             frame,
@@ -566,7 +580,7 @@ class ContentDirectorPage(ctk.CTkFrame):
         )
 
         footer.grid(
-            row=6,
+            row=11,
             column=1,
             sticky="ew",
             padx=(0, 12),
@@ -611,7 +625,7 @@ class ContentDirectorPage(ctk.CTkFrame):
         )
 
         feedback.grid(
-            row=7,
+            row=12,
             column=1,
             sticky="w",
             padx=(0, 12),
@@ -642,13 +656,175 @@ class ContentDirectorPage(ctk.CTkFrame):
                 padx=(0, 8)
             )
 
-        for index, item in enumerate(media[1:], start=8):
+        for index, item in enumerate(media[1:], start=13):
             self.add_caption_line(
                 frame,
                 index,
                 "Additional Media",
                 f"{item['filename']} - {item['reason']}"
             )
+
+    ##########################################################
+
+    def generate_package(self, opportunity):
+
+        try:
+            return self.content_generation_service.generate_package(
+                opportunity,
+                context_snapshot=(
+                    self.brief.get("context_snapshot", {})
+                    if self.brief
+                    else None
+                )
+            )
+
+        except Exception as ex:
+            logger.error(
+                "Communication package generation failed",
+                exc_info=(
+                    type(ex),
+                    ex,
+                    ex.__traceback__
+                )
+            )
+            self.status.configure(
+                text=f"Package generation error: {ex}"
+            )
+            return None
+
+    ##########################################################
+
+    def render_package(self, parent, package, start_row=3):
+
+        self.add_caption_line(
+            parent,
+            start_row,
+            "Complete Communication Package",
+            package.get("headline", "")
+        )
+        self.add_caption_line(
+            parent,
+            start_row + 1,
+            "Facebook",
+            package.get("facebook_caption", "")
+        )
+        self.add_caption_line(
+            parent,
+            start_row + 2,
+            "Instagram",
+            package.get("instagram_caption", "")
+        )
+        self.add_caption_line(
+            parent,
+            start_row + 3,
+            "LinkedIn",
+            package.get("linkedin_caption", "")
+        )
+        self.add_caption_line(
+            parent,
+            start_row + 4,
+            "Hashtags",
+            " ".join(package.get("hashtags", []))
+        )
+        self.add_caption_line(
+            parent,
+            start_row + 5,
+            "CTA",
+            package.get("call_to_action", "")
+        )
+        self.add_caption_line(
+            parent,
+            start_row + 6,
+            "Package Reasoning",
+            " | ".join(package.get("reasoning", [])[:5])
+        )
+        self.render_copy_controls(
+            parent,
+            package,
+            start_row + 7
+        )
+
+    ##########################################################
+
+    def render_copy_controls(self, parent, package, row):
+
+        controls = ctk.CTkFrame(
+            parent,
+            fg_color="transparent"
+        )
+
+        controls.grid(
+            row=row,
+            column=1,
+            sticky="w",
+            padx=(0, 12),
+            pady=3
+        )
+
+        buttons = (
+            (
+                "Copy Facebook",
+                package.get("facebook_caption", "")
+            ),
+            (
+                "Copy Instagram",
+                package.get("instagram_caption", "")
+            ),
+            (
+                "Copy Hashtags",
+                " ".join(package.get("hashtags", []))
+            ),
+            (
+                "Copy CTA",
+                package.get("call_to_action", "")
+            ),
+            (
+                "Copy All",
+                self.package_text(package)
+            )
+        )
+
+        for label, value in buttons:
+            button = ctk.CTkButton(
+                controls,
+                text=label,
+                width=118,
+                command=lambda text=value, name=label: self.copy_text(
+                    name,
+                    text
+                )
+            )
+
+            button.pack(
+                side="left",
+                padx=(0, 8)
+            )
+
+    ##########################################################
+
+    def copy_text(self, label, value):
+
+        self.clipboard_clear()
+        self.clipboard_append(value)
+        self.status.configure(
+            text=f"{label} copied."
+        )
+
+    ##########################################################
+
+    def package_text(self, package):
+
+        return "\n\n".join(
+            [
+                package.get("headline", ""),
+                "Facebook:\n" + package.get("facebook_caption", ""),
+                "Instagram:\n" + package.get("instagram_caption", ""),
+                "LinkedIn:\n" + package.get("linkedin_caption", ""),
+                "Hashtags:\n" + " ".join(package.get("hashtags", [])),
+                "CTA:\n" + package.get("call_to_action", ""),
+                "Reasoning:\n" + "\n".join(package.get("reasoning", []))
+            ]
+        )
 
     ##########################################################
 

@@ -316,6 +316,34 @@ class DatabaseManager:
 
         """)
 
+        ########################################################
+        # Content Templates
+        ########################################################
+
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS content_templates(
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            name TEXT NOT NULL,
+
+            writing_style TEXT,
+
+            platform TEXT,
+
+            body TEXT,
+
+            active INTEGER DEFAULT 1,
+
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+
+        )
+
+        """)
+
         self._ensure_ai_analysis_columns(cur)
         self._ensure_media_intelligence_columns(cur)
         self._ensure_knowledge_columns(cur)
@@ -2429,6 +2457,117 @@ class DatabaseManager:
 
     ############################################################
 
+    def content_templates(self, writing_style=None, platform=None):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+
+        cur = conn.cursor()
+
+        sql = """
+
+        SELECT *
+
+        FROM content_templates
+
+        WHERE active=1
+
+        """
+        params = []
+
+        if writing_style:
+            sql += " AND writing_style=?"
+            params.append(writing_style)
+
+        if platform:
+            sql += " AND platform=?"
+            params.append(platform)
+
+        sql += " ORDER BY name"
+
+        cur.execute(
+            sql,
+            tuple(params)
+        )
+
+        rows = cur.fetchall()
+
+        conn.close()
+
+        return [
+            self._content_template_from_row(row)
+            for row in rows
+        ]
+
+    ############################################################
+
+    def save_content_template(self, template):
+
+        template_id = self._to_int(
+            template.get("id")
+        )
+        values = (
+            template.get("name", ""),
+            template.get("writing_style", ""),
+            template.get("platform", ""),
+            template.get("body", ""),
+            1 if template.get("active", True) else 0
+        )
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        if template_id:
+            cur.execute("""
+
+            UPDATE content_templates
+
+            SET
+                name=?,
+                writing_style=?,
+                platform=?,
+                body=?,
+                active=?,
+                updated_at=CURRENT_TIMESTAMP
+
+            WHERE id=?
+
+            """,
+
+            values + (template_id,))
+
+        else:
+            cur.execute("""
+
+            INSERT INTO content_templates(
+
+                name,
+
+                writing_style,
+
+                platform,
+
+                body,
+
+                active
+
+            )
+
+            VALUES(?,?,?,?,?)
+
+            """,
+
+            values)
+            template_id = cur.lastrowid
+
+        conn.commit()
+
+        conn.close()
+
+        return template_id
+
+    ############################################################
+
     def _intelligence_scalar_counts(self, field, filters):
 
         section_filters = dict(filters or {})
@@ -2751,6 +2890,21 @@ class DatabaseManager:
 
     ############################################################
 
+    def _content_template_from_row(self, row):
+
+        return {
+            "id": row["id"],
+            "name": row["name"] or "",
+            "writing_style": row["writing_style"] or "",
+            "platform": row["platform"] or "",
+            "body": row["body"] or "",
+            "active": bool(row["active"]),
+            "created_at": row["created_at"] or "",
+            "updated_at": row["updated_at"] or ""
+        }
+
+    ############################################################
+
     def _to_json(self, value):
 
         if value is None:
@@ -2942,7 +3096,10 @@ class DatabaseManager:
             "CREATE INDEX IF NOT EXISTS idx_locations_name ON locations(name)",
             "CREATE INDEX IF NOT EXISTS idx_response_area_name ON response_area(name)",
             "CREATE INDEX IF NOT EXISTS idx_community_partners_name ON community_partners(name)",
-            "CREATE INDEX IF NOT EXISTS idx_knowledge_documents_sha ON knowledge_documents(sha256)"
+            "CREATE INDEX IF NOT EXISTS idx_knowledge_documents_sha ON knowledge_documents(sha256)",
+            "CREATE INDEX IF NOT EXISTS idx_content_templates_style ON content_templates(writing_style)",
+            "CREATE INDEX IF NOT EXISTS idx_content_templates_platform ON content_templates(platform)",
+            "CREATE INDEX IF NOT EXISTS idx_content_templates_active ON content_templates(active)"
         )
 
         for statement in indexes:
