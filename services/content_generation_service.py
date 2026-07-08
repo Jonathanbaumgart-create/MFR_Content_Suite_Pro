@@ -2,6 +2,7 @@ from core.app_context import context
 from services.context_engine import ContextEngine
 from services.knowledge_service import KnowledgeService
 from services.logging_service import LoggingService
+from services.writing_service import WritingService
 
 
 logger = LoggingService.get_logger("content")
@@ -105,7 +106,8 @@ class ContentGenerationService:
         self,
         database=None,
         knowledge_service=None,
-        context_engine=None
+        context_engine=None,
+        writing_service=None
     ):
 
         self.db = database or context.database
@@ -113,6 +115,7 @@ class ContentGenerationService:
             database=self.db
         )
         self.context_engine = context_engine or ContextEngine()
+        self.writing = writing_service or WritingService()
         self.ensure_default_templates()
 
     ############################################################
@@ -146,8 +149,21 @@ class ContentGenerationService:
             recommendation,
             media
         )
-        hashtags = self._hashtags(
+        facebook_hashtags = self._platform_hashtags(
             recommendation,
+            media,
+            "facebook"
+        )
+        instagram_hashtags = self._platform_hashtags(
+            recommendation,
+            media,
+            "instagram"
+        )
+        hashtags = self._unique(
+            facebook_hashtags + instagram_hashtags
+        )
+        emojis = self._emoji_suggestions(
+            writing_style,
             media
         )
         cta = recommendation.get(
@@ -186,13 +202,15 @@ class ContentGenerationService:
                 headline,
                 short_version,
                 cta,
-                hashtags
+                facebook_hashtags,
+                emojis
             ),
             "instagram_caption": self._instagram_caption(
                 headline,
                 short_version,
                 cta,
-                hashtags
+                instagram_hashtags,
+                emojis
             ),
             "linkedin_caption": self._linkedin_caption(
                 headline,
@@ -203,10 +221,9 @@ class ContentGenerationService:
             "long_version": long_version,
             "call_to_action": cta,
             "hashtags": hashtags,
-            "emoji_suggestions": self._emoji_suggestions(
-                writing_style,
-                media
-            ),
+            "facebook_hashtags": facebook_hashtags,
+            "instagram_hashtags": instagram_hashtags,
+            "emoji_suggestions": emojis,
             "suggested_posting_time": recommendation.get(
                 "best_posting_time",
                 ""
@@ -217,15 +234,42 @@ class ContentGenerationService:
             "opportunity_type": opportunity_type,
             "source_note": (
                 "Generated from stored Department Knowledge, Context, "
-                "Recommendation data, and Media Intelligence only."
+                "Recommendation data, and Media Intelligence only. "
+                "No Vision AI is used for writing."
             )
         }
 
+        package = self.writing.generate(
+            {
+                "recommendation": recommendation,
+                "media_intelligence": media,
+                "department_knowledge": knowledge,
+                "context": context_snapshot,
+                "opportunity_type": opportunity_type,
+                "platforms": [
+                    "facebook",
+                    "instagram",
+                    "linkedin"
+                ],
+                "base_package": package
+            }
+        )
+        status = self.writing.status()
+        package["writing_provider"] = status.get("active_provider", "")
+        package["writing_model"] = status.get("active_model", "")
+        package["writing_fallback_used"] = status.get("fallback_used", False)
+        package["writing_provider_error"] = status.get("last_error", "")
+
         logger.info(
-            "Generated communication package opportunity=%s style=%s media=%s",
+            (
+                "Generated communication package opportunity=%s style=%s "
+                "media=%s writing_provider=%s fallback=%s"
+            ),
             opportunity_type,
             writing_style,
-            len(media)
+            len(media),
+            package["writing_provider"],
+            package["writing_fallback_used"]
         )
 
         return package
@@ -442,18 +486,28 @@ class ContentGenerationService:
 
     ############################################################
 
-    def _facebook_caption(self, headline, short_version, cta, hashtags):
+    def _facebook_caption(self, headline, short_version, cta, hashtags, emojis):
 
         return self._clean(
-            f"{headline}\n\n{short_version}\n\n{cta}\n\n{' '.join(hashtags)}"
+            (
+                f"{' '.join(emojis[:3])} {headline}\n\n"
+                f"{short_version}\n\n"
+                f"{cta}\n\n"
+                f"{' '.join(hashtags[:5])}"
+            )
         )
 
     ############################################################
 
-    def _instagram_caption(self, headline, short_version, cta, hashtags):
+    def _instagram_caption(self, headline, short_version, cta, hashtags, emojis):
 
         return self._clean(
-            f"{headline}\n\n{short_version}\n\n{cta}\n\n{' '.join(hashtags[:8])}"
+            (
+                f"{' '.join(emojis[:3])} {headline}\n\n"
+                f"{short_version}\n\n"
+                f"{cta}\n\n"
+                f"{' '.join(hashtags[:5])}"
+            )
         )
 
     ############################################################
@@ -466,11 +520,12 @@ class ContentGenerationService:
 
     ############################################################
 
-    def _hashtags(self, recommendation, media):
+    def _platform_hashtags(self, recommendation, media, platform):
 
         tags = list(
             recommendation.get("hashtags", [])
         )
+        media_tags = []
 
         for item in media:
             for value in (
@@ -483,32 +538,37 @@ class ContentGenerationService:
                     for part in str(value).replace("-", "_").split("_")
                     if part
                 )
-                self._append_unique(tags, tag)
+                self._append_unique(media_tags, tag)
 
-        return tags[:10]
+        if platform == "instagram":
+            ordered = media_tags + tags
+        else:
+            ordered = tags + media_tags
+
+        return self._unique(ordered)[:5]
 
     ############################################################
 
     def _emoji_suggestions(self, writing_style, media):
 
         suggestions = {
-            "community": ["community", "heart", "maple leaf"],
-            "educational": ["checkmark", "house", "alarm"],
-            "recruitment": ["helmet", "handshake", "team"],
-            "incident_recap": ["information", "emergency vehicle"],
-            "recognition": ["star", "applause", "heart"],
-            "apparatus_feature": ["fire truck", "gear", "wrench"],
-            "training": ["helmet", "tools", "team"],
-            "safety_campaign": ["warning", "checkmark", "house"],
-            "holiday": ["calendar", "candle", "checkmark"],
-            "behind_the_scenes": ["helmet", "station", "team"]
+            "community": ["\U0001f91d", "\u2764\ufe0f", "\U0001f341"],
+            "educational": ["\u2705", "\U0001f3e0", "\U0001f6a8"],
+            "recruitment": ["\U0001fa96", "\U0001f91d", "\U0001f9d1\u200d\U0001f692"],
+            "incident_recap": ["\u2139\ufe0f", "\U0001f692"],
+            "recognition": ["\u2b50", "\U0001f44f", "\u2764\ufe0f"],
+            "apparatus_feature": ["\U0001f692", "\U0001f6e0\ufe0f", "\u2699\ufe0f"],
+            "training": ["\U0001fa96", "\U0001f6e0\ufe0f", "\U0001f91d"],
+            "safety_campaign": ["\u26a0\ufe0f", "\u2705", "\U0001f3e0"],
+            "holiday": ["\U0001f4c5", "\U0001f56f\ufe0f", "\u2705"],
+            "behind_the_scenes": ["\U0001fa96", "\U0001f3e2", "\U0001f91d"]
         }.get(
             writing_style,
-            ["community", "checkmark"]
+            ["\U0001f91d", "\u2705"]
         )
 
         if any("water" in item for item in self._media_terms(media)):
-            suggestions.append("water")
+            suggestions.append("\U0001f4a7")
 
         return self._unique(suggestions)[:5]
 
@@ -524,7 +584,7 @@ class ContentGenerationService:
     ):
 
         reasoning = [
-            "Package generated without Vision AI, external APIs, or LLM calls.",
+            "Package generated without Vision AI or external APIs.",
             "Uses stored recommendation reasoning and Media Intelligence only.",
             f"Writing style selected: {self.WRITING_STYLES[writing_style]['label']}."
         ]
@@ -625,8 +685,8 @@ class ContentGenerationService:
 
     def _clean(self, value):
 
-        return " ".join(
-            line.strip()
+        return "\n\n".join(
+            " ".join(line.strip().split())
             for line in str(value or "").splitlines()
             if line.strip()
         )

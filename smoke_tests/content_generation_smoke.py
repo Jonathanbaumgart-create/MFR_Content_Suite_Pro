@@ -12,6 +12,38 @@ if str(ROOT) not in sys.path:
 
 from database.db_manager import DatabaseManager
 from services.context_engine import ContextEngine
+from services.writing_service import WritingService
+
+
+def has_emoji(value):
+
+    return any(ord(character) > 10000 for character in value)
+
+
+def hashtag_count(value):
+
+    return len(
+        [
+            token
+            for token in value.split()
+            if token.startswith("#")
+        ]
+    )
+
+
+def deterministic_writing_service():
+
+    return WritingService(
+        config={
+            "default_provider": "deterministic",
+            "fallback_provider": "deterministic",
+            "providers": {
+                "deterministic": {
+                    "model": "deterministic-template"
+                }
+            }
+        }
+    )
 
 
 class FixedContextEngine:
@@ -153,7 +185,8 @@ def main():
             service = ContentGenerationService(
                 db,
                 knowledge_service=knowledge,
-                context_engine=FixedContextEngine(date(2026, 9, 15))
+                context_engine=FixedContextEngine(date(2026, 9, 15)),
+                writing_service=deterministic_writing_service()
             )
             package = service.generate_package(
                 recommendation
@@ -167,10 +200,18 @@ def main():
             assert package["long_version"], package
             assert package["call_to_action"], package
             assert package["hashtags"], package
+            assert package["facebook_hashtags"], package
+            assert package["instagram_hashtags"], package
             assert package["emoji_suggestions"], package
             assert package["suggested_posting_time"], package
             assert package["suggested_media"], package
             assert package["reasoning"], package
+            assert has_emoji(package["facebook_caption"]), package
+            assert has_emoji(package["instagram_caption"]), package
+            assert hashtag_count(package["facebook_caption"]) <= 5, package
+            assert hashtag_count(package["instagram_caption"]) <= 5, package
+            assert len(package["facebook_hashtags"]) <= 5, package
+            assert len(package["instagram_hashtags"]) <= 5, package
 
             text = " ".join(
                 [
@@ -201,9 +242,15 @@ def main():
             assert recruitment["writing_style"] == "Recruitment", recruitment
             assert training["writing_style"] == "Training", training
             assert recruitment["facebook_caption"] != training["facebook_caption"]
+            assert package["writing_provider"] == "deterministic", package
+            assert package["writing_fallback_used"] is False, package
             assert service.templates(), "default content templates were not stored"
             assert not hasattr(service, "vision")
             assert not hasattr(service, "ai")
+
+            from gui.content_director_page import ContentDirectorPage
+
+            assert ContentDirectorPage is not None
 
         finally:
             os.chdir(original)

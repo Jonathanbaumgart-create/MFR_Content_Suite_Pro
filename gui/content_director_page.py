@@ -89,17 +89,41 @@ class ContentDirectorPage(ctk.CTkFrame):
             column=1
         )
 
-        self.status = ctk.CTkLabel(
+        status_frame = ctk.CTkFrame(
             self,
+            fg_color="transparent"
+        )
+
+        status_frame.grid(
+            row=2,
+            column=0,
+            sticky="ew",
+            padx=20,
+            pady=(0, 8)
+        )
+        status_frame.grid_columnconfigure(0, weight=1)
+
+        self.status = ctk.CTkLabel(
+            status_frame,
             text="Opportunity type: none selected"
         )
 
         self.status.grid(
-            row=2,
+            row=0,
             column=0,
-            sticky="w",
-            padx=20,
-            pady=(0, 8)
+            sticky="w"
+        )
+
+        self.provider_status = ctk.CTkLabel(
+            status_frame,
+            text=self.writing_provider_status_text()
+        )
+
+        self.provider_status.grid(
+            row=0,
+            column=1,
+            sticky="e",
+            padx=(12, 0)
         )
 
         self.brief_frame = ctk.CTkFrame(self)
@@ -481,6 +505,7 @@ class ContentDirectorPage(ctk.CTkFrame):
             padx=10,
             pady=10
         )
+        frame.grid_columnconfigure(0, weight=0)
         frame.grid_columnconfigure(1, weight=1)
 
         media = opportunity["recommended_media"]
@@ -498,7 +523,7 @@ class ContentDirectorPage(ctk.CTkFrame):
             card.grid(
                 row=0,
                 column=0,
-                rowspan=13,
+                rowspan=15,
                 padx=12,
                 pady=12,
                 sticky="nw"
@@ -511,13 +536,15 @@ class ContentDirectorPage(ctk.CTkFrame):
                 f"- {opportunity['priority']} Priority "
                 f"- {opportunity['confidence']}% Confidence"
             ),
-            font=("Segoe UI", 18, "bold")
+            font=("Segoe UI", 18, "bold"),
+            wraplength=900,
+            justify="left"
         )
 
         title.grid(
             row=0,
             column=1,
-            sticky="w",
+            sticky="ew",
             padx=(0, 12),
             pady=(12, 3)
         )
@@ -532,7 +559,7 @@ class ContentDirectorPage(ctk.CTkFrame):
         reason.grid(
             row=1,
             column=1,
-            sticky="w",
+            sticky="ew",
             padx=(0, 12),
             pady=3
         )
@@ -580,12 +607,13 @@ class ContentDirectorPage(ctk.CTkFrame):
         )
 
         footer.grid(
-            row=11,
+            row=12,
             column=1,
             sticky="ew",
             padx=(0, 12),
             pady=(3, 12)
         )
+        footer.grid_columnconfigure(0, weight=1)
 
         cta = ctk.CTkLabel(
             footer,
@@ -594,14 +622,14 @@ class ContentDirectorPage(ctk.CTkFrame):
                 f"Engagement: {opportunity['estimated_engagement']} | "
                 f"Platforms: {', '.join(opportunity['recommended_platforms'])}"
             ),
-            wraplength=700,
+            wraplength=760,
             justify="left"
         )
 
-        cta.pack(
-            side="left",
-            fill="x",
-            expand=True
+        cta.grid(
+            row=0,
+            column=0,
+            sticky="ew"
         )
 
         if media:
@@ -614,8 +642,10 @@ class ContentDirectorPage(ctk.CTkFrame):
                 )
             )
 
-            open_button.pack(
-                side="right",
+            open_button.grid(
+                row=0,
+                column=1,
+                sticky="e",
                 padx=(12, 0)
             )
 
@@ -625,7 +655,7 @@ class ContentDirectorPage(ctk.CTkFrame):
         )
 
         feedback.grid(
-            row=12,
+            row=13,
             column=1,
             sticky="w",
             padx=(0, 12),
@@ -656,7 +686,7 @@ class ContentDirectorPage(ctk.CTkFrame):
                 padx=(0, 8)
             )
 
-        for index, item in enumerate(media[1:], start=13):
+        for index, item in enumerate(media[1:], start=14):
             self.add_caption_line(
                 frame,
                 index,
@@ -692,9 +722,14 @@ class ContentDirectorPage(ctk.CTkFrame):
             )
             return None
 
+        finally:
+            self.update_writing_provider_status()
+
     ##########################################################
 
     def render_package(self, parent, package, start_row=3):
+
+        self.update_writing_provider_status(package)
 
         self.add_caption_line(
             parent,
@@ -723,25 +758,31 @@ class ContentDirectorPage(ctk.CTkFrame):
         self.add_caption_line(
             parent,
             start_row + 4,
-            "Hashtags",
-            " ".join(package.get("hashtags", []))
+            "Facebook Hashtags",
+            " ".join(package.get("facebook_hashtags", package.get("hashtags", [])))
         )
         self.add_caption_line(
             parent,
             start_row + 5,
+            "Instagram Hashtags",
+            " ".join(package.get("instagram_hashtags", package.get("hashtags", [])))
+        )
+        self.add_caption_line(
+            parent,
+            start_row + 6,
             "CTA",
             package.get("call_to_action", "")
         )
         self.add_caption_line(
             parent,
-            start_row + 6,
+            start_row + 7,
             "Package Reasoning",
             " | ".join(package.get("reasoning", [])[:5])
         )
         self.render_copy_controls(
             parent,
             package,
-            start_row + 7
+            start_row + 8
         )
 
     ##########################################################
@@ -756,9 +797,19 @@ class ContentDirectorPage(ctk.CTkFrame):
         controls.grid(
             row=row,
             column=1,
-            sticky="w",
+            sticky="ew",
             padx=(0, 12),
             pady=3
+        )
+        for column in range(3):
+            controls.grid_columnconfigure(column, weight=0)
+
+        hashtags = " ".join(
+            dict.fromkeys(
+                (package.get("facebook_hashtags") or []) +
+                (package.get("instagram_hashtags") or []) +
+                (package.get("hashtags") or [])
+            )
         )
 
         buttons = (
@@ -772,7 +823,7 @@ class ContentDirectorPage(ctk.CTkFrame):
             ),
             (
                 "Copy Hashtags",
-                " ".join(package.get("hashtags", []))
+                hashtags
             ),
             (
                 "Copy CTA",
@@ -784,7 +835,7 @@ class ContentDirectorPage(ctk.CTkFrame):
             )
         )
 
-        for label, value in buttons:
+        for index, (label, value) in enumerate(buttons):
             button = ctk.CTkButton(
                 controls,
                 text=label,
@@ -795,9 +846,12 @@ class ContentDirectorPage(ctk.CTkFrame):
                 )
             )
 
-            button.pack(
-                side="left",
-                padx=(0, 8)
+            button.grid(
+                row=index // 3,
+                column=index % 3,
+                sticky="w",
+                padx=(0, 8),
+                pady=(0, 6)
             )
 
     ##########################################################
@@ -820,7 +874,14 @@ class ContentDirectorPage(ctk.CTkFrame):
                 "Facebook:\n" + package.get("facebook_caption", ""),
                 "Instagram:\n" + package.get("instagram_caption", ""),
                 "LinkedIn:\n" + package.get("linkedin_caption", ""),
-                "Hashtags:\n" + " ".join(package.get("hashtags", [])),
+                (
+                    "Facebook Hashtags:\n" +
+                    " ".join(package.get("facebook_hashtags", []))
+                ),
+                (
+                    "Instagram Hashtags:\n" +
+                    " ".join(package.get("instagram_hashtags", []))
+                ),
                 "CTA:\n" + package.get("call_to_action", ""),
                 "Reasoning:\n" + "\n".join(package.get("reasoning", []))
             ]
@@ -1091,20 +1152,95 @@ class ContentDirectorPage(ctk.CTkFrame):
 
     def add_caption_line(self, parent, row, label, value):
 
-        caption = ctk.CTkLabel(
+        line = ctk.CTkFrame(
             parent,
-            text=f"{label}: {value}",
-            wraplength=850,
-            justify="left"
+            fg_color="transparent"
         )
 
-        caption.grid(
+        line.grid(
             row=row,
             column=1,
-            sticky="w",
+            sticky="ew",
             padx=(0, 12),
             pady=3
         )
+        line.grid_columnconfigure(0, weight=1)
+
+        title = ctk.CTkLabel(
+            line,
+            text=f"{label}:",
+            font=("Segoe UI", 12, "bold"),
+            anchor="w"
+        )
+
+        title.grid(
+            row=0,
+            column=0,
+            sticky="w"
+        )
+
+        text = str(value or "")
+
+        if self.is_long_text(label, text):
+            box = ctk.CTkTextbox(
+                line,
+                height=self.text_area_height(label, text),
+                wrap="word"
+            )
+
+            box.grid(
+                row=1,
+                column=0,
+                sticky="ew",
+                pady=(2, 0)
+            )
+            box.insert("1.0", text)
+            box.configure(state="disabled")
+            return
+
+        caption = ctk.CTkLabel(
+            line,
+            text=text,
+            wraplength=820,
+            justify="left",
+            anchor="w"
+        )
+
+        caption.grid(
+            row=1,
+            column=0,
+            sticky="ew",
+            pady=(2, 0)
+        )
+
+    ##########################################################
+
+    def is_long_text(self, label, value):
+
+        return (
+            len(value) > 160 or
+            "\n" in value or
+            label in (
+                "Facebook",
+                "Instagram",
+                "LinkedIn",
+                "Package Reasoning",
+                "Reasoning"
+            )
+        )
+
+    ##########################################################
+
+    def text_area_height(self, label, value):
+
+        if label in ("Facebook", "Instagram", "LinkedIn"):
+            return 125
+
+        if label in ("Reasoning", "Package Reasoning"):
+            return 95
+
+        lines = max(2, len(value) // 95)
+        return min(130, 42 + lines * 20)
 
     ##########################################################
 
@@ -1160,6 +1296,64 @@ class ContentDirectorPage(ctk.CTkFrame):
             self.format_label(value)
             for value in values[:6]
         )
+
+    ##########################################################
+
+    def update_writing_provider_status(self, package=None):
+
+        if package:
+            provider = package.get("writing_provider", "")
+            model = package.get("writing_model", "")
+            fallback = package.get("writing_fallback_used", False)
+            error = package.get("writing_provider_error", "")
+        else:
+            status = self.content_generation_service.writing.status()
+            provider = status.get("active_provider", "")
+            model = status.get("active_model", "")
+            fallback = status.get("fallback_used", False)
+            error = status.get("last_error", "")
+
+        text = self.writing_provider_status_text(
+            provider,
+            model,
+            fallback,
+            error
+        )
+
+        if hasattr(self, "provider_status"):
+            self.provider_status.configure(
+                text=text
+            )
+
+    ##########################################################
+
+    def writing_provider_status_text(
+        self,
+        provider=None,
+        model=None,
+        fallback=False,
+        error=""
+    ):
+
+        if provider is None:
+            status = self.content_generation_service.writing.status()
+            provider = status.get("active_provider", "")
+            model = status.get("active_model", "")
+            fallback = status.get("fallback_used", False)
+            error = status.get("last_error", "")
+
+        label = f"Writing: {provider or 'unknown'}"
+
+        if model:
+            label += f" ({model})"
+
+        if fallback:
+            label += " - fallback"
+
+        if error:
+            label += " - local Ollama unavailable"
+
+        return label
 
     ##########################################################
 
