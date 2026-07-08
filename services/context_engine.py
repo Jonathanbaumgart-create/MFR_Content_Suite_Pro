@@ -1,6 +1,13 @@
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta
+import time
 
+from config.context_config import CONTEXT_CONFIG
+from services.context_providers import (
+    CalendarProvider,
+    CampaignProvider,
+    SeasonProvider
+)
 from services.logging_service import LoggingService
 
 
@@ -27,44 +34,73 @@ class ContextSnapshot:
 
 class ContextEngine:
 
+    PROVIDERS = {
+        "calendar": CalendarProvider,
+        "season": SeasonProvider,
+        "campaign": CampaignProvider
+    }
+
+    def __init__(self, providers=None, config=None, today=None):
+
+        self.config = config or CONTEXT_CONFIG
+        self.today = self._coerce_date(today) if today is not None else None
+        self.providers = providers or self._configured_providers()
+
+    ############################################################
+
     def snapshot(self, today=None):
 
-        today = self._coerce_date(today)
-        season = self.season(today)
-        active = self.active_themes(today)
-        upcoming = self.upcoming_themes(today)
-        opportunities = self.suggested_opportunities(
-            today,
-            active,
-            upcoming
+        today = self._coerce_date(
+            today
+            if today is not None
+            else self.today
         )
-        priority = self.priority_context(
-            active,
-            opportunities
-        )
+        provider_results = []
+        contexts = []
 
-        snapshot = ContextSnapshot(
-            date=today.isoformat(),
-            month=today.month,
-            season=season,
-            day_of_week=today.strftime("%A"),
-            active_themes=active,
-            upcoming_themes=upcoming,
-            suggested_opportunities=opportunities,
-            priority_context=priority,
-            explanation=self.explanation(
-                today,
-                season,
-                active,
-                upcoming
-            )
+        for provider in self._enabled_providers(today):
+            start = time.perf_counter()
+
+            try:
+                context = provider.get_context()
+                elapsed = time.perf_counter() - start
+                provider_results.append(provider.provider_name())
+                contexts.append(
+                    (
+                        provider.priority(),
+                        provider.provider_name(),
+                        context
+                    )
+                )
+                logger.info(
+                    "Context provider ran provider=%s priority=%s duration=%.4fs",
+                    provider.provider_name(),
+                    provider.priority(),
+                    elapsed
+                )
+
+            except Exception as ex:
+                logger.error(
+                    "Context provider failed provider=%s",
+                    provider.provider_name(),
+                    exc_info=(
+                        type(ex),
+                        ex,
+                        ex.__traceback__
+                    )
+                )
+
+        snapshot = self._merge_contexts(
+            today,
+            contexts
         )
 
         logger.info(
-            "Generated context snapshot date=%s season=%s active=%s",
+            "Merged context snapshot providers=%s date=%s active=%s suggested=%s",
+            provider_results,
             snapshot.date,
-            snapshot.season,
-            snapshot.active_themes
+            snapshot.active_themes,
+            snapshot.suggested_opportunities
         )
 
         return snapshot
@@ -90,80 +126,13 @@ class ContextEngine:
 
     def active_themes(self, today=None):
 
-        today = self._coerce_date(today)
-        month = today.month
-        day = today.day
-        themes = []
-
-        if month in (12, 1, 2):
-            themes.append("winter_safety_season")
-
-        if month in (12, 1, 2, 3):
-            themes.append("ice_safety_season")
-
-        if month in (3, 4):
-            themes.append("spring_melt_flood_awareness")
-
-        if month in (4, 5, 6):
-            themes.append("wildfire_grass_fire_season")
-
-        if month in (6, 7, 8):
-            themes.append("summer_heat_safety")
-            themes.append("water_safety_season")
-
-        if month in (8, 9):
-            themes.append("back_to_school_safety")
-
-        if month == 10:
-            themes.append("fire_prevention_week")
-
-        if month == 10 and day >= 15:
-            themes.append("halloween_safety")
-
-        if month in (11, 12, 1, 2, 3):
-            themes.append("carbon_monoxide_safety_season")
-
-        if month in (12, 1):
-            themes.append("holiday_fireplace_candle_safety")
-
-        if (month == 12 and day >= 27) or (month == 1 and day <= 3):
-            themes.append("new_year_safety")
-
-        if self._is_emergency_preparedness_week(today):
-            themes.append("emergency_preparedness_week")
-
-        if month in (1, 2, 3, 4, 9, 10, 11):
-            themes.append("recruitment_friendly_period")
-
-        themes.append("community_engagement_opportunity")
-
-        if today.strftime("%A") == "Thursday":
-            themes.append("throwback_thursday")
-
-        return self._unique(themes)
+        return self.snapshot(today).active_themes
 
     ############################################################
 
     def upcoming_themes(self, today=None):
 
-        today = self._coerce_date(today)
-        upcoming = []
-
-        for days_ahead in (14, 30, 45, 60):
-            future = today + timedelta(days=days_ahead)
-            upcoming.extend(
-                theme
-                for theme in self.active_themes(future)
-                if theme != "community_engagement_opportunity"
-            )
-
-        current = set(self.active_themes(today))
-
-        return [
-            theme
-            for theme in self._unique(upcoming)
-            if theme not in current
-        ][:8]
+        return self.snapshot(today).upcoming_themes
 
     ############################################################
 
@@ -174,51 +143,14 @@ class ContextEngine:
         upcoming_themes=None
     ):
 
-        today = self._coerce_date(today)
-        active_themes = active_themes or self.active_themes(today)
-        upcoming_themes = upcoming_themes or self.upcoming_themes(today)
-        opportunities = []
-        themes = set(active_themes + upcoming_themes[:3])
+        if active_themes is None and upcoming_themes is None:
+            return self.snapshot(today).suggested_opportunities
 
-        mapping = {
-            "summer_heat_safety": "heat_warning",
-            "water_safety_season": "water_safety",
-            "winter_safety_season": "holiday_safety",
-            "ice_safety_season": "storm_safety",
-            "spring_melt_flood_awareness": "storm_safety",
-            "wildfire_grass_fire_season": "fire_prevention_week",
-            "back_to_school_safety": "community_appreciation",
-            "fire_prevention_week": "fire_prevention_week",
-            "halloween_safety": "holiday_safety",
-            "carbon_monoxide_safety_season": "smoke_alarm_reminder",
-            "holiday_fireplace_candle_safety": "holiday_safety",
-            "new_year_safety": "general_engagement",
-            "emergency_preparedness_week": "storm_safety",
-            "recruitment_friendly_period": "recruitment",
-            "community_engagement_opportunity": "community_appreciation",
-            "throwback_thursday": "throwback_thursday"
-        }
-
-        for theme in active_themes:
-            opportunity = mapping.get(theme)
-
-            if opportunity:
-                opportunities.append(opportunity)
-
-        if today.strftime("%A") == "Thursday":
-            opportunities.append("throwback_thursday")
-
-        if "fire_prevention_week" in themes:
-            opportunities.append("smoke_alarm_reminder")
-
-        opportunities.extend(
-            (
-                "training_highlight",
-                "general_engagement"
-            )
+        return self._suggested_from_themes(
+            self._coerce_date(today),
+            active_themes or [],
+            upcoming_themes or []
         )
-
-        return self._unique(opportunities)
 
     ############################################################
 
@@ -280,6 +212,213 @@ class ContextEngine:
             "_",
             " "
         ).title()
+
+    ############################################################
+
+    def _configured_providers(self):
+
+        provider_config = self.config.get(
+            "providers",
+            {}
+        )
+        providers = []
+
+        for key, provider_class in self.PROVIDERS.items():
+            settings = dict(
+                provider_config.get(
+                    key,
+                    {}
+                )
+            )
+            settings["name"] = key
+            providers.append(
+                provider_class(
+                    settings=settings,
+                    today=self.today
+                )
+            )
+
+        return providers
+
+    ############################################################
+
+    def _enabled_providers(self, today):
+
+        providers = []
+
+        for provider in self.providers:
+            self._set_provider_date(
+                provider,
+                today
+            )
+
+            if provider.enabled():
+                providers.append(provider)
+            else:
+                logger.info(
+                    "Context provider disabled provider=%s",
+                    provider.provider_name()
+                )
+
+        return sorted(
+            providers,
+            key=lambda item: item.priority()
+        )
+
+    ############################################################
+
+    def _set_provider_date(self, provider, today):
+
+        if hasattr(provider, "set_date"):
+            provider.set_date(today)
+            return
+
+        provider.today = today
+
+    ############################################################
+
+    def _merge_contexts(self, today, contexts):
+
+        contexts = sorted(
+            contexts,
+            key=lambda item: item[0]
+        )
+        active = []
+        upcoming = []
+        opportunities = []
+        priority = []
+        explanations = []
+        date_value = today.isoformat()
+        month = today.month
+        season = self.season(today)
+        day_of_week = today.strftime("%A")
+
+        for _, _, context in contexts:
+            date_value = context.get("date") or date_value
+            month = context.get("month") or month
+            season = context.get("season") or season
+            day_of_week = context.get("day_of_week") or day_of_week
+            active.extend(context.get("active_themes") or [])
+            upcoming.extend(context.get("upcoming_themes") or [])
+            opportunities.extend(context.get("suggested_opportunities") or [])
+            priority.extend(context.get("priority_context") or [])
+            explanations.extend(context.get("explanations") or [])
+
+            if context.get("explanation"):
+                explanations.append(context["explanation"])
+
+        active = self._unique(active)
+        upcoming = [
+            theme
+            for theme in self._unique(upcoming)
+            if theme not in active
+        ][:8]
+        opportunities = self._unique(
+            opportunities +
+            self._suggested_from_themes(
+                today,
+                active,
+                upcoming
+            )
+        )
+        priority = self._unique(
+            priority +
+            self.priority_context(
+                active,
+                opportunities
+            )
+        )
+        explanation = self._merged_explanation(
+            today,
+            season,
+            active,
+            upcoming,
+            explanations
+        )
+
+        return ContextSnapshot(
+            date=date_value,
+            month=month,
+            season=season,
+            day_of_week=day_of_week,
+            active_themes=active,
+            upcoming_themes=upcoming,
+            suggested_opportunities=opportunities,
+            priority_context=priority,
+            explanation=explanation
+        )
+
+    ############################################################
+
+    def _merged_explanation(
+        self,
+        today,
+        season,
+        active,
+        upcoming,
+        explanations
+    ):
+
+        merged = self._unique(explanations)
+
+        if merged:
+            return " ".join(merged)
+
+        return self.explanation(
+            today,
+            season,
+            active,
+            upcoming
+        )
+
+    ############################################################
+
+    def _suggested_from_themes(self, today, active_themes, upcoming_themes):
+
+        active_themes = active_themes or []
+        upcoming_themes = upcoming_themes or []
+        opportunities = []
+        themes = set(active_themes + upcoming_themes[:3])
+        mapping = {
+            "summer_heat_safety": "heat_warning",
+            "water_safety_season": "water_safety",
+            "winter_safety_season": "holiday_safety",
+            "ice_safety_season": "storm_safety",
+            "spring_melt_flood_awareness": "storm_safety",
+            "wildfire_grass_fire_season": "fire_prevention_week",
+            "back_to_school_safety": "community_appreciation",
+            "fire_prevention_week": "fire_prevention_week",
+            "halloween_safety": "holiday_safety",
+            "carbon_monoxide_safety_season": "smoke_alarm_reminder",
+            "holiday_fireplace_candle_safety": "holiday_safety",
+            "new_year_safety": "general_engagement",
+            "emergency_preparedness_week": "storm_safety",
+            "recruitment_friendly_period": "recruitment",
+            "community_engagement_opportunity": "community_appreciation",
+            "throwback_thursday": "throwback_thursday",
+            "holiday_safety": "holiday_safety"
+        }
+
+        for theme in active_themes:
+            opportunity = mapping.get(theme)
+
+            if opportunity:
+                opportunities.append(opportunity)
+
+        if today.strftime("%A") == "Thursday":
+            opportunities.append("throwback_thursday")
+
+        if "fire_prevention_week" in themes:
+            opportunities.append("smoke_alarm_reminder")
+
+        opportunities.extend(
+            (
+                "training_highlight",
+                "general_engagement"
+            )
+        )
+
+        return self._unique(opportunities)
 
     ############################################################
 
