@@ -272,12 +272,19 @@ class KnowledgePage(ctk.CTkFrame):
         self.name_entry = self.add_entry(form, 0, "Name")
         self.category_entry = self.add_entry(form, 1, "Category")
         self.tags_entry = self.add_entry(form, 2, "Tags")
+        self.active_months_entry = self.add_entry(form, 3, "Active Months")
+        self.inactive_months_entry = self.add_entry(form, 4, "Inactive Months")
+        self.season_entry = self.add_entry(form, 5, "Season")
+        self.event_date_entry = self.add_entry(form, 6, "Event Date")
+        self.campaign_window_entry = self.add_entry(form, 7, "Campaign Window")
+        self.audience_entry = self.add_entry(form, 8, "Audience")
+        self.notes_entry = self.add_entry(form, 9, "Notes")
 
         ctk.CTkLabel(
             form,
             text="Description"
         ).grid(
-            row=3,
+            row=10,
             column=0,
             sticky="nw",
             padx=12,
@@ -290,7 +297,7 @@ class KnowledgePage(ctk.CTkFrame):
         )
 
         self.description_text.grid(
-            row=3,
+            row=10,
             column=1,
             sticky="ew",
             padx=(0, 12),
@@ -305,7 +312,7 @@ class KnowledgePage(ctk.CTkFrame):
         )
 
         active.grid(
-            row=4,
+            row=11,
             column=1,
             sticky="w",
             padx=(0, 12),
@@ -318,7 +325,7 @@ class KnowledgePage(ctk.CTkFrame):
         )
 
         controls.grid(
-            row=5,
+            row=12,
             column=1,
             sticky="w",
             padx=(0, 12),
@@ -352,7 +359,7 @@ class KnowledgePage(ctk.CTkFrame):
         )
 
         self.status.grid(
-            row=6,
+            row=13,
             column=1,
             sticky="w",
             padx=(0, 12),
@@ -532,6 +539,7 @@ class KnowledgePage(ctk.CTkFrame):
             self.category_entry.delete(0, "end")
             self.category_entry.insert(0, "department_profile")
             self.tags_entry.delete(0, "end")
+            self.clear_timing_fields()
             self.description_text.delete("1.0", "end")
             self.description_text.insert(
                 "1.0",
@@ -553,6 +561,7 @@ class KnowledgePage(ctk.CTkFrame):
                 0,
                 ", ".join(item.get("tags", []))
             )
+            self.load_timing_fields(item)
             self.description_text.delete("1.0", "end")
             self.description_text.insert(
                 "1.0",
@@ -725,6 +734,7 @@ class KnowledgePage(ctk.CTkFrame):
             0,
             ", ".join(item.get("tags", []))
         )
+        self.load_timing_fields(item)
         self.description_text.delete("1.0", "end")
         self.description_text.insert(
             "1.0",
@@ -745,6 +755,7 @@ class KnowledgePage(ctk.CTkFrame):
         self.name_entry.delete(0, "end")
         self.category_entry.delete(0, "end")
         self.tags_entry.delete(0, "end")
+        self.clear_timing_fields()
         self.description_text.delete("1.0", "end")
         self.active_var.set(True)
         self.status.configure(
@@ -773,6 +784,17 @@ class KnowledgePage(ctk.CTkFrame):
                 for tag in self.tags_entry.get().split(",")
                 if tag.strip()
             ],
+            "active_months": self.months_from_entry(
+                self.active_months_entry
+            ),
+            "inactive_months": self.months_from_entry(
+                self.inactive_months_entry
+            ),
+            "season": self.season_entry.get().strip(),
+            "event_date": self.event_date_entry.get().strip(),
+            "campaign_window": self.campaign_window_entry.get().strip(),
+            "audience": self.audience_entry.get().strip(),
+            "notes": self.notes_entry.get().strip(),
             "active": self.active_var.get()
         }
         self.current_item_id = self.service.save_item(
@@ -818,3 +840,55 @@ class KnowledgePage(ctk.CTkFrame):
             self.current_table,
             deleted_id
         )
+
+    ##########################################################
+
+    def load_timing_fields(self, item):
+
+        fields = (
+            (
+                self.active_months_entry,
+                ", ".join(str(value) for value in item.get("active_months", []))
+            ),
+            (
+                self.inactive_months_entry,
+                ", ".join(str(value) for value in item.get("inactive_months", []))
+            ),
+            (self.season_entry, item.get("season", "")),
+            (self.event_date_entry, item.get("event_date", "")),
+            (self.campaign_window_entry, item.get("campaign_window", "")),
+            (self.audience_entry, item.get("audience", "")),
+            (self.notes_entry, item.get("notes", ""))
+        )
+
+        for entry, value in fields:
+            entry.delete(0, "end")
+            entry.insert(
+                0,
+                value
+            )
+
+    ##########################################################
+
+    def clear_timing_fields(self):
+
+        for entry in (
+            self.active_months_entry,
+            self.inactive_months_entry,
+            self.season_entry,
+            self.event_date_entry,
+            self.campaign_window_entry,
+            self.audience_entry,
+            self.notes_entry
+        ):
+            entry.delete(0, "end")
+
+    ##########################################################
+
+    def months_from_entry(self, entry):
+
+        return [
+            value.strip()
+            for value in entry.get().split(",")
+            if value.strip()
+        ]

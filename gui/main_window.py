@@ -8,6 +8,7 @@ from gui.gallery_page import GalleryPage
 from gui.home_page import HomePage
 from gui.intelligence_page import IntelligenceExplorerPage
 from gui.knowledge_page import KnowledgePage
+from gui.operations_page import OperationsPage
 from gui.scan_page import ScanPage
 
 
@@ -105,6 +106,8 @@ class MainWindow(ctk.CTk):
             ("Content Director", self.show_content_director),
 
             ("Knowledge", self.show_knowledge),
+
+            ("Operations", self.show_operations),
 
             ("AI Dashboard", self.show_ai_dashboard),
 
@@ -272,6 +275,24 @@ class MainWindow(ctk.CTk):
         self.clear_page()
 
         self.current_page = KnowledgePage(
+            self.workspace
+        )
+
+        self.current_page.grid(
+            row=0,
+            column=0,
+            sticky="nsew",
+            padx=25,
+            pady=25
+        )
+
+    ##########################################################
+
+    def show_operations(self):
+
+        self.clear_page()
+
+        self.current_page = OperationsPage(
             self.workspace
         )
 

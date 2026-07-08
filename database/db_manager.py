@@ -274,6 +274,22 @@ class DatabaseManager:
 
                 tags TEXT,
 
+                active_months TEXT,
+
+                inactive_months TEXT,
+
+                season TEXT,
+
+                event_date TEXT,
+
+                campaign_window TEXT,
+
+                audience TEXT,
+
+                school_year_program INTEGER DEFAULT 0,
+
+                notes TEXT,
+
                 active INTEGER DEFAULT 1
 
             )
@@ -302,6 +318,7 @@ class DatabaseManager:
 
         self._ensure_ai_analysis_columns(cur)
         self._ensure_media_intelligence_columns(cur)
+        self._ensure_knowledge_columns(cur)
         self._ensure_indexes(cur)
 
         conn.commit()
@@ -1037,6 +1054,84 @@ class DatabaseManager:
             "total_analyzed": row[0] or 0,
             "average_analysis_time": row[1] or 0,
             "last_analyzed": row[2] or ""
+        }
+
+    ############################################################
+
+    def last_provider_failure(self):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        SELECT media_id, provider, model, retry_count, failure_reason, last_analyzed
+
+        FROM ai_analysis
+
+        WHERE failure_reason IS NOT NULL
+        AND failure_reason != ''
+
+        ORDER BY last_analyzed DESC
+
+        LIMIT 1
+
+        """)
+
+        row = cur.fetchone()
+
+        conn.close()
+
+        if row is None:
+            return None
+
+        return {
+            "media_id": row["media_id"],
+            "provider": row["provider"] or "",
+            "model": row["model"] or "",
+            "retry_count": row["retry_count"] or 0,
+            "failure_reason": row["failure_reason"] or "",
+            "last_analyzed": row["last_analyzed"] or ""
+        }
+
+    ############################################################
+
+    def last_successful_analysis(self):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        SELECT media_id, provider, model, last_analyzed
+
+        FROM ai_analysis
+
+        WHERE failure_reason IS NULL
+        OR failure_reason = ''
+
+        ORDER BY last_analyzed DESC
+
+        LIMIT 1
+
+        """)
+
+        row = cur.fetchone()
+
+        conn.close()
+
+        if row is None:
+            return None
+
+        return {
+            "media_id": row["media_id"],
+            "provider": row["provider"] or "",
+            "model": row["model"] or "",
+            "last_analyzed": row["last_analyzed"] or ""
         }
 
     ############################################################
@@ -1902,6 +1997,22 @@ class DatabaseManager:
 
     ############################################################
 
+    def recommendation_history_count(self):
+
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        cur.execute("SELECT COUNT(*) FROM recommendation_history")
+
+        count = cur.fetchone()[0]
+
+        conn.close()
+
+        return count
+
+    ############################################################
+
     def save_recommendation_feedback(self, feedback):
 
         conn = self.connection()
@@ -2132,6 +2243,14 @@ class DatabaseManager:
             item.get("category", ""),
             item.get("description", ""),
             self._to_json(item.get("tags")),
+            self._to_json(item.get("active_months")),
+            self._to_json(item.get("inactive_months")),
+            item.get("season", ""),
+            item.get("event_date", ""),
+            item.get("campaign_window", ""),
+            item.get("audience", ""),
+            1 if item.get("school_year_program", False) else 0,
+            item.get("notes", ""),
             1 if item.get("active", True) else 0
         )
         conn = self.connection()
@@ -2148,6 +2267,14 @@ class DatabaseManager:
                 category=?,
                 description=?,
                 tags=?,
+                active_months=?,
+                inactive_months=?,
+                season=?,
+                event_date=?,
+                campaign_window=?,
+                audience=?,
+                school_year_program=?,
+                notes=?,
                 active=?
 
             WHERE id=?
@@ -2169,11 +2296,27 @@ class DatabaseManager:
 
                 tags,
 
+                active_months,
+
+                inactive_months,
+
+                season,
+
+                event_date,
+
+                campaign_window,
+
+                audience,
+
+                school_year_program,
+
+                notes,
+
                 active
 
             )
 
-            VALUES(?,?,?,?,?)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
 
             """,
 
@@ -2576,6 +2719,14 @@ class DatabaseManager:
             "category": row["category"] or "",
             "description": row["description"] or "",
             "tags": self._from_json(row["tags"]),
+            "active_months": self._from_json(row["active_months"]),
+            "inactive_months": self._from_json(row["inactive_months"]),
+            "season": row["season"] or "",
+            "event_date": row["event_date"] or "",
+            "campaign_window": row["campaign_window"] or "",
+            "audience": row["audience"] or "",
+            "school_year_program": bool(row["school_year_program"]),
+            "notes": row["notes"] or "",
             "active": bool(row["active"])
         }
 
@@ -2716,6 +2867,50 @@ class DatabaseManager:
                 "Added media_intelligence column %s",
                 name
             )
+
+    ############################################################
+
+    def _ensure_knowledge_columns(self, cur):
+
+        additions = {
+            "active_months": "TEXT",
+            "inactive_months": "TEXT",
+            "season": "TEXT",
+            "event_date": "TEXT",
+            "campaign_window": "TEXT",
+            "audience": "TEXT",
+            "school_year_program": "INTEGER DEFAULT 0",
+            "notes": "TEXT"
+        }
+
+        for table in (
+            "apparatus",
+            "programs",
+            "annual_events",
+            "locations",
+            "response_area",
+            "community_partners"
+        ):
+            cur.execute(f"PRAGMA table_info({table})")
+            columns = {
+                row[1]
+                for row in cur.fetchall()
+            }
+
+            for name, definition in additions.items():
+
+                if name in columns:
+                    continue
+
+                cur.execute(
+                    f"ALTER TABLE {table} ADD COLUMN {name} {definition}"
+                )
+
+                logger.info(
+                    "Added %s column %s",
+                    table,
+                    name
+                )
 
     ############################################################
 

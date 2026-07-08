@@ -152,9 +152,20 @@ class CommunicationsReasoningService:
     ):
 
         snapshot = snapshot or self.director.context_engine.snapshot()
+        explicit_program = self.knowledge.explicit_program_from_prompt(
+            prompt
+        )
 
         if opportunity_keys is None:
             opportunity_keys = self.director.interpret_prompt(prompt)
+
+            if explicit_program:
+                opportunity_keys = (
+                    self.knowledge.opportunity_keys_for_knowledge_item(
+                        explicit_program
+                    ) +
+                    list(opportunity_keys)
+                )
 
         opportunity_keys = [
             self._canonical_opportunity(key)
@@ -178,7 +189,8 @@ class CommunicationsReasoningService:
                 opportunity,
                 candidates,
                 recent_media_ids,
-                snapshot
+                snapshot,
+                explicit_program=explicit_program
             )
 
             if recommendation:
@@ -295,21 +307,38 @@ class CommunicationsReasoningService:
         opportunity,
         candidates,
         recent_media_ids,
-        snapshot
+        snapshot,
+        explicit_program=None
     ):
 
         profile = self.director.OPPORTUNITIES[opportunity]
+        today = getattr(
+            snapshot,
+            "date",
+            None
+        )
         title = self.knowledge.label_for_opportunity(
             opportunity,
-            profile["title"]
+            profile["title"],
+            today=today,
+            explicit_program=explicit_program
         )
         caption_strategy = self.knowledge.caption_strategy(
             opportunity,
-            profile["caption_theme"]
+            profile["caption_theme"],
+            today=today,
+            explicit_program=explicit_program
         )
         call_to_action = self.knowledge.call_to_action(
             opportunity,
-            profile["call_to_action"]
+            profile["call_to_action"],
+            today=today,
+            explicit_program=explicit_program
+        )
+        timing_context = self.knowledge.program_timing_context(
+            opportunity,
+            today=today,
+            explicit_program=explicit_program
         )
         scored = []
 
@@ -345,7 +374,8 @@ class CommunicationsReasoningService:
             opportunity,
             profile,
             recommended_media,
-            snapshot
+            snapshot,
+            timing_context=timing_context
         )
 
         recommendation = {
@@ -364,7 +394,8 @@ class CommunicationsReasoningService:
             "engagement_prediction": self._engagement_prediction(confidence),
             "estimated_engagement": self._engagement_prediction(confidence),
             "call_to_action": call_to_action,
-            "hashtags": list(profile["hashtags"])
+            "hashtags": list(profile["hashtags"]),
+            "program_timing": timing_context
         }
 
         logger.info(
@@ -474,14 +505,59 @@ class CommunicationsReasoningService:
 
     ############################################################
 
-    def _reasoning(self, opportunity, profile, media, snapshot):
+    def _reasoning(
+        self,
+        opportunity,
+        profile,
+        media,
+        snapshot,
+        timing_context=None
+    ):
 
         reasoning = [
             f"Best fit for {profile['caption_theme'].lower()} today.",
             "Uses Context Engine, stored Media Intelligence, library insights, and recommendation history.",
             "No image analysis or external API calls are used.",
-            self.knowledge.reasoning_context(opportunity)
+            self.knowledge.reasoning_context(
+                opportunity,
+                today=getattr(
+                    snapshot,
+                    "date",
+                    None
+                ),
+                explicit_program=(
+                    timing_context or {}
+                ).get("explicit_program")
+            )
         ]
+
+        timing_context = timing_context or {}
+
+        active_program = timing_context.get("active_program")
+
+        if active_program:
+            reasoning.append(
+                active_program["status"]["reason"]
+            )
+
+            if (
+                timing_context.get("explicit_program") and
+                not active_program["status"]["active"]
+            ):
+                reasoning.append(
+                    "It is included because the prompt explicitly requested that program."
+                )
+
+        for entry in timing_context.get("out_of_season", [])[:2]:
+            reasoning.append(
+                entry["status"]["reason"]
+            )
+
+        for entry in timing_context.get("upcoming", [])[:2]:
+            reasoning.append(
+                entry["program"]["name"] +
+                " may be useful as upcoming content preparation, not as today's main post."
+            )
 
         active = [
             self._format_label(theme)

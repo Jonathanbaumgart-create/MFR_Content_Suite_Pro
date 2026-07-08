@@ -116,11 +116,17 @@ def main():
                 for item in knowledge.items("programs")
             )
             assert knowledge.program_for_opportunity(
-                "community_appreciation"
+                "community_appreciation",
+                today=date(2026, 1, 8)
             )["name"] == "Hydrant Heroes"
             assert knowledge.program_for_opportunity(
-                "fire_prevention_week"
+                "fire_prevention_week",
+                today=date(2026, 11, 8)
             )["name"] == "Travelling Sparky"
+            assert knowledge.program_for_opportunity(
+                "fire_prevention_week",
+                today=date(2026, 7, 8)
+            ) is None
 
             knowledge.save_profile(
                 {
@@ -151,7 +157,7 @@ def main():
 
             director = CommunicationsDirector(
                 db,
-                context_engine=FixedContextEngine(date(2026, 10, 8))
+                context_engine=FixedContextEngine(date(2026, 11, 8))
             )
             service = CommunicationsReasoningService(
                 db,
