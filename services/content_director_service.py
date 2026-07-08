@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from core.app_context import context
+from services.knowledge_service import KnowledgeService
 from services.logging_service import LoggingService
 
 
@@ -205,6 +206,9 @@ class ContentDirectorService:
     def __init__(self, database=None):
 
         self.db = database or context.database
+        self.knowledge = KnowledgeService(
+            database=self.db
+        )
 
     ############################################################
 
@@ -310,24 +314,32 @@ class ContentDirectorService:
 
         opportunity = self._primary_opportunity(opportunity_types)
         profile = self.PROFILES[opportunity]
+        strategy = self.knowledge.caption_strategy(
+            self._communication_opportunity(opportunity),
+            profile["theme"]
+        )
+        cta = self.knowledge.call_to_action(
+            self._communication_opportunity(opportunity),
+            profile["cta"]
+        )
         reason = recommendation.get("reason", "")
         filename = recommendation.get("filename", "this media")
 
         facebook = (
-            f"{profile['theme']}: {profile['cta']} "
+            f"{strategy}: {cta} "
             f"This library item was recommended because {reason.lower()}."
         )
 
         instagram = (
-            f"{profile['theme']} from Morden Fire & Rescue. "
-            f"{profile['cta']}"
+            f"{strategy}. "
+            f"{cta}"
         )
 
         return {
             "facebook_caption": facebook,
             "instagram_caption": instagram,
             "hashtags": list(profile["hashtags"]),
-            "call_to_action": profile["cta"],
+            "call_to_action": cta,
             "tone_label": profile["tone"],
             "source_filename": filename
         }
@@ -495,6 +507,24 @@ class ContentDirectorService:
                 return opportunity
 
         return "general_engagement"
+
+    ############################################################
+
+    def _communication_opportunity(self, opportunity):
+
+        mapping = {
+            "fire_prevention": "fire_prevention_week",
+            "smoke_alarm": "smoke_alarm_reminder",
+            "apparatus": "apparatus_showcase",
+            "training": "training_highlight",
+            "community": "community_appreciation",
+            "winter_weather": "holiday_safety"
+        }
+
+        return mapping.get(
+            opportunity,
+            opportunity
+        )
 
     ############################################################
 

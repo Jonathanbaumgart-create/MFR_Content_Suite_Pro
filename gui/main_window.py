@@ -5,6 +5,7 @@ from gui.content_director_page import ContentDirectorPage
 from gui.dashboard_page import DashboardPage
 from gui.gallery_page import GalleryPage
 from gui.intelligence_page import IntelligenceExplorerPage
+from gui.knowledge_page import KnowledgePage
 from gui.scan_page import ScanPage
 
 
@@ -100,6 +101,8 @@ class MainWindow(ctk.CTk):
             ("Intelligence", self.show_intelligence),
 
             ("Content Director", self.show_content_director),
+
+            ("Knowledge", self.show_knowledge),
 
             ("Videos", self.not_implemented),
 
@@ -239,6 +242,24 @@ class MainWindow(ctk.CTk):
         self.clear_page()
 
         self.current_page = ContentDirectorPage(
+            self.workspace
+        )
+
+        self.current_page.grid(
+            row=0,
+            column=0,
+            sticky="nsew",
+            padx=25,
+            pady=25
+        )
+
+    ##########################################################
+
+    def show_knowledge(self):
+
+        self.clear_page()
+
+        self.current_page = KnowledgePage(
             self.workspace
         )
 

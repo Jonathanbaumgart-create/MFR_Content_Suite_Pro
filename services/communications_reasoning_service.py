@@ -2,6 +2,7 @@ from datetime import datetime
 
 from core.app_context import context
 from services.communications_director import CommunicationsDirector
+from services.knowledge_service import KnowledgeService
 from services.logging_service import LoggingService
 
 
@@ -63,10 +64,13 @@ class CommunicationsReasoningService:
         )
     }
 
-    def __init__(self, database=None, director=None):
+    def __init__(self, database=None, director=None, knowledge_service=None):
 
         self.db = database or context.database
         self.director = director or CommunicationsDirector(
+            database=self.db
+        )
+        self.knowledge = knowledge_service or KnowledgeService(
             database=self.db
         )
 
@@ -111,7 +115,8 @@ class CommunicationsReasoningService:
                 for item in self._upcoming_opportunities(snapshot)
             ],
             "seasonal_context": snapshot.to_dict(),
-            "context_snapshot": snapshot.to_dict()
+            "context_snapshot": snapshot.to_dict(),
+            "department_knowledge": self.knowledge.snapshot()
         }
 
         logger.info(
@@ -276,6 +281,18 @@ class CommunicationsReasoningService:
     ):
 
         profile = self.director.OPPORTUNITIES[opportunity]
+        title = self.knowledge.label_for_opportunity(
+            opportunity,
+            profile["title"]
+        )
+        caption_strategy = self.knowledge.caption_strategy(
+            opportunity,
+            profile["caption_theme"]
+        )
+        call_to_action = self.knowledge.call_to_action(
+            opportunity,
+            profile["call_to_action"]
+        )
         scored = []
 
         for candidate in candidates:
@@ -315,20 +332,20 @@ class CommunicationsReasoningService:
 
         recommendation = {
             "opportunity_type": opportunity,
-            "title": profile["title"],
-            "summary": self._summary(profile, recommended_media),
-            "description": self._summary(profile, recommended_media),
+            "title": title,
+            "summary": self._summary(title, recommended_media),
+            "description": self._summary(title, recommended_media),
             "reasoning": reasoning,
             "priority": priority,
             "confidence": confidence,
             "recommended_media": recommended_media,
             "recommended_platforms": list(profile["platforms"]),
             "best_posting_time": profile["best_posting_time"],
-            "caption_strategy": profile["caption_theme"],
-            "caption_theme": profile["caption_theme"],
+            "caption_strategy": caption_strategy,
+            "caption_theme": caption_strategy,
             "engagement_prediction": self._engagement_prediction(confidence),
             "estimated_engagement": self._engagement_prediction(confidence),
-            "call_to_action": profile["call_to_action"],
+            "call_to_action": call_to_action,
             "hashtags": list(profile["hashtags"])
         }
 
@@ -431,7 +448,8 @@ class CommunicationsReasoningService:
         reasoning = [
             f"Best fit for {profile['caption_theme'].lower()} today.",
             "Uses Context Engine, stored Media Intelligence, library insights, and recommendation history.",
-            "No image analysis or external API calls are used."
+            "No image analysis or external API calls are used.",
+            self.knowledge.reasoning_context(opportunity)
         ]
 
         active = [
@@ -601,16 +619,16 @@ class CommunicationsReasoningService:
 
     ############################################################
 
-    def _summary(self, profile, media):
+    def _summary(self, title, media):
 
         if media:
             return (
-                f"Recommended communications package for {profile['title']} "
+                f"Recommended communications package for {title} "
                 f"using {len(media)} stored media item(s)."
             )
 
         return (
-            f"No strong media match is available yet for {profile['title']}; "
+            f"No strong media match is available yet for {title}; "
             "treat this as a content gap."
         )
 

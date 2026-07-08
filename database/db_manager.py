@@ -200,6 +200,50 @@ class DatabaseManager:
 
         """)
 
+        ########################################################
+        # Department Knowledge
+        ########################################################
+
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS department_profile(
+
+            key TEXT PRIMARY KEY,
+
+            value TEXT
+
+        )
+
+        """)
+
+        for table in (
+            "apparatus",
+            "programs",
+            "annual_events",
+            "locations",
+            "response_area",
+            "community_partners"
+        ):
+            cur.execute(f"""
+
+            CREATE TABLE IF NOT EXISTS {table}(
+
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+                name TEXT NOT NULL,
+
+                category TEXT,
+
+                description TEXT,
+
+                tags TEXT,
+
+                active INTEGER DEFAULT 1
+
+            )
+
+            """)
+
         self._ensure_ai_analysis_columns(cur)
         self._ensure_media_intelligence_columns(cur)
         self._ensure_indexes(cur)
@@ -1802,6 +1846,182 @@ class DatabaseManager:
 
     ############################################################
 
+    def department_profile(self):
+
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        SELECT
+
+            key,
+
+            value
+
+        FROM department_profile
+
+        ORDER BY key
+
+        """)
+
+        rows = cur.fetchall()
+
+        conn.close()
+
+        return {
+            key: value or ""
+            for key, value in rows
+        }
+
+    ############################################################
+
+    def save_department_profile_value(self, key, value):
+
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        INSERT OR REPLACE INTO department_profile(
+
+            key,
+
+            value
+
+        )
+
+        VALUES(?,?)
+
+        """,
+
+        (
+            key,
+            value
+        ))
+
+        conn.commit()
+
+        conn.close()
+
+    ############################################################
+
+    def knowledge_items(self, table):
+
+        table = self._knowledge_table(table)
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+
+        cur = conn.cursor()
+
+        cur.execute(f"""
+
+        SELECT *
+
+        FROM {table}
+
+        ORDER BY active DESC, name ASC
+
+        """)
+
+        rows = cur.fetchall()
+
+        conn.close()
+
+        return [
+            self._knowledge_item_from_row(row)
+            for row in rows
+        ]
+
+    ############################################################
+
+    def save_knowledge_item(self, table, item):
+
+        table = self._knowledge_table(table)
+        item_id = self._to_int(item.get("id"))
+        values = (
+            item.get("name", ""),
+            item.get("category", ""),
+            item.get("description", ""),
+            self._to_json(item.get("tags")),
+            1 if item.get("active", True) else 0
+        )
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        if item_id:
+            cur.execute(f"""
+
+            UPDATE {table}
+
+            SET
+                name=?,
+                category=?,
+                description=?,
+                tags=?,
+                active=?
+
+            WHERE id=?
+
+            """,
+
+            values + (item_id,))
+
+        else:
+            cur.execute(f"""
+
+            INSERT INTO {table}(
+
+                name,
+
+                category,
+
+                description,
+
+                tags,
+
+                active
+
+            )
+
+            VALUES(?,?,?,?,?)
+
+            """,
+
+            values)
+            item_id = cur.lastrowid
+
+        conn.commit()
+
+        conn.close()
+
+        return item_id
+
+    ############################################################
+
+    def delete_knowledge_item(self, table, item_id):
+
+        table = self._knowledge_table(table)
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        cur.execute(
+            f"DELETE FROM {table} WHERE id=?",
+            (
+                self._to_int(item_id),
+            )
+        )
+
+        conn.commit()
+
+        conn.close()
+
+    ############################################################
+
     def _intelligence_scalar_counts(self, field, filters):
 
         section_filters = dict(filters or {})
@@ -2084,6 +2304,19 @@ class DatabaseManager:
 
     ############################################################
 
+    def _knowledge_item_from_row(self, row):
+
+        return {
+            "id": row["id"],
+            "name": row["name"] or "",
+            "category": row["category"] or "",
+            "description": row["description"] or "",
+            "tags": self._from_json(row["tags"]),
+            "active": bool(row["active"])
+        }
+
+    ############################################################
+
     def _to_json(self, value):
 
         if value is None:
@@ -2120,6 +2353,24 @@ class DatabaseManager:
             return float(value)
         except Exception:
             return 0.0
+
+    ############################################################
+
+    def _knowledge_table(self, table):
+
+        allowed = {
+            "apparatus",
+            "programs",
+            "annual_events",
+            "locations",
+            "response_area",
+            "community_partners"
+        }
+
+        if table not in allowed:
+            raise ValueError("Unsupported knowledge table")
+
+        return table
 
     ############################################################
 
@@ -2201,7 +2452,13 @@ class DatabaseManager:
             "CREATE INDEX IF NOT EXISTS idx_intelligence_score ON media_intelligence(intelligence_score)",
             "CREATE INDEX IF NOT EXISTS idx_recommendation_history_media ON recommendation_history(media_id)",
             "CREATE INDEX IF NOT EXISTS idx_recommendation_history_date ON recommendation_history(recommendation_date)",
-            "CREATE INDEX IF NOT EXISTS idx_recommendation_history_opportunity ON recommendation_history(opportunity)"
+            "CREATE INDEX IF NOT EXISTS idx_recommendation_history_opportunity ON recommendation_history(opportunity)",
+            "CREATE INDEX IF NOT EXISTS idx_apparatus_name ON apparatus(name)",
+            "CREATE INDEX IF NOT EXISTS idx_programs_name ON programs(name)",
+            "CREATE INDEX IF NOT EXISTS idx_annual_events_name ON annual_events(name)",
+            "CREATE INDEX IF NOT EXISTS idx_locations_name ON locations(name)",
+            "CREATE INDEX IF NOT EXISTS idx_response_area_name ON response_area(name)",
+            "CREATE INDEX IF NOT EXISTS idx_community_partners_name ON community_partners(name)"
         )
 
         for statement in indexes:
