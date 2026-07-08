@@ -1508,6 +1508,67 @@ class DatabaseManager:
 
     ############################################################
 
+    def content_director_candidates(self, limit=500):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        SELECT
+
+            media.id AS result_media_id,
+
+            media.filename,
+
+            media.path,
+
+            media.media_type,
+
+            media_intelligence.*
+
+        FROM media
+
+        JOIN media_intelligence
+        ON media_intelligence.media_id = media.id
+
+        ORDER BY
+            media_intelligence.intelligence_score DESC,
+            media.filename ASC
+
+        LIMIT ?
+
+        """,
+
+        (
+            self._to_int(limit),
+        ))
+
+        rows = cur.fetchall()
+
+        conn.close()
+
+        candidates = []
+
+        for row in rows:
+
+            intelligence = self._intelligence_from_row(row)
+            intelligence.update(
+                {
+                    "media_id": row["result_media_id"],
+                    "filename": row["filename"],
+                    "path": row["path"],
+                    "media_type": row["media_type"]
+                }
+            )
+            candidates.append(intelligence)
+
+        return candidates
+
+    ############################################################
+
     def _intelligence_scalar_counts(self, field, filters):
 
         section_filters = dict(filters or {})

@@ -1,6 +1,7 @@
 import customtkinter as ctk
 
 from gui.ai_dashboard_page import AIDashboardPage
+from gui.content_director_page import ContentDirectorPage
 from gui.dashboard_page import DashboardPage
 from gui.gallery_page import GalleryPage
 from gui.intelligence_page import IntelligenceExplorerPage
@@ -97,6 +98,8 @@ class MainWindow(ctk.CTk):
             ("Gallery", self.show_gallery),
 
             ("Intelligence", self.show_intelligence),
+
+            ("Content Director", self.show_content_director),
 
             ("Videos", self.not_implemented),
 
@@ -218,6 +221,24 @@ class MainWindow(ctk.CTk):
         self.clear_page()
 
         self.current_page = IntelligenceExplorerPage(
+            self.workspace
+        )
+
+        self.current_page.grid(
+            row=0,
+            column=0,
+            sticky="nsew",
+            padx=25,
+            pady=25
+        )
+
+    ##########################################################
+
+    def show_content_director(self):
+
+        self.clear_page()
+
+        self.current_page = ContentDirectorPage(
             self.workspace
         )
 

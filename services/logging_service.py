@@ -38,6 +38,7 @@ class LoggingService:
             "database",
             "gallery",
             "intelligence",
+            "content",
             "application"
         ):
 
