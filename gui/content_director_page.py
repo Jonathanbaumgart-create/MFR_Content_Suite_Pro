@@ -3,6 +3,7 @@ import customtkinter as ctk
 from gui.photo_card import PhotoCard
 from gui.photo_viewer import PhotoViewer
 from services.communications_director import CommunicationsDirector
+from services.communications_reasoning_service import CommunicationsReasoningService
 from services.logging_service import LoggingService
 from services.thumbnail_service import ThumbnailService
 
@@ -17,6 +18,9 @@ class ContentDirectorPage(ctk.CTkFrame):
         super().__init__(parent)
 
         self.director = CommunicationsDirector()
+        self.reasoning_service = CommunicationsReasoningService(
+            director=self.director
+        )
         self.thumbnail_service = ThumbnailService()
         self.current_results = []
         self.brief = None
@@ -179,7 +183,7 @@ class ContentDirectorPage(ctk.CTkFrame):
     def refresh_brief(self):
 
         try:
-            self.brief = self.director.todays_brief()
+            self.brief = self.reasoning_service.todays_communications_brief()
 
         except Exception as ex:
             logger.error(
@@ -215,7 +219,10 @@ class ContentDirectorPage(ctk.CTkFrame):
 
         title = ctk.CTkLabel(
             self.brief_frame,
-            text="Today's Brief",
+            text=self.brief.get(
+                "title",
+                "Today's Communications Brief"
+            ),
             font=("Segoe UI", 18, "bold")
         )
 
@@ -251,14 +258,20 @@ class ContentDirectorPage(ctk.CTkFrame):
             pady=(0, 12)
         )
 
-        top = [
-            opportunity["title"]
-            for opportunity in self.brief["top_opportunities"]
-        ]
+        top_recommendation = self.brief.get(
+            "top_recommendation"
+        )
+        top_text = (
+            f"{top_recommendation['title']} - "
+            f"{top_recommendation['priority']} Priority - "
+            f"{top_recommendation['confidence']}% Confidence"
+            if top_recommendation
+            else "No recommendation available"
+        )
 
         top_label = ctk.CTkLabel(
             self.brief_frame,
-            text="Top Opportunities: " + ", ".join(top),
+            text="Top Recommendation: " + top_text,
             justify="left"
         )
 
@@ -269,6 +282,28 @@ class ContentDirectorPage(ctk.CTkFrame):
             padx=15,
             pady=(0, 12)
         )
+
+        if top_recommendation:
+            reasoning = " | ".join(
+                top_recommendation.get(
+                    "reasoning",
+                    []
+                )[:3]
+            )
+            reasoning_label = ctk.CTkLabel(
+                self.brief_frame,
+                text="Reasoning: " + reasoning,
+                wraplength=1100,
+                justify="left"
+            )
+
+            reasoning_label.grid(
+                row=3,
+                column=0,
+                sticky="w",
+                padx=15,
+                pady=(0, 12)
+            )
 
         context = self.brief.get(
             "context_snapshot",
@@ -299,7 +334,7 @@ class ContentDirectorPage(ctk.CTkFrame):
         )
 
         context_label.grid(
-            row=3,
+            row=4,
             column=0,
             sticky="w",
             padx=15,
@@ -355,15 +390,15 @@ class ContentDirectorPage(ctk.CTkFrame):
             if opportunity_types:
                 result = {
                     "opportunity_types": opportunity_types,
-                    "opportunities": [
-                        self.director.generate_opportunity(item)
-                        for item in opportunity_types
-                    ]
+                    "opportunities": self.reasoning_service.generate_recommendations(
+                        opportunity_keys=opportunity_types,
+                        limit=5
+                    )
                 }
             else:
                 result = {
                     "opportunity_types": self.director.interpret_prompt(prompt),
-                    "opportunities": self.director.generate_opportunities(
+                    "opportunities": self.reasoning_service.generate_recommendations(
                         prompt,
                         limit=5
                     )

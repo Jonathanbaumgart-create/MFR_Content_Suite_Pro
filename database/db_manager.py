@@ -174,6 +174,32 @@ class DatabaseManager:
 
         """)
 
+        ########################################################
+        # Recommendation History
+        ########################################################
+
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS recommendation_history(
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            media_id INTEGER,
+
+            recommendation_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+            reason TEXT,
+
+            opportunity TEXT,
+
+            score REAL,
+
+            platform TEXT
+
+        )
+
+        """)
+
         self._ensure_ai_analysis_columns(cur)
         self._ensure_media_intelligence_columns(cur)
         self._ensure_indexes(cur)
@@ -1662,6 +1688,120 @@ class DatabaseManager:
 
     ############################################################
 
+    def save_recommendation_history(self, recommendation):
+
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        INSERT INTO recommendation_history(
+
+            media_id,
+
+            reason,
+
+            opportunity,
+
+            score,
+
+            platform
+
+        )
+
+        VALUES(?,?,?,?,?)
+
+        """,
+
+        (
+            self._to_int(recommendation.get("media_id")),
+            recommendation.get("reason", ""),
+            recommendation.get("opportunity", ""),
+            self._to_float(recommendation.get("score")),
+            recommendation.get("platform", "")
+        ))
+
+        conn.commit()
+
+        conn.close()
+
+    ############################################################
+
+    def recent_recommended_media_ids(self, days=30, limit=500):
+
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        SELECT DISTINCT media_id
+
+        FROM recommendation_history
+
+        WHERE media_id IS NOT NULL
+        AND recommendation_date >= datetime('now', ?)
+
+        ORDER BY recommendation_date DESC
+
+        LIMIT ?
+
+        """,
+
+        (
+            f"-{self._to_int(days)} days",
+            self._to_int(limit)
+        ))
+
+        rows = cur.fetchall()
+
+        conn.close()
+
+        return {
+            row[0]
+            for row in rows
+            if row[0]
+        }
+
+    ############################################################
+
+    def recommendation_counts(self, days=90):
+
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        SELECT
+
+            opportunity,
+
+            COUNT(*)
+
+        FROM recommendation_history
+
+        WHERE recommendation_date >= datetime('now', ?)
+
+        GROUP BY opportunity
+
+        ORDER BY COUNT(*) DESC, opportunity
+
+        """,
+
+        (
+            f"-{self._to_int(days)} days",
+        ))
+
+        rows = cur.fetchall()
+
+        conn.close()
+
+        return rows
+
+    ############################################################
+
     def _intelligence_scalar_counts(self, field, filters):
 
         section_filters = dict(filters or {})
@@ -2058,7 +2198,10 @@ class DatabaseManager:
             "CREATE INDEX IF NOT EXISTS idx_intelligence_scene ON media_intelligence(normalized_scene)",
             "CREATE INDEX IF NOT EXISTS idx_intelligence_incident ON media_intelligence(incident_type)",
             "CREATE INDEX IF NOT EXISTS idx_intelligence_activity ON media_intelligence(primary_activity)",
-            "CREATE INDEX IF NOT EXISTS idx_intelligence_score ON media_intelligence(intelligence_score)"
+            "CREATE INDEX IF NOT EXISTS idx_intelligence_score ON media_intelligence(intelligence_score)",
+            "CREATE INDEX IF NOT EXISTS idx_recommendation_history_media ON recommendation_history(media_id)",
+            "CREATE INDEX IF NOT EXISTS idx_recommendation_history_date ON recommendation_history(recommendation_date)",
+            "CREATE INDEX IF NOT EXISTS idx_recommendation_history_opportunity ON recommendation_history(opportunity)"
         )
 
         for statement in indexes:
