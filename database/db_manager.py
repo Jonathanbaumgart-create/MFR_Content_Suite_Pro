@@ -798,6 +798,81 @@ class DatabaseManager:
 
     ############################################################
 
+    def media_intelligence_count(self):
+
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        cur.execute("SELECT COUNT(*) FROM media_intelligence")
+
+        count = cur.fetchone()[0]
+
+        conn.close()
+
+        return count
+
+    ############################################################
+
+    def media_needing_analysis_count(self):
+
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        SELECT COUNT(*)
+
+        FROM media
+
+        LEFT JOIN ai_analysis
+        ON ai_analysis.media_id = media.id
+
+        WHERE media.media_type='image'
+        AND ai_analysis.media_id IS NULL
+
+        """)
+
+        count = cur.fetchone()[0]
+
+        conn.close()
+
+        return count
+
+    ############################################################
+
+    def media_needing_intelligence_count(self):
+
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        SELECT COUNT(*)
+
+        FROM ai_analysis
+
+        LEFT JOIN media_intelligence
+        ON media_intelligence.media_id = ai_analysis.media_id
+
+        WHERE media_intelligence.media_id IS NULL
+        AND (
+            ai_analysis.failure_reason IS NULL OR
+            ai_analysis.failure_reason=''
+        )
+
+        """)
+
+        count = cur.fetchone()[0]
+
+        conn.close()
+
+        return count
+
+    ############################################################
+
     def ai_metrics(self):
 
         conn = self.connection()
@@ -1527,12 +1602,25 @@ class DatabaseManager:
 
             media.media_type,
 
-            media_intelligence.*
+            media_intelligence.*,
+
+            ai_analysis.community_score,
+
+            ai_analysis.recruitment_score,
+
+            ai_analysis.education_score,
+
+            ai_analysis.technical_score,
+
+            ai_analysis.overall_score
 
         FROM media
 
         JOIN media_intelligence
         ON media_intelligence.media_id = media.id
+
+        LEFT JOIN ai_analysis
+        ON ai_analysis.media_id = media.id
 
         ORDER BY
             media_intelligence.intelligence_score DESC,
@@ -1560,7 +1648,12 @@ class DatabaseManager:
                     "media_id": row["result_media_id"],
                     "filename": row["filename"],
                     "path": row["path"],
-                    "media_type": row["media_type"]
+                    "media_type": row["media_type"],
+                    "community_score": row["community_score"] or 0,
+                    "recruitment_score": row["recruitment_score"] or 0,
+                    "education_score": row["education_score"] or 0,
+                    "technical_score": row["technical_score"] or 0,
+                    "overall_score": row["overall_score"] or 0
                 }
             )
             candidates.append(intelligence)
