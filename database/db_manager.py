@@ -317,6 +317,196 @@ class DatabaseManager:
         """)
 
         ########################################################
+        # Communications Memory
+        ########################################################
+
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS platforms(
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            name TEXT UNIQUE,
+
+            active INTEGER DEFAULT 1
+
+        )
+
+        """)
+
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS campaigns(
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            name TEXT UNIQUE,
+
+            description TEXT,
+
+            season TEXT,
+
+            active INTEGER DEFAULT 1,
+
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+
+        )
+
+        """)
+
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS social_posts(
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            platform TEXT,
+
+            post_date TEXT,
+
+            post_time TEXT,
+
+            headline TEXT,
+
+            caption TEXT,
+
+            cta TEXT,
+
+            hashtags TEXT,
+
+            emojis TEXT,
+
+            media_ids TEXT,
+
+            campaign TEXT,
+
+            writing_style TEXT,
+
+            opportunity_type TEXT,
+
+            season TEXT,
+
+            context TEXT,
+
+            source TEXT,
+
+            imported INTEGER DEFAULT 0,
+
+            generated INTEGER DEFAULT 0,
+
+            manually_created INTEGER DEFAULT 0,
+
+            caption_hash TEXT UNIQUE,
+
+            imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+
+        )
+
+        """)
+
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS media_usage(
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            media_id INTEGER,
+
+            post_id INTEGER,
+
+            platform TEXT,
+
+            used_at TEXT,
+
+            campaign TEXT
+
+        )
+
+        """)
+
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS writing_patterns(
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            post_id INTEGER,
+
+            opening_hook TEXT,
+
+            caption_length INTEGER DEFAULT 0,
+
+            emoji_count INTEGER DEFAULT 0,
+
+            hashtag_count INTEGER DEFAULT 0,
+
+            writing_tone TEXT,
+
+            cta TEXT,
+
+            question_asked INTEGER DEFAULT 0,
+
+            storytelling INTEGER DEFAULT 0,
+
+            educational INTEGER DEFAULT 0,
+
+            recognition INTEGER DEFAULT 0,
+
+            recruitment INTEGER DEFAULT 0,
+
+            incident_recap INTEGER DEFAULT 0,
+
+            community_engagement INTEGER DEFAULT 0,
+
+            safety_message INTEGER DEFAULT 0,
+
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+
+        )
+
+        """)
+
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS hashtags(
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            tag TEXT UNIQUE,
+
+            use_count INTEGER DEFAULT 0,
+
+            last_used TEXT
+
+        )
+
+        """)
+
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS post_metrics(
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            post_id INTEGER,
+
+            likes INTEGER DEFAULT 0,
+
+            comments INTEGER DEFAULT 0,
+
+            shares INTEGER DEFAULT 0,
+
+            reach INTEGER DEFAULT 0,
+
+            engagement_rate REAL DEFAULT 0,
+
+            recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+
+        )
+
+        """)
+
+        ########################################################
         # Content Templates
         ########################################################
 
@@ -2457,6 +2647,729 @@ class DatabaseManager:
 
     ############################################################
 
+    def save_social_post(self, post):
+
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        INSERT OR IGNORE INTO social_posts(
+
+            platform,
+
+            post_date,
+
+            post_time,
+
+            headline,
+
+            caption,
+
+            cta,
+
+            hashtags,
+
+            emojis,
+
+            media_ids,
+
+            campaign,
+
+            writing_style,
+
+            opportunity_type,
+
+            season,
+
+            context,
+
+            source,
+
+            imported,
+
+            generated,
+
+            manually_created,
+
+            caption_hash
+
+        )
+
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+
+        """,
+
+        (
+            post.get("platform", ""),
+            post.get("post_date", ""),
+            post.get("post_time", ""),
+            post.get("headline", ""),
+            post.get("caption", ""),
+            post.get("cta", ""),
+            self._to_json(post.get("hashtags", [])),
+            self._to_json(post.get("emojis", [])),
+            self._to_json(post.get("media_ids", [])),
+            post.get("campaign", ""),
+            post.get("writing_style", ""),
+            post.get("opportunity_type", ""),
+            post.get("season", ""),
+            post.get("context", ""),
+            post.get("source", ""),
+            self._to_int(post.get("imported")),
+            self._to_int(post.get("generated")),
+            self._to_int(post.get("manually_created")),
+            post.get("caption_hash", "")
+        ))
+
+        post_id = cur.lastrowid if cur.rowcount > 0 else None
+
+        conn.commit()
+
+        conn.close()
+
+        return post_id
+
+    ############################################################
+
+    def social_post_exists(self, caption_hash):
+
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        cur.execute(
+            "SELECT id FROM social_posts WHERE caption_hash=?",
+            (
+                caption_hash,
+            )
+        )
+
+        row = cur.fetchone()
+
+        conn.close()
+
+        return row[0] if row else None
+
+    ############################################################
+
+    def social_caption_exists(self, caption):
+
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        cur.execute(
+            "SELECT id FROM social_posts WHERE caption=? LIMIT 1",
+            (
+                caption,
+            )
+        )
+
+        row = cur.fetchone()
+
+        conn.close()
+
+        return row[0] if row else None
+
+    ############################################################
+
+    def save_campaign(self, campaign):
+
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        INSERT OR IGNORE INTO campaigns(
+
+            name,
+
+            description,
+
+            season,
+
+            active
+
+        )
+
+        VALUES(?,?,?,?)
+
+        """,
+
+        (
+            campaign.get("name", ""),
+            campaign.get("description", ""),
+            campaign.get("season", ""),
+            1 if campaign.get("active", True) else 0
+        ))
+
+        campaign_id = cur.lastrowid
+
+        conn.commit()
+
+        conn.close()
+
+        return campaign_id
+
+    ############################################################
+
+    def save_platform(self, platform):
+
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        INSERT OR IGNORE INTO platforms(
+
+            name,
+
+            active
+
+        )
+
+        VALUES(?,1)
+
+        """,
+
+        (
+            platform,
+        ))
+
+        platform_id = cur.lastrowid
+
+        conn.commit()
+
+        conn.close()
+
+        return platform_id
+
+    ############################################################
+
+    def save_media_usage(self, usage):
+
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        INSERT INTO media_usage(
+
+            media_id,
+
+            post_id,
+
+            platform,
+
+            used_at,
+
+            campaign
+
+        )
+
+        VALUES(?,?,?,?,?)
+
+        """,
+
+        (
+            self._to_int(usage.get("media_id")),
+            self._to_int(usage.get("post_id")),
+            usage.get("platform", ""),
+            usage.get("used_at", ""),
+            usage.get("campaign", "")
+        ))
+
+        usage_id = cur.lastrowid
+
+        conn.commit()
+
+        conn.close()
+
+        return usage_id
+
+    ############################################################
+
+    def save_writing_pattern(self, pattern):
+
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        INSERT INTO writing_patterns(
+
+            post_id,
+
+            opening_hook,
+
+            caption_length,
+
+            emoji_count,
+
+            hashtag_count,
+
+            writing_tone,
+
+            cta,
+
+            question_asked,
+
+            storytelling,
+
+            educational,
+
+            recognition,
+
+            recruitment,
+
+            incident_recap,
+
+            community_engagement,
+
+            safety_message
+
+        )
+
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+
+        """,
+
+        (
+            self._to_int(pattern.get("post_id")),
+            pattern.get("opening_hook", ""),
+            self._to_int(pattern.get("caption_length")),
+            self._to_int(pattern.get("emoji_count")),
+            self._to_int(pattern.get("hashtag_count")),
+            pattern.get("writing_tone", ""),
+            pattern.get("cta", ""),
+            self._to_int(pattern.get("question_asked")),
+            self._to_int(pattern.get("storytelling")),
+            self._to_int(pattern.get("educational")),
+            self._to_int(pattern.get("recognition")),
+            self._to_int(pattern.get("recruitment")),
+            self._to_int(pattern.get("incident_recap")),
+            self._to_int(pattern.get("community_engagement")),
+            self._to_int(pattern.get("safety_message"))
+        ))
+
+        pattern_id = cur.lastrowid
+
+        conn.commit()
+
+        conn.close()
+
+        return pattern_id
+
+    ############################################################
+
+    def save_hashtag_use(self, tag, used_at=""):
+
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        INSERT INTO hashtags(
+
+            tag,
+
+            use_count,
+
+            last_used
+
+        )
+
+        VALUES(?,1,?)
+
+        ON CONFLICT(tag) DO UPDATE SET
+            use_count=use_count+1,
+            last_used=excluded.last_used
+
+        """,
+
+        (
+            tag,
+            used_at
+        ))
+
+        conn.commit()
+
+        conn.close()
+
+    ############################################################
+
+    def social_posts(self, limit=100, search_text=""):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+
+        cur = conn.cursor()
+
+        sql = """
+
+        SELECT *
+
+        FROM social_posts
+
+        """
+        params = []
+
+        if search_text:
+            sql += """
+
+            WHERE caption LIKE ?
+            OR headline LIKE ?
+            OR campaign LIKE ?
+
+            """
+            pattern = f"%{search_text}%"
+            params.extend(
+                (
+                    pattern,
+                    pattern,
+                    pattern
+                )
+            )
+
+        sql += """
+
+        ORDER BY post_date DESC, post_time DESC, id DESC
+
+        LIMIT ?
+
+        """
+        params.append(
+            self._to_int(limit)
+        )
+
+        cur.execute(
+            sql,
+            tuple(params)
+        )
+
+        rows = cur.fetchall()
+
+        conn.close()
+
+        return [
+            self._social_post_from_row(row)
+            for row in rows
+        ]
+
+    ############################################################
+
+    def social_post_count(self):
+
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        cur.execute("SELECT COUNT(*) FROM social_posts")
+
+        count = cur.fetchone()[0]
+
+        conn.close()
+
+        return count
+
+    ############################################################
+
+    def communication_memory_summary(self):
+
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        cur.execute("SELECT COUNT(*) FROM social_posts")
+        total_posts = cur.fetchone()[0]
+
+        cur.execute("SELECT COUNT(*) FROM campaigns")
+        campaigns = cur.fetchone()[0]
+
+        cur.execute("SELECT COUNT(*) FROM platforms")
+        platforms = cur.fetchone()[0]
+
+        cur.execute("SELECT COUNT(*) FROM media_usage")
+        media_usage = cur.fetchone()[0]
+
+        cur.execute("""
+
+        SELECT tag, use_count
+
+        FROM hashtags
+
+        ORDER BY use_count DESC, tag
+
+        LIMIT 10
+
+        """)
+        top_hashtags = cur.fetchall()
+
+        cur.execute("""
+
+        SELECT writing_style, COUNT(*)
+
+        FROM social_posts
+
+        WHERE writing_style IS NOT NULL
+        AND writing_style != ''
+
+        GROUP BY writing_style
+
+        ORDER BY COUNT(*) DESC, writing_style
+
+        LIMIT 10
+
+        """)
+        writing_styles = cur.fetchall()
+
+        cur.execute("""
+
+        SELECT platform, COUNT(*)
+
+        FROM social_posts
+
+        WHERE platform IS NOT NULL
+        AND platform != ''
+
+        GROUP BY platform
+
+        ORDER BY COUNT(*) DESC, platform
+
+        """)
+        platform_counts = cur.fetchall()
+
+        cur.execute("""
+
+        SELECT campaign, COUNT(*)
+
+        FROM social_posts
+
+        WHERE campaign IS NOT NULL
+        AND campaign != ''
+
+        GROUP BY campaign
+
+        ORDER BY COUNT(*) DESC, campaign
+
+        LIMIT 10
+
+        """)
+        recent_campaigns = cur.fetchall()
+
+        conn.close()
+
+        return {
+            "total_posts": total_posts,
+            "campaigns": campaigns,
+            "platforms": platforms,
+            "media_usage": media_usage,
+            "top_hashtags": top_hashtags,
+            "writing_styles": writing_styles,
+            "platform_counts": platform_counts,
+            "recent_campaigns": recent_campaigns
+        }
+
+    ############################################################
+
+    def writing_pattern_statistics(self):
+
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        SELECT
+
+            AVG(caption_length),
+            AVG(hashtag_count),
+            AVG(emoji_count),
+            AVG(CASE WHEN question_asked THEN 1.0 ELSE 0 END),
+            AVG(CASE WHEN storytelling THEN 1.0 ELSE 0 END),
+            AVG(CASE WHEN educational THEN 1.0 ELSE 0 END),
+            AVG(CASE WHEN recognition THEN 1.0 ELSE 0 END),
+            AVG(CASE WHEN recruitment THEN 1.0 ELSE 0 END),
+            AVG(CASE WHEN incident_recap THEN 1.0 ELSE 0 END),
+            AVG(CASE WHEN community_engagement THEN 1.0 ELSE 0 END),
+            AVG(CASE WHEN safety_message THEN 1.0 ELSE 0 END)
+
+        FROM writing_patterns
+
+        """)
+
+        row = cur.fetchone()
+
+        cur.execute("""
+
+        SELECT opening_hook, COUNT(*)
+
+        FROM writing_patterns
+
+        WHERE opening_hook IS NOT NULL
+        AND opening_hook != ''
+
+        GROUP BY opening_hook
+
+        ORDER BY COUNT(*) DESC, opening_hook
+
+        LIMIT 5
+
+        """)
+        openings = cur.fetchall()
+
+        cur.execute("""
+
+        SELECT cta, COUNT(*)
+
+        FROM writing_patterns
+
+        WHERE cta IS NOT NULL
+        AND cta != ''
+
+        GROUP BY cta
+
+        ORDER BY COUNT(*) DESC, cta
+
+        LIMIT 5
+
+        """)
+        ctas = cur.fetchall()
+
+        conn.close()
+
+        row = row or (0,) * 11
+
+        return {
+            "average_caption_length": row[0] or 0,
+            "average_hashtags": row[1] or 0,
+            "average_emojis": row[2] or 0,
+            "question_rate": row[3] or 0,
+            "storytelling_rate": row[4] or 0,
+            "educational_rate": row[5] or 0,
+            "recognition_rate": row[6] or 0,
+            "recruitment_rate": row[7] or 0,
+            "incident_recap_rate": row[8] or 0,
+            "community_engagement_rate": row[9] or 0,
+            "safety_message_rate": row[10] or 0,
+            "common_openings": openings,
+            "common_ctas": ctas
+        }
+
+    ############################################################
+
+    def media_usage_summary(self, media_id):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        SELECT *
+
+        FROM media_usage
+
+        WHERE media_id=?
+
+        ORDER BY used_at DESC
+
+        """,
+
+        (
+            self._to_int(media_id),
+        ))
+
+        rows = cur.fetchall()
+
+        conn.close()
+
+        return [
+            {
+                "post_id": row["post_id"],
+                "platform": row["platform"] or "",
+                "used_at": row["used_at"] or "",
+                "campaign": row["campaign"] or ""
+            }
+            for row in rows
+        ]
+
+    ############################################################
+
+    def recently_used_social_media_ids(self, days=90):
+
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        SELECT DISTINCT media_id
+
+        FROM media_usage
+
+        WHERE media_id IS NOT NULL
+        AND used_at >= datetime('now', ?)
+
+        """,
+
+        (
+            f"-{self._to_int(days)} days",
+        ))
+
+        rows = cur.fetchall()
+
+        conn.close()
+
+        return {
+            row[0]
+            for row in rows
+            if row[0]
+        }
+
+    ############################################################
+
+    def campaign_names(self, limit=20):
+
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        SELECT name
+
+        FROM campaigns
+
+        ORDER BY name
+
+        LIMIT ?
+
+        """,
+
+        (
+            self._to_int(limit),
+        ))
+
+        rows = cur.fetchall()
+
+        conn.close()
+
+        return [
+            row[0]
+            for row in rows
+        ]
+
+    ############################################################
+
     def content_templates(self, writing_style=None, platform=None):
 
         conn = self.connection()
@@ -2905,6 +3818,34 @@ class DatabaseManager:
 
     ############################################################
 
+    def _social_post_from_row(self, row):
+
+        return {
+            "id": row["id"],
+            "platform": row["platform"] or "",
+            "post_date": row["post_date"] or "",
+            "post_time": row["post_time"] or "",
+            "headline": row["headline"] or "",
+            "caption": row["caption"] or "",
+            "cta": row["cta"] or "",
+            "hashtags": self._from_json(row["hashtags"]),
+            "emojis": self._from_json(row["emojis"]),
+            "media_ids": self._from_json(row["media_ids"]),
+            "campaign": row["campaign"] or "",
+            "writing_style": row["writing_style"] or "",
+            "opportunity_type": row["opportunity_type"] or "",
+            "season": row["season"] or "",
+            "context": row["context"] or "",
+            "source": row["source"] or "",
+            "imported": bool(row["imported"]),
+            "generated": bool(row["generated"]),
+            "manually_created": bool(row["manually_created"]),
+            "caption_hash": row["caption_hash"] or "",
+            "imported_at": row["imported_at"] or ""
+        }
+
+    ############################################################
+
     def _to_json(self, value):
 
         if value is None:
@@ -3099,7 +4040,18 @@ class DatabaseManager:
             "CREATE INDEX IF NOT EXISTS idx_knowledge_documents_sha ON knowledge_documents(sha256)",
             "CREATE INDEX IF NOT EXISTS idx_content_templates_style ON content_templates(writing_style)",
             "CREATE INDEX IF NOT EXISTS idx_content_templates_platform ON content_templates(platform)",
-            "CREATE INDEX IF NOT EXISTS idx_content_templates_active ON content_templates(active)"
+            "CREATE INDEX IF NOT EXISTS idx_content_templates_active ON content_templates(active)",
+            "CREATE INDEX IF NOT EXISTS idx_social_posts_platform ON social_posts(platform)",
+            "CREATE INDEX IF NOT EXISTS idx_social_posts_date ON social_posts(post_date)",
+            "CREATE INDEX IF NOT EXISTS idx_social_posts_campaign ON social_posts(campaign)",
+            "CREATE INDEX IF NOT EXISTS idx_social_posts_caption_hash ON social_posts(caption_hash)",
+            "CREATE INDEX IF NOT EXISTS idx_social_posts_opportunity ON social_posts(opportunity_type)",
+            "CREATE INDEX IF NOT EXISTS idx_media_usage_media ON media_usage(media_id)",
+            "CREATE INDEX IF NOT EXISTS idx_media_usage_post ON media_usage(post_id)",
+            "CREATE INDEX IF NOT EXISTS idx_media_usage_used_at ON media_usage(used_at)",
+            "CREATE INDEX IF NOT EXISTS idx_writing_patterns_post ON writing_patterns(post_id)",
+            "CREATE INDEX IF NOT EXISTS idx_hashtags_tag ON hashtags(tag)",
+            "CREATE INDEX IF NOT EXISTS idx_hashtags_use_count ON hashtags(use_count)"
         )
 
         for statement in indexes:

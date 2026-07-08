@@ -2,6 +2,7 @@ import customtkinter as ctk
 
 from core.app_context import context
 from gui.ai_dashboard_page import AIDashboardPage
+from gui.communications_memory_page import CommunicationsMemoryPage
 from gui.content_director_page import ContentDirectorPage
 from gui.dashboard_page import DashboardPage
 from gui.gallery_page import GalleryPage
@@ -104,6 +105,8 @@ class MainWindow(ctk.CTk):
             ("Intelligence", self.show_intelligence),
 
             ("Content Director", self.show_content_director),
+
+            ("Comm Memory", self.show_communications_memory),
 
             ("Knowledge", self.show_knowledge),
 
@@ -275,6 +278,24 @@ class MainWindow(ctk.CTk):
         self.clear_page()
 
         self.current_page = KnowledgePage(
+            self.workspace
+        )
+
+        self.current_page.grid(
+            row=0,
+            column=0,
+            sticky="nsew",
+            padx=25,
+            pady=25
+        )
+
+    ##########################################################
+
+    def show_communications_memory(self):
+
+        self.clear_page()
+
+        self.current_page = CommunicationsMemoryPage(
             self.workspace
         )
 

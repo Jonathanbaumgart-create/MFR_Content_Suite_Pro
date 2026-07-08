@@ -1,5 +1,6 @@
 from core.app_context import context
 from services.context_engine import ContextEngine
+from services.communications_memory_service import CommunicationsMemoryService
 from services.knowledge_service import KnowledgeService
 from services.logging_service import LoggingService
 from services.writing_service import WritingService
@@ -107,7 +108,8 @@ class ContentGenerationService:
         database=None,
         knowledge_service=None,
         context_engine=None,
-        writing_service=None
+        writing_service=None,
+        memory_service=None
     ):
 
         self.db = database or context.database
@@ -116,6 +118,9 @@ class ContentGenerationService:
         )
         self.context_engine = context_engine or ContextEngine()
         self.writing = writing_service or WritingService()
+        self.memory = memory_service or CommunicationsMemoryService(
+            database=self.db
+        )
         self.ensure_default_templates()
 
     ############################################################
@@ -141,6 +146,7 @@ class ContentGenerationService:
             self.WRITING_STYLES["community"]
         )
         knowledge = self.knowledge.snapshot()
+        writing_memory = self.memory.writing_memory()
         media = self._media_context(
             recommendation.get("recommended_media", [])
         )
@@ -195,6 +201,11 @@ class ContentGenerationService:
             context_snapshot,
             writing_style
         )
+        reasoning.extend(
+            self._memory_reasoning(
+                writing_memory
+            )
+        )
 
         package = {
             "headline": headline,
@@ -244,6 +255,7 @@ class ContentGenerationService:
                 "recommendation": recommendation,
                 "media_intelligence": media,
                 "department_knowledge": knowledge,
+                "communications_memory": writing_memory,
                 "context": context_snapshot,
                 "opportunity_type": opportunity_type,
                 "platforms": [
@@ -631,6 +643,40 @@ class ContentGenerationService:
             ", ".join(self._format_label(value) for value in values) +
             "."
         )
+
+    ############################################################
+
+    def _memory_reasoning(self, writing_memory):
+
+        if not writing_memory:
+            return []
+
+        reasoning = []
+
+        if writing_memory.get("common_openings"):
+            reasoning.append(
+                (
+                    "Communications Memory considered common opening-hook "
+                    "patterns without copying previous posts."
+                )
+            )
+
+        if writing_memory.get("common_ctas"):
+            reasoning.append(
+                "Communications Memory considered historical CTA style."
+            )
+
+        if writing_memory.get("top_hashtags"):
+            reasoning.append(
+                "Communications Memory considered historically used hashtags."
+            )
+
+        if writing_memory.get("campaigns"):
+            reasoning.append(
+                "Communications Memory considered known campaign history."
+            )
+
+        return reasoning
 
     ############################################################
 

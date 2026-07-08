@@ -2,6 +2,7 @@ from datetime import datetime
 
 from core.app_context import context
 from services.communications_director import CommunicationsDirector
+from services.communications_memory_service import CommunicationsMemoryService
 from services.knowledge_service import KnowledgeService
 from services.logging_service import LoggingService
 from services.recommendation_learning_service import RecommendationLearningService
@@ -70,7 +71,8 @@ class CommunicationsReasoningService:
         database=None,
         director=None,
         knowledge_service=None,
-        learning_service=None
+        learning_service=None,
+        memory_service=None
     ):
 
         self.db = database or context.database
@@ -81,6 +83,9 @@ class CommunicationsReasoningService:
             database=self.db
         )
         self.learning = learning_service or RecommendationLearningService(
+            database=self.db
+        )
+        self.memory = memory_service or CommunicationsMemoryService(
             database=self.db
         )
 
@@ -182,6 +187,7 @@ class CommunicationsReasoningService:
 
         candidates = self.db.content_director_candidates(limit=1000)
         recent_media_ids = self.db.recent_recommended_media_ids(days=30)
+        recent_social_media_ids = self.memory.recent_social_media_ids(days=90)
         recommendations = []
 
         for opportunity in opportunity_keys:
@@ -189,6 +195,7 @@ class CommunicationsReasoningService:
                 opportunity,
                 candidates,
                 recent_media_ids,
+                recent_social_media_ids,
                 snapshot,
                 explicit_program=explicit_program
             )
@@ -307,6 +314,7 @@ class CommunicationsReasoningService:
         opportunity,
         candidates,
         recent_media_ids,
+        recent_social_media_ids,
         snapshot,
         explicit_program=None
     ):
@@ -348,6 +356,7 @@ class CommunicationsReasoningService:
                 profile,
                 opportunity,
                 recent_media_ids,
+                recent_social_media_ids,
                 snapshot
             )
 
@@ -417,6 +426,7 @@ class CommunicationsReasoningService:
         profile,
         opportunity,
         recent_media_ids,
+        recent_social_media_ids,
         snapshot
     ):
 
@@ -464,6 +474,13 @@ class CommunicationsReasoningService:
             score += 10
             reasons.append("has not recently been recommended")
 
+        if candidate.get("media_id") in recent_social_media_ids:
+            score -= 35
+            reasons.append("has already appeared in recent social posting")
+        else:
+            score += 6
+            reasons.append("has not appeared in recent social posting")
+
         learning_adjustment, learning_reasons = self.learning.score_adjustment(
             candidate,
             opportunity,
@@ -488,6 +505,9 @@ class CommunicationsReasoningService:
     def _media_summary(self, scored):
 
         candidate = scored["candidate"]
+        memory = self.memory.media_memory(
+            candidate.get("media_id")
+        )
 
         return {
             "media_id": candidate.get("media_id"),
@@ -500,7 +520,11 @@ class CommunicationsReasoningService:
             "community_score": candidate.get("community_score", 0),
             "recruitment_score": candidate.get("recruitment_score", 0),
             "education_score": candidate.get("education_score", 0),
-            "technical_score": candidate.get("technical_score", 0)
+            "technical_score": candidate.get("technical_score", 0),
+            "posted_before": memory["posted_before"],
+            "post_count": memory["post_count"],
+            "last_posted": memory["last_posted"],
+            "posted_campaigns": memory["campaigns"]
         }
 
     ############################################################
@@ -590,6 +614,19 @@ class CommunicationsReasoningService:
 
             if "has not recently been recommended" in top.get("reason", ""):
                 reasoning.append("It has not recently been recommended.")
+
+            if top.get("posted_before"):
+                reasoning.append(
+                    (
+                        "Communications Memory shows this media was posted "
+                        f"{top['post_count']} time(s), most recently "
+                        f"{top['last_posted']}."
+                    )
+                )
+            else:
+                reasoning.append(
+                    "Communications Memory shows this media has not been posted before."
+                )
         else:
             reasoning.append("No strong matching media was found; this is also a content gap.")
 
