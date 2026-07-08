@@ -270,6 +270,42 @@ class ContentDirectorPage(ctk.CTkFrame):
             pady=(0, 12)
         )
 
+        context = self.brief.get(
+            "context_snapshot",
+            {}
+        )
+
+        context_lines = [
+            "Current Context",
+            f"Season: {self.format_label(context.get('season', ''))}",
+            (
+                "Active Themes: " +
+                self.format_context_list(context.get("active_themes", []))
+            ),
+            (
+                "Upcoming Themes: " +
+                self.format_context_list(context.get("upcoming_themes", []))
+            ),
+            (
+                "Priority Context: " +
+                self.format_context_list(context.get("priority_context", []))
+            )
+        ]
+
+        context_label = ctk.CTkLabel(
+            self.brief_frame,
+            text="\n".join(context_lines),
+            justify="left"
+        )
+
+        context_label.grid(
+            row=3,
+            column=0,
+            sticky="w",
+            padx=15,
+            pady=(0, 12)
+        )
+
     ##########################################################
 
     def render_daily_opportunities(self):
@@ -672,6 +708,18 @@ class ContentDirectorPage(ctk.CTkFrame):
             "_",
             " "
         ).title()
+
+    ##########################################################
+
+    def format_context_list(self, values):
+
+        if not values:
+            return "None"
+
+        return ", ".join(
+            self.format_label(value)
+            for value in values[:6]
+        )
 
     ##########################################################
 

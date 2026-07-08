@@ -1,6 +1,5 @@
-from datetime import datetime
-
 from core.app_context import context
+from services.context_engine import ContextEngine
 from services.logging_service import LoggingService
 
 
@@ -298,10 +297,11 @@ class CommunicationsDirector:
         ("Water Safety", ("water", "summer", "safety"))
     )
 
-    def __init__(self, database=None, job_manager=None):
+    def __init__(self, database=None, job_manager=None, context_engine=None):
 
         self.db = database or context.database
         self.jobs = job_manager or context.job_manager
+        self.context_engine = context_engine or ContextEngine()
 
     ############################################################
 
@@ -321,17 +321,30 @@ class CommunicationsDirector:
 
     def generate_opportunities(self, prompt="", limit=5):
 
+        snapshot = self.context_engine.snapshot()
         opportunity_types = self.interpret_prompt(prompt)
 
+        if not prompt.strip() or opportunity_types == ["general_engagement"]:
+            opportunity_types = self._context_opportunity_keys(snapshot)
+
         return [
-            self.generate_opportunity(opportunity_type)
+            self.generate_opportunity(
+                opportunity_type,
+                snapshot=snapshot
+            )
             for opportunity_type in opportunity_types[:limit]
         ]
 
     ############################################################
 
-    def generate_opportunity(self, opportunity_type, media_limit=3):
+    def generate_opportunity(
+        self,
+        opportunity_type,
+        media_limit=3,
+        snapshot=None
+    ):
 
+        snapshot = snapshot or self.context_engine.snapshot()
         profile = self.OPPORTUNITIES.get(
             opportunity_type,
             self.OPPORTUNITIES["general_engagement"]
@@ -356,10 +369,15 @@ class CommunicationsDirector:
         ]
         reasoning = self._opportunity_reasoning(
             profile,
-            recommended_media
+            recommended_media,
+            snapshot
         )
         confidence = self._confidence(recommended_media)
-        priority = self._priority(confidence, opportunity_type)
+        priority = self._priority(
+            confidence,
+            opportunity_type,
+            snapshot
+        )
 
         opportunity = {
             "opportunity_type": opportunity_type,
@@ -390,9 +408,13 @@ class CommunicationsDirector:
 
     def todays_brief(self):
 
-        top_opportunities = self._seasonal_opportunity_keys()
+        snapshot = self.context_engine.snapshot()
+        top_opportunities = self._context_opportunity_keys(snapshot)
         opportunities = [
-            self.generate_opportunity(key)
+            self.generate_opportunity(
+                key,
+                snapshot=snapshot
+            )
             for key in top_opportunities[:5]
         ]
         insights = self.library_insights()
@@ -413,8 +435,9 @@ class CommunicationsDirector:
             "processing_status": processing_status,
             "upcoming_seasonal_opportunities": [
                 self.OPPORTUNITIES[key]["title"]
-                for key in self._upcoming_seasonal_keys()
+                for key in self._upcoming_seasonal_keys(snapshot)
             ],
+            "context_snapshot": snapshot.to_dict(),
             "content_gaps": gaps
         }
 
@@ -482,6 +505,7 @@ class CommunicationsDirector:
 
     def content_gaps(self):
 
+        snapshot = self.context_engine.snapshot()
         candidates = self.db.content_director_candidates(limit=1000)
         total = max(1, len(candidates))
         gaps = []
@@ -503,6 +527,43 @@ class CommunicationsDirector:
                         "reason": (
                             f"Only {count} matching media items found in "
                             "the sampled intelligence set."
+                        )
+                    }
+                )
+
+        context_gap_map = {
+            "water_safety_season": ("Water Safety", ("water", "summer", "safety")),
+            "summer_heat_safety": ("Heat Safety", ("heat", "summer", "hydration")),
+            "fire_prevention_week": ("Fire Prevention", ("fire_prevention", "prevention")),
+            "carbon_monoxide_safety_season": ("Carbon Monoxide Safety", ("carbon_monoxide", "co_alarm")),
+            "winter_safety_season": ("Winter Safety", ("winter", "ice", "snow")),
+            "recruitment_friendly_period": ("Recruitment", ("recruitment", "volunteer"))
+        }
+
+        for theme in snapshot.active_themes:
+
+            if theme not in context_gap_map:
+                continue
+
+            label, terms = context_gap_map[theme]
+
+            if any(gap["name"] == label for gap in gaps):
+                continue
+
+            count = self._count_matching_candidates(
+                candidates,
+                terms
+            )
+
+            if count < 3:
+                gaps.append(
+                    {
+                        "name": label,
+                        "count": count,
+                        "percentage": int((count / total) * 100),
+                        "reason": (
+                            "Current context makes this theme important, "
+                            f"but only {count} matching media items were found."
                         )
                     }
                 )
@@ -593,12 +654,23 @@ class CommunicationsDirector:
 
     ############################################################
 
-    def _opportunity_reasoning(self, profile, recommended_media):
+    def _opportunity_reasoning(self, profile, recommended_media, snapshot):
 
         reasoning = [
             f"Aligns with {profile['caption_theme'].lower()} messaging.",
-            "Uses stored Media Intelligence rather than image inspection."
+            "Uses stored Media Intelligence rather than image inspection.",
+            "Uses local calendar context without external API calls."
         ]
+
+        active_text = [
+            self._format_label(theme)
+            for theme in snapshot.active_themes[:3]
+        ]
+
+        if active_text:
+            reasoning.append(
+                "Current context supports this: " + ", ".join(active_text) + "."
+            )
 
         if recommended_media:
             top = recommended_media[0]
@@ -673,7 +745,7 @@ class CommunicationsDirector:
 
     ############################################################
 
-    def _priority(self, confidence, opportunity_type):
+    def _priority(self, confidence, opportunity_type, snapshot=None):
 
         urgent = {
             "heat_warning",
@@ -681,6 +753,10 @@ class CommunicationsDirector:
             "smoke_alarm_reminder",
             "fire_prevention_week"
         }
+
+        if snapshot:
+            if opportunity_type in snapshot.suggested_opportunities[:3]:
+                return "High"
 
         if opportunity_type in urgent and confidence >= 50:
             return "High"
@@ -695,29 +771,10 @@ class CommunicationsDirector:
 
     ############################################################
 
-    def _seasonal_opportunity_keys(self):
+    def _context_opportunity_keys(self, snapshot=None):
 
-        month = datetime.now().month
-        keys = []
-
-        if month in (6, 7, 8):
-            keys.extend(
-                (
-                    "heat_warning",
-                    "water_safety"
-                )
-            )
-
-        if month in (12, 1, 2):
-            keys.extend(
-                (
-                    "holiday_safety",
-                    "storm_safety"
-                )
-            )
-
-        if month == 10:
-            keys.append("fire_prevention_week")
+        snapshot = snapshot or self.context_engine.snapshot()
+        keys = list(snapshot.suggested_opportunities)
 
         keys.extend(
             (
@@ -732,20 +789,42 @@ class CommunicationsDirector:
 
     ############################################################
 
-    def _upcoming_seasonal_keys(self):
+    def _upcoming_seasonal_keys(self, snapshot=None):
 
-        month = datetime.now().month
+        snapshot = snapshot or self.context_engine.snapshot()
+        upcoming = []
+        mapping = {
+            "summer_heat_safety": "heat_warning",
+            "water_safety_season": "water_safety",
+            "winter_safety_season": "holiday_safety",
+            "ice_safety_season": "storm_safety",
+            "spring_melt_flood_awareness": "storm_safety",
+            "wildfire_grass_fire_season": "fire_prevention_week",
+            "back_to_school_safety": "community_appreciation",
+            "fire_prevention_week": "fire_prevention_week",
+            "halloween_safety": "holiday_safety",
+            "carbon_monoxide_safety_season": "smoke_alarm_reminder",
+            "holiday_fireplace_candle_safety": "holiday_safety",
+            "new_year_safety": "general_engagement",
+            "emergency_preparedness_week": "storm_safety",
+            "recruitment_friendly_period": "recruitment"
+        }
 
-        if month in (6, 7, 8):
-            return ["water_safety", "heat_warning", "community_appreciation"]
+        for theme in snapshot.upcoming_themes:
+            opportunity = mapping.get(theme)
 
-        if month in (9, 10):
-            return ["fire_prevention_week", "smoke_alarm_reminder", "recruitment"]
+            if opportunity:
+                upcoming.append(opportunity)
 
-        if month in (11, 12, 1, 2):
-            return ["holiday_safety", "storm_safety", "smoke_alarm_reminder"]
+        upcoming.extend(
+            (
+                "recruitment",
+                "training_highlight",
+                "community_appreciation"
+            )
+        )
 
-        return ["recruitment", "training_highlight", "community_appreciation"]
+        return self._unique(upcoming)[:5]
 
     ############################################################
 
@@ -864,6 +943,15 @@ class CommunicationsDirector:
             " ",
             "_"
         )
+
+    ############################################################
+
+    def _format_label(self, value):
+
+        return str(value).replace(
+            "_",
+            " "
+        ).title()
 
     ############################################################
 
