@@ -206,6 +206,10 @@ def main():
             assert package["suggested_posting_time"], package
             assert package["suggested_media"], package
             assert package["reasoning"], package
+            assert package["prompt_engine"] == "professional", package
+            assert package["editorial_dna"], package
+            assert package["editorial_review"], package
+            assert package["editorial_score"] > 0, package
             assert has_emoji(package["facebook_caption"]), package
             assert has_emoji(package["instagram_caption"]), package
             assert hashtag_count(package["facebook_caption"]) <= 5, package

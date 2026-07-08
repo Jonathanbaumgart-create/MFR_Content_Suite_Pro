@@ -97,6 +97,8 @@ def main():
     )
 
     assert deterministic_package["facebook_caption"], deterministic_package
+    assert deterministic_package["prompt_engine"] == "professional"
+    assert deterministic_package["editorial_dna"], deterministic_package
     assert deterministic.status()["active_provider"] == "deterministic"
     assert deterministic.status()["fallback_used"] is False
     assert not hasattr(deterministic, "vision")
@@ -134,6 +136,8 @@ def main():
 
     assert package["facebook_caption"].startswith("Join the team"), package
     assert package["instagram_caption"].startswith("Join the team"), package
+    assert package["prompt_engine"] == "professional", package
+    assert package["editorial_dna"], package
     assert status["active_provider"] == "deterministic", status
     assert status["fallback_used"] is True, status
     assert "simulated local writing failure" in status["last_error"], status

@@ -1,6 +1,7 @@
 from core.app_context import context
 from services.context_engine import ContextEngine
 from services.communications_memory_service import CommunicationsMemoryService
+from services.editorial_review_service import EditorialReviewService
 from services.knowledge_service import KnowledgeService
 from services.logging_service import LoggingService
 from services.writing_service import WritingService
@@ -109,7 +110,8 @@ class ContentGenerationService:
         knowledge_service=None,
         context_engine=None,
         writing_service=None,
-        memory_service=None
+        memory_service=None,
+        editorial_review_service=None
     ):
 
         self.db = database or context.database
@@ -120,6 +122,9 @@ class ContentGenerationService:
         self.writing = writing_service or WritingService()
         self.memory = memory_service or CommunicationsMemoryService(
             database=self.db
+        )
+        self.editorial_review = (
+            editorial_review_service or EditorialReviewService()
         )
         self.ensure_default_templates()
 
@@ -271,17 +276,26 @@ class ContentGenerationService:
         package["writing_model"] = status.get("active_model", "")
         package["writing_fallback_used"] = status.get("fallback_used", False)
         package["writing_provider_error"] = status.get("last_error", "")
+        review = self.editorial_review.review_package(
+            package
+        )
+        package["editorial_review"] = review
+        package["editorial_score"] = review.get(
+            "overall_score",
+            0
+        )
 
         logger.info(
             (
                 "Generated communication package opportunity=%s style=%s "
-                "media=%s writing_provider=%s fallback=%s"
+                "media=%s writing_provider=%s fallback=%s editorial_score=%s"
             ),
             opportunity_type,
             writing_style,
             len(media),
             package["writing_provider"],
-            package["writing_fallback_used"]
+            package["writing_fallback_used"],
+            package["editorial_score"]
         )
 
         return package

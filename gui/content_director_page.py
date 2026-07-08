@@ -523,7 +523,7 @@ class ContentDirectorPage(ctk.CTkFrame):
             card.grid(
                 row=0,
                 column=0,
-                rowspan=15,
+                rowspan=22,
                 padx=12,
                 pady=12,
                 sticky="nw"
@@ -576,7 +576,7 @@ class ContentDirectorPage(ctk.CTkFrame):
         )
 
         if package:
-            self.render_package(
+            next_row = self.render_package(
                 frame,
                 package,
                 start_row=3
@@ -600,6 +600,7 @@ class ContentDirectorPage(ctk.CTkFrame):
                 "Best Time",
                 opportunity["best_posting_time"]
             )
+            next_row = 6
 
         footer = ctk.CTkFrame(
             frame,
@@ -607,7 +608,7 @@ class ContentDirectorPage(ctk.CTkFrame):
         )
 
         footer.grid(
-            row=12,
+            row=next_row,
             column=1,
             sticky="ew",
             padx=(0, 12),
@@ -655,7 +656,7 @@ class ContentDirectorPage(ctk.CTkFrame):
         )
 
         feedback.grid(
-            row=13,
+            row=next_row + 1,
             column=1,
             sticky="w",
             padx=(0, 12),
@@ -686,7 +687,7 @@ class ContentDirectorPage(ctk.CTkFrame):
                 padx=(0, 8)
             )
 
-        for index, item in enumerate(media[1:], start=14):
+        for index, item in enumerate(media[1:], start=next_row + 2):
             self.add_caption_line(
                 frame,
                 index,
@@ -779,11 +780,32 @@ class ContentDirectorPage(ctk.CTkFrame):
             "Package Reasoning",
             " | ".join(package.get("reasoning", [])[:5])
         )
+        review = package.get("editorial_review", {}) or {}
+        self.add_caption_line(
+            parent,
+            start_row + 8,
+            "Editorial Review Score",
+            str(review.get("overall_score", package.get("editorial_score", "")))
+        )
+        self.add_caption_line(
+            parent,
+            start_row + 9,
+            "Strengths",
+            " | ".join(review.get("strengths", [])[:5])
+        )
+        self.add_caption_line(
+            parent,
+            start_row + 10,
+            "Suggested Improvements",
+            " | ".join(review.get("suggestions", [])[:5])
+        )
         self.render_copy_controls(
             parent,
             package,
-            start_row + 8
+            start_row + 11
         )
+
+        return start_row + 12
 
     ##########################################################
 
@@ -883,7 +905,25 @@ class ContentDirectorPage(ctk.CTkFrame):
                     " ".join(package.get("instagram_hashtags", []))
                 ),
                 "CTA:\n" + package.get("call_to_action", ""),
-                "Reasoning:\n" + "\n".join(package.get("reasoning", []))
+                "Reasoning:\n" + "\n".join(package.get("reasoning", [])),
+                "Editorial Review:\n" + self.editorial_review_text(package)
+            ]
+        )
+
+    ##########################################################
+
+    def editorial_review_text(self, package):
+
+        review = package.get("editorial_review", {}) or {}
+
+        return "\n".join(
+            [
+                f"Score: {review.get('overall_score', package.get('editorial_score', ''))}",
+                "Strengths: " + " | ".join(review.get("strengths", [])),
+                (
+                    "Suggested Improvements: " +
+                    " | ".join(review.get("suggestions", []))
+                )
             ]
         )
 
