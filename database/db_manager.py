@@ -201,6 +201,42 @@ class DatabaseManager:
         """)
 
         ########################################################
+        # Recommendation Feedback
+        ########################################################
+
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS recommendation_feedback(
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            recommendation_id TEXT,
+
+            media_id INTEGER,
+
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+            feedback_type TEXT,
+
+            accepted INTEGER DEFAULT 0,
+
+            dismissed INTEGER DEFAULT 0,
+
+            opened INTEGER DEFAULT 0,
+
+            regenerated INTEGER DEFAULT 0,
+
+            notes TEXT,
+
+            confidence REAL,
+
+            opportunity_type TEXT
+
+        )
+
+        """)
+
+        ########################################################
         # Department Knowledge
         ########################################################
 
@@ -1866,6 +1902,136 @@ class DatabaseManager:
 
     ############################################################
 
+    def save_recommendation_feedback(self, feedback):
+
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        INSERT INTO recommendation_feedback(
+
+            recommendation_id,
+
+            media_id,
+
+            feedback_type,
+
+            accepted,
+
+            dismissed,
+
+            opened,
+
+            regenerated,
+
+            notes,
+
+            confidence,
+
+            opportunity_type
+
+        )
+
+        VALUES(?,?,?,?,?,?,?,?,?,?)
+
+        """,
+
+        (
+            feedback.get("recommendation_id", ""),
+            self._to_int(feedback.get("media_id")) or None,
+            feedback.get("feedback_type", ""),
+            self._to_int(feedback.get("accepted")),
+            self._to_int(feedback.get("dismissed")),
+            self._to_int(feedback.get("opened")),
+            self._to_int(feedback.get("regenerated")),
+            feedback.get("notes", ""),
+            self._to_float(feedback.get("confidence")),
+            feedback.get("opportunity_type", "")
+        ))
+
+        feedback_id = cur.lastrowid
+
+        conn.commit()
+
+        conn.close()
+
+        return feedback_id
+
+    ############################################################
+
+    def recommendation_feedback_rows(self, limit=1000):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        SELECT *
+
+        FROM recommendation_feedback
+
+        ORDER BY created_at DESC, id DESC
+
+        LIMIT ?
+
+        """,
+
+        (
+            self._to_int(limit),
+        ))
+
+        rows = cur.fetchall()
+
+        conn.close()
+
+        return [
+            self._recommendation_feedback_from_row(row)
+            for row in rows
+        ]
+
+    ############################################################
+
+    def recommendation_feedback_for_media(self, media_id, limit=200):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        SELECT *
+
+        FROM recommendation_feedback
+
+        WHERE media_id=?
+
+        ORDER BY created_at DESC, id DESC
+
+        LIMIT ?
+
+        """,
+
+        (
+            self._to_int(media_id),
+            self._to_int(limit)
+        ))
+
+        rows = cur.fetchall()
+
+        conn.close()
+
+        return [
+            self._recommendation_feedback_from_row(row)
+            for row in rows
+        ]
+
+    ############################################################
+
     def department_profile(self):
 
         conn = self.connection()
@@ -2415,6 +2581,25 @@ class DatabaseManager:
 
     ############################################################
 
+    def _recommendation_feedback_from_row(self, row):
+
+        return {
+            "id": row["id"],
+            "recommendation_id": row["recommendation_id"] or "",
+            "media_id": row["media_id"],
+            "created_at": row["created_at"] or "",
+            "feedback_type": row["feedback_type"] or "",
+            "accepted": bool(row["accepted"]),
+            "dismissed": bool(row["dismissed"]),
+            "opened": bool(row["opened"]),
+            "regenerated": bool(row["regenerated"]),
+            "notes": row["notes"] or "",
+            "confidence": row["confidence"] or 0,
+            "opportunity_type": row["opportunity_type"] or ""
+        }
+
+    ############################################################
+
     def _to_json(self, value):
 
         if value is None:
@@ -2551,6 +2736,11 @@ class DatabaseManager:
             "CREATE INDEX IF NOT EXISTS idx_recommendation_history_media ON recommendation_history(media_id)",
             "CREATE INDEX IF NOT EXISTS idx_recommendation_history_date ON recommendation_history(recommendation_date)",
             "CREATE INDEX IF NOT EXISTS idx_recommendation_history_opportunity ON recommendation_history(opportunity)",
+            "CREATE INDEX IF NOT EXISTS idx_recommendation_feedback_rec ON recommendation_feedback(recommendation_id)",
+            "CREATE INDEX IF NOT EXISTS idx_recommendation_feedback_media ON recommendation_feedback(media_id)",
+            "CREATE INDEX IF NOT EXISTS idx_recommendation_feedback_type ON recommendation_feedback(feedback_type)",
+            "CREATE INDEX IF NOT EXISTS idx_recommendation_feedback_opportunity ON recommendation_feedback(opportunity_type)",
+            "CREATE INDEX IF NOT EXISTS idx_recommendation_feedback_created ON recommendation_feedback(created_at)",
             "CREATE INDEX IF NOT EXISTS idx_apparatus_name ON apparatus(name)",
             "CREATE INDEX IF NOT EXISTS idx_programs_name ON programs(name)",
             "CREATE INDEX IF NOT EXISTS idx_annual_events_name ON annual_events(name)",

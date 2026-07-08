@@ -4,6 +4,7 @@ from core.app_context import context
 from services.communications_director import CommunicationsDirector
 from services.knowledge_service import KnowledgeService
 from services.logging_service import LoggingService
+from services.recommendation_learning_service import RecommendationLearningService
 
 
 logger = LoggingService.get_logger("content")
@@ -64,13 +65,22 @@ class CommunicationsReasoningService:
         )
     }
 
-    def __init__(self, database=None, director=None, knowledge_service=None):
+    def __init__(
+        self,
+        database=None,
+        director=None,
+        knowledge_service=None,
+        learning_service=None
+    ):
 
         self.db = database or context.database
         self.director = director or CommunicationsDirector(
             database=self.db
         )
         self.knowledge = knowledge_service or KnowledgeService(
+            database=self.db
+        )
+        self.learning = learning_service or RecommendationLearningService(
             database=self.db
         )
 
@@ -116,7 +126,9 @@ class CommunicationsReasoningService:
             ],
             "seasonal_context": snapshot.to_dict(),
             "context_snapshot": snapshot.to_dict(),
-            "department_knowledge": self.knowledge.snapshot()
+            "department_knowledge": self.knowledge.snapshot(),
+            "communication_preferences": self.learning.preferences(),
+            "learning_analytics": self.learning.analytics()
         }
 
         logger.info(
@@ -180,6 +192,12 @@ class CommunicationsReasoningService:
             reverse=True
         )
         recommendations = recommendations[:limit]
+
+        for recommendation in recommendations:
+            self.learning.record_generated(
+                recommendation,
+                prompt=prompt
+            )
 
         if persist_history:
             self._record_history(recommendations)
@@ -414,6 +432,19 @@ class CommunicationsReasoningService:
         else:
             score += 10
             reasons.append("has not recently been recommended")
+
+        learning_adjustment, learning_reasons = self.learning.score_adjustment(
+            candidate,
+            opportunity,
+            profile
+        )
+
+        if learning_adjustment:
+            score += learning_adjustment
+            reasons.append(
+                f"learning adjustment {learning_adjustment:+.1f}"
+            )
+            reasons.extend(learning_reasons)
 
         return {
             "candidate": candidate,

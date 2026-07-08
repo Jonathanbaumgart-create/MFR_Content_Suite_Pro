@@ -463,6 +463,7 @@ class ContentDirectorPage(ctk.CTkFrame):
             self.render_opportunity(opportunity)
 
         self.render_library_insights(parent=self.results)
+        self.render_learning_insights(parent=self.results)
 
     ##########################################################
 
@@ -481,6 +482,7 @@ class ContentDirectorPage(ctk.CTkFrame):
         frame.grid_columnconfigure(1, weight=1)
 
         media = opportunity["recommended_media"]
+        self.record_viewed(opportunity)
 
         if media:
             card = PhotoCard(
@@ -592,7 +594,10 @@ class ContentDirectorPage(ctk.CTkFrame):
             open_button = ctk.CTkButton(
                 footer,
                 text="Open in Viewer",
-                command=lambda item=media[0]: self.open_viewer(item)
+                command=lambda item=media[0], opp=opportunity: self.open_viewer(
+                    item,
+                    opp
+                )
             )
 
             open_button.pack(
@@ -600,12 +605,136 @@ class ContentDirectorPage(ctk.CTkFrame):
                 padx=(12, 0)
             )
 
-        for index, item in enumerate(media[1:], start=7):
+        feedback = ctk.CTkFrame(
+            frame,
+            fg_color="transparent"
+        )
+
+        feedback.grid(
+            row=7,
+            column=1,
+            sticky="w",
+            padx=(0, 12),
+            pady=(0, 12)
+        )
+
+        buttons = (
+            ("👍 Useful", "accepted"),
+            ("👎 Not Useful", "dismissed"),
+            ("⭐ Save for Later", "saved"),
+            ("🔄 Show Another Suggestion", "regenerated")
+        )
+
+        for label, feedback_type in buttons:
+
+            button = ctk.CTkButton(
+                feedback,
+                text=label,
+                width=145,
+                command=lambda opp=opportunity, kind=feedback_type: self.handle_feedback(
+                    opp,
+                    kind
+                )
+            )
+
+            button.pack(
+                side="left",
+                padx=(0, 8)
+            )
+
+        for index, item in enumerate(media[1:], start=8):
             self.add_caption_line(
                 frame,
                 index,
                 "Additional Media",
                 f"{item['filename']} - {item['reason']}"
+            )
+
+    ##########################################################
+
+    def record_viewed(self, opportunity):
+
+        try:
+            self.reasoning_service.learning.record_viewed(opportunity)
+
+        except Exception as ex:
+            logger.error(
+                "Recommendation viewed feedback failed",
+                exc_info=(
+                    type(ex),
+                    ex,
+                    ex.__traceback__
+                )
+            )
+
+    ##########################################################
+
+    def handle_feedback(self, opportunity, feedback_type):
+
+        try:
+            self.reasoning_service.learning.record_feedback(
+                opportunity,
+                feedback_type
+            )
+
+            if feedback_type == "regenerated":
+                self.show_another_suggestion(opportunity)
+                return
+
+            self.status.configure(
+                text=f"Feedback saved: {self.format_label(feedback_type)}"
+            )
+            self.render_results()
+
+        except Exception as ex:
+            logger.error(
+                "Recommendation feedback failed",
+                exc_info=(
+                    type(ex),
+                    ex,
+                    ex.__traceback__
+                )
+            )
+            self.status.configure(
+                text=f"Feedback error: {ex}"
+            )
+
+    ##########################################################
+
+    def show_another_suggestion(self, opportunity):
+
+        try:
+            replacements = self.reasoning_service.generate_recommendations(
+                opportunity_keys=[
+                    opportunity["opportunity_type"]
+                ],
+                limit=1
+            )
+
+            if replacements:
+                self.current_results = [
+                    replacements[0]
+                    if item is opportunity
+                    else item
+                    for item in self.current_results
+                ]
+
+            self.status.configure(
+                text="Showing another learned suggestion"
+            )
+            self.render_results()
+
+        except Exception as ex:
+            logger.error(
+                "Recommendation regeneration failed",
+                exc_info=(
+                    type(ex),
+                    ex,
+                    ex.__traceback__
+                )
+            )
+            self.status.configure(
+                text=f"Regeneration error: {ex}"
             )
 
     ##########################################################
@@ -702,6 +831,88 @@ class ContentDirectorPage(ctk.CTkFrame):
 
     ##########################################################
 
+    def render_learning_insights(self, parent):
+
+        try:
+            preferences = self.reasoning_service.learning.preferences()
+            analytics = self.reasoning_service.learning.analytics()
+
+        except Exception as ex:
+            logger.error(
+                "Learning insights render failed",
+                exc_info=(
+                    type(ex),
+                    ex,
+                    ex.__traceback__
+                )
+            )
+            return
+
+        frame = ctk.CTkFrame(
+            parent,
+            corner_radius=8
+        )
+
+        frame.pack(
+            fill="x",
+            padx=10,
+            pady=(5, 10)
+        )
+
+        heading = ctk.CTkLabel(
+            frame,
+            text="Your Communication Preferences",
+            font=("Segoe UI", 20, "bold")
+        )
+
+        heading.pack(
+            anchor="w",
+            padx=15,
+            pady=(12, 6)
+        )
+
+        summary = preferences.get("summary") or []
+
+        if summary:
+            preference_line = "You prefer: " + ", ".join(summary)
+        else:
+            preference_line = "Preferences will appear as recommendations are used."
+
+        lines = [
+            preference_line,
+            (
+                f"Acceptance {analytics['acceptance_rate']}% | "
+                f"Dismissal {analytics['dismissal_rate']}% | "
+                f"Average confidence {analytics['average_confidence']}%"
+            )
+        ]
+
+        if analytics.get("most_accepted_opportunity_type"):
+            lines.append(
+                "Most accepted: " +
+                analytics["most_accepted_opportunity_type"]
+            )
+
+        if analytics.get("most_rejected_opportunity_type"):
+            lines.append(
+                "Most rejected: " +
+                analytics["most_rejected_opportunity_type"]
+            )
+
+        label = ctk.CTkLabel(
+            frame,
+            text="\n".join(lines),
+            justify="left"
+        )
+
+        label.pack(
+            anchor="w",
+            padx=15,
+            pady=(0, 12)
+        )
+
+    ##########################################################
+
     def add_caption_line(self, parent, row, label, value):
 
         caption = ctk.CTkLabel(
@@ -721,12 +932,30 @@ class ContentDirectorPage(ctk.CTkFrame):
 
     ##########################################################
 
-    def open_viewer(self, recommendation):
+    def open_viewer(self, recommendation, opportunity=None):
 
         logger.info(
             "Content Director opened viewer media_id=%s",
             recommendation["media_id"]
         )
+
+        if opportunity:
+            try:
+                self.reasoning_service.learning.record_feedback(
+                    opportunity,
+                    "opened",
+                    media=recommendation
+                )
+
+            except Exception as ex:
+                logger.error(
+                    "Recommendation opened feedback failed",
+                    exc_info=(
+                        type(ex),
+                        ex,
+                        ex.__traceback__
+                    )
+                )
 
         PhotoViewer(
             self,
