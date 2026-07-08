@@ -1,9 +1,11 @@
 import customtkinter as ctk
 
+from core.app_context import context
 from gui.ai_dashboard_page import AIDashboardPage
 from gui.content_director_page import ContentDirectorPage
 from gui.dashboard_page import DashboardPage
 from gui.gallery_page import GalleryPage
+from gui.home_page import HomePage
 from gui.intelligence_page import IntelligenceExplorerPage
 from gui.knowledge_page import KnowledgePage
 from gui.scan_page import ScanPage
@@ -92,7 +94,7 @@ class MainWindow(ctk.CTk):
 
         navigation = [
 
-            ("Dashboard", self.show_dashboard),
+            ("Home", self.show_home),
 
             ("Scanner", self.show_scanner),
 
@@ -104,15 +106,7 @@ class MainWindow(ctk.CTk):
 
             ("Knowledge", self.show_knowledge),
 
-            ("Videos", self.not_implemented),
-
-            ("Search", self.not_implemented),
-
-            ("Collections", self.not_implemented),
-
-            ("AI", self.show_ai_dashboard),
-
-            ("Analytics", self.not_implemented),
+            ("AI Dashboard", self.show_ai_dashboard),
 
             ("Settings", self.not_implemented)
 
@@ -133,7 +127,7 @@ class MainWindow(ctk.CTk):
                 pady=5
             )
 
-        self.show_dashboard()
+        self.show_home()
 
     ##########################################################
 
@@ -144,6 +138,24 @@ class MainWindow(ctk.CTk):
             self.current_page.destroy()
 
             self.current_page = None
+
+    ##########################################################
+
+    def show_home(self):
+
+        self.clear_page()
+
+        self.current_page = HomePage(
+            self.workspace
+        )
+
+        self.current_page.grid(
+            row=0,
+            column=0,
+            sticky="nsew",
+            padx=25,
+            pady=25
+        )
 
     ##########################################################
 
@@ -298,3 +310,14 @@ class MainWindow(ctk.CTk):
         )
 
         self.current_page = frame
+
+    ##########################################################
+
+    def destroy(self):
+
+        try:
+            context.job_manager.shutdown()
+        except Exception:
+            pass
+
+        super().destroy()

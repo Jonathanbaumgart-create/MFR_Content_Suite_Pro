@@ -124,6 +124,12 @@ class JobManager:
         with self._condition:
             self._condition.notify_all()
 
+        if (
+            self._worker.is_alive() and
+            threading.current_thread() is not self._worker
+        ):
+            self._worker.join(timeout=5)
+
     # ---------------------------------------------------------
 
     def progress(self):
@@ -176,6 +182,9 @@ class JobManager:
             ) = item
 
             if future.cancelled():
+                continue
+
+            if not future.set_running_or_notify_cancel():
                 continue
 
             with self._lock:
