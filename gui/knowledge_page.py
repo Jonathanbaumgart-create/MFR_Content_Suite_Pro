@@ -1,5 +1,8 @@
 import customtkinter as ctk
+from tkinter import filedialog
+import threading
 
+from services.knowledge_ingestion_service import KnowledgeIngestionService
 from services.knowledge_service import KnowledgeService
 from services.logging_service import LoggingService
 
@@ -23,12 +26,17 @@ class KnowledgePage(ctk.CTkFrame):
         super().__init__(parent)
 
         self.service = KnowledgeService()
+        self.ingestion_service = KnowledgeIngestionService(
+            knowledge_service=self.service
+        )
         self.current_table = "programs"
         self.current_item_id = None
+        self.pending_import = None
 
         self.build_page()
         self.load_profile()
         self.load_items()
+        self.refresh_statistics()
 
     ##########################################################
 
@@ -109,6 +117,93 @@ class KnowledgePage(ctk.CTkFrame):
             sticky="w",
             padx=12,
             pady=(6, 12)
+        )
+
+        import_controls = ctk.CTkFrame(
+            self.profile_frame,
+            fg_color="transparent"
+        )
+
+        import_controls.grid(
+            row=3,
+            column=1,
+            columnspan=3,
+            sticky="ew",
+            padx=(0, 12),
+            pady=(6, 12)
+        )
+
+        import_button = ctk.CTkButton(
+            import_controls,
+            text="Import Documents",
+            command=self.import_documents
+        )
+
+        import_button.pack(
+            side="left",
+            padx=(0, 8)
+        )
+
+        review_button = ctk.CTkButton(
+            import_controls,
+            text="Review Import",
+            command=self.review_import
+        )
+
+        review_button.pack(
+            side="left",
+            padx=(0, 8)
+        )
+
+        apply_button = ctk.CTkButton(
+            import_controls,
+            text="Apply Changes",
+            command=self.apply_import
+        )
+
+        apply_button.pack(
+            side="left",
+            padx=(0, 8)
+        )
+
+        discard_button = ctk.CTkButton(
+            import_controls,
+            text="Discard Changes",
+            command=self.discard_import
+        )
+
+        discard_button.pack(
+            side="left"
+        )
+
+        self.stats_label = ctk.CTkLabel(
+            self.profile_frame,
+            text="Knowledge Statistics",
+            justify="left"
+        )
+
+        self.stats_label.grid(
+            row=4,
+            column=0,
+            columnspan=2,
+            sticky="w",
+            padx=12,
+            pady=(0, 12)
+        )
+
+        self.import_summary_label = ctk.CTkLabel(
+            self.profile_frame,
+            text="Import Summary: no pending import",
+            justify="left"
+        )
+
+        self.import_summary_label.grid(
+            row=4,
+            column=2,
+            columnspan=2,
+            sticky="w",
+            padx=12,
+            pady=(0, 12)
         )
 
         body = ctk.CTkFrame(
@@ -320,6 +415,262 @@ class KnowledgePage(ctk.CTkFrame):
         self.status.configure(
             text="Profile saved."
         )
+        self.refresh_statistics()
+
+    ##########################################################
+
+    def import_documents(self):
+
+        paths = filedialog.askopenfilenames(
+            title="Import Knowledge Documents",
+            filetypes=[
+                (
+                    "Knowledge Documents",
+                    "*.pdf *.docx *.txt *.md *.markdown *.rtf *.csv"
+                ),
+                ("All Files", "*.*")
+            ]
+        )
+
+        if not paths:
+            return
+
+        self.status.configure(
+            text="Importing documents..."
+        )
+
+        def worker():
+
+            try:
+                result = self.ingestion_service.import_documents(paths)
+                self.after(
+                    0,
+                    lambda: self.import_complete(result)
+                )
+
+            except Exception as ex:
+                message = str(ex)
+                logger.error(
+                    "Knowledge import failed",
+                    exc_info=(
+                        type(ex),
+                        ex,
+                        ex.__traceback__
+                    )
+                )
+                self.after(
+                    0,
+                    lambda: self.status.configure(
+                        text=f"Import failed: {message}"
+                    )
+                )
+
+        threading.Thread(
+            target=worker,
+            daemon=True
+        ).start()
+
+    ##########################################################
+
+    def import_complete(self, result):
+
+        self.pending_import = result
+        self.render_import_summary()
+        self.review_import()
+        self.status.configure(
+            text="Import ready for review."
+        )
+
+    ##########################################################
+
+    def review_import(self):
+
+        if not self.pending_import:
+            self.status.configure(
+                text="No pending import to review."
+            )
+            return
+
+        for child in self.item_list.winfo_children():
+            child.destroy()
+
+        for record in self.pending_import.get("records", []):
+            text = (
+                f"{record['status'].upper()} | "
+                f"{self.TABLE_LABELS.get(record['table'], record['table'])} | "
+                f"{self.record_name(record)}"
+            )
+            button = ctk.CTkButton(
+                self.item_list,
+                text=text,
+                command=lambda value=record: self.load_import_record(value)
+            )
+
+            button.pack(
+                fill="x",
+                padx=8,
+                pady=4
+            )
+
+        self.status.configure(
+            text="Reviewing pending import."
+        )
+
+    ##########################################################
+
+    def load_import_record(self, record):
+
+        item = record["item"]
+        self.current_item_id = None
+
+        if record["table"] == "department_profile":
+            self.name_entry.delete(0, "end")
+            self.name_entry.insert(
+                0,
+                item.get("key", "")
+            )
+            self.category_entry.delete(0, "end")
+            self.category_entry.insert(0, "department_profile")
+            self.tags_entry.delete(0, "end")
+            self.description_text.delete("1.0", "end")
+            self.description_text.insert(
+                "1.0",
+                item.get("value", "")
+            )
+        else:
+            self.name_entry.delete(0, "end")
+            self.name_entry.insert(
+                0,
+                item.get("name", "")
+            )
+            self.category_entry.delete(0, "end")
+            self.category_entry.insert(
+                0,
+                item.get("category", "")
+            )
+            self.tags_entry.delete(0, "end")
+            self.tags_entry.insert(
+                0,
+                ", ".join(item.get("tags", []))
+            )
+            self.description_text.delete("1.0", "end")
+            self.description_text.insert(
+                "1.0",
+                item.get("description", "")
+            )
+
+        self.active_var.set(True)
+        self.status.configure(
+            text=(
+                f"{record['status'].title()} import record from "
+                f"{record.get('source', '')}"
+            )
+        )
+
+    ##########################################################
+
+    def apply_import(self):
+
+        if not self.pending_import:
+            self.status.configure(
+                text="No pending import to apply."
+            )
+            return
+
+        result = self.service.apply_import(
+            self.pending_import
+        )
+        self.pending_import = None
+        self.load_profile()
+        self.load_items()
+        self.refresh_statistics()
+        self.render_import_summary(
+            {
+                "imported": result["applied"],
+                "skipped": result["skipped"],
+                "duplicates": 0,
+                "conflicts": 0,
+                "new_programs": 0,
+                "new_apparatus": 0,
+                "new_events": 0,
+                "new_partners": 0,
+                "new_locations": 0
+            }
+        )
+        self.status.configure(
+            text=f"Applied {result['applied']} import changes."
+        )
+
+    ##########################################################
+
+    def discard_import(self):
+
+        self.pending_import = None
+        self.load_items()
+        self.render_import_summary()
+        self.status.configure(
+            text="Pending import discarded."
+        )
+
+    ##########################################################
+
+    def refresh_statistics(self):
+
+        stats = self.service.statistics()
+        self.stats_label.configure(
+            text=(
+                "Knowledge Statistics\n"
+                f"Programs: {stats['programs']} | "
+                f"Apparatus: {stats['apparatus']} | "
+                f"Events: {stats['events']}\n"
+                f"Partners: {stats['partners']} | "
+                f"Locations: {stats['locations']} | "
+                f"Documents Imported: {stats['documents_imported']}\n"
+                f"Completeness: {stats['knowledge_completeness_score']}%"
+            )
+        )
+
+    ##########################################################
+
+    def render_import_summary(self, summary=None):
+
+        if summary is None and self.pending_import:
+            summary = self.pending_import.get(
+                "summary",
+                {}
+            )
+
+        if not summary:
+            self.import_summary_label.configure(
+                text="Import Summary: no pending import"
+            )
+            return
+
+        self.import_summary_label.configure(
+            text=(
+                "Import Summary\n"
+                f"Imported: {summary.get('imported', 0)} | "
+                f"Skipped: {summary.get('skipped', 0)} | "
+                f"Duplicates: {summary.get('duplicates', 0)} | "
+                f"Conflicts: {summary.get('conflicts', 0)}\n"
+                f"New Programs: {summary.get('new_programs', 0)} | "
+                f"New Apparatus: {summary.get('new_apparatus', 0)} | "
+                f"New Events: {summary.get('new_events', 0)} | "
+                f"New Partners: {summary.get('new_partners', 0)} | "
+                f"New Locations: {summary.get('new_locations', 0)}"
+            )
+        )
+
+    ##########################################################
+
+    def record_name(self, record):
+
+        item = record.get(
+            "item",
+            {}
+        )
+
+        return item.get("name") or item.get("key") or ""
 
     ##########################################################
 
@@ -429,6 +780,7 @@ class KnowledgePage(ctk.CTkFrame):
             item
         )
         self.load_items()
+        self.refresh_statistics()
         self.status.configure(
             text="Item saved."
         )
@@ -456,6 +808,7 @@ class KnowledgePage(ctk.CTkFrame):
         deleted_id = self.current_item_id
         self.new_item()
         self.load_items()
+        self.refresh_statistics()
         self.status.configure(
             text="Item deleted."
         )

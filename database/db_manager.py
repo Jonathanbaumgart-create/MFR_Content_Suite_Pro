@@ -244,6 +244,26 @@ class DatabaseManager:
 
             """)
 
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS knowledge_documents(
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            path TEXT,
+
+            filename TEXT,
+
+            sha256 TEXT UNIQUE,
+
+            imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+            summary TEXT
+
+        )
+
+        """)
+
         self._ensure_ai_analysis_columns(cur)
         self._ensure_media_intelligence_columns(cur)
         self._ensure_indexes(cur)
@@ -2022,6 +2042,84 @@ class DatabaseManager:
 
     ############################################################
 
+    def save_knowledge_document(self, document):
+
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        INSERT OR IGNORE INTO knowledge_documents(
+
+            path,
+
+            filename,
+
+            sha256,
+
+            summary
+
+        )
+
+        VALUES(?,?,?,?)
+
+        """,
+
+        (
+            document.get("path", ""),
+            document.get("filename", ""),
+            document.get("sha256", ""),
+            self._to_json(document.get("summary", {}))
+        ))
+
+        inserted = cur.rowcount > 0
+
+        conn.commit()
+
+        conn.close()
+
+        return inserted
+
+    ############################################################
+
+    def knowledge_document_count(self):
+
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        cur.execute("SELECT COUNT(*) FROM knowledge_documents")
+
+        count = cur.fetchone()[0]
+
+        conn.close()
+
+        return count
+
+    ############################################################
+
+    def knowledge_document_exists(self, sha256):
+
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        cur.execute(
+            "SELECT id FROM knowledge_documents WHERE sha256=?",
+            (
+                sha256,
+            )
+        )
+
+        exists = cur.fetchone() is not None
+
+        conn.close()
+
+        return exists
+
+    ############################################################
+
     def _intelligence_scalar_counts(self, field, filters):
 
         section_filters = dict(filters or {})
@@ -2458,7 +2556,8 @@ class DatabaseManager:
             "CREATE INDEX IF NOT EXISTS idx_annual_events_name ON annual_events(name)",
             "CREATE INDEX IF NOT EXISTS idx_locations_name ON locations(name)",
             "CREATE INDEX IF NOT EXISTS idx_response_area_name ON response_area(name)",
-            "CREATE INDEX IF NOT EXISTS idx_community_partners_name ON community_partners(name)"
+            "CREATE INDEX IF NOT EXISTS idx_community_partners_name ON community_partners(name)",
+            "CREATE INDEX IF NOT EXISTS idx_knowledge_documents_sha ON knowledge_documents(sha256)"
         )
 
         for statement in indexes:

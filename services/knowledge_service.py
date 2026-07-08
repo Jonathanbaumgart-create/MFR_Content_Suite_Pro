@@ -192,6 +192,52 @@ class KnowledgeService:
 
     ############################################################
 
+    def statistics(self):
+
+        counts = {
+            "programs": len(self.items("programs")),
+            "apparatus": len(self.items("apparatus")),
+            "events": len(self.items("annual_events")),
+            "partners": len(self.items("community_partners")),
+            "locations": (
+                len(self.items("locations")) +
+                len(self.items("response_area"))
+            ),
+            "documents_imported": self.db.knowledge_document_count()
+        }
+        required = (
+            "programs",
+            "apparatus",
+            "events",
+            "partners",
+            "locations"
+        )
+        complete = sum(
+            1
+            for key in required
+            if counts[key] > 0
+        )
+        counts["knowledge_completeness_score"] = int(
+            (complete / len(required)) * 100
+        )
+
+        return counts
+
+    ############################################################
+
+    def apply_import(self, import_result):
+
+        from services.knowledge_ingestion_service import KnowledgeIngestionService
+
+        service = KnowledgeIngestionService(
+            database=self.db,
+            knowledge_service=self
+        )
+
+        return service.apply_import(import_result)
+
+    ############################################################
+
     def label_for_opportunity(self, opportunity_type, fallback):
 
         program = self.program_for_opportunity(opportunity_type)
