@@ -430,9 +430,20 @@ class CommunicationsReasoningService:
         snapshot
     ):
 
-        base = int(candidate.get("intelligence_score") or 0) * 0.45
+        communications_score = int(candidate.get("communications_score") or 0)
+        intelligence_score = int(candidate.get("intelligence_score") or 0)
+        base = (
+            communications_score * 0.55
+            if communications_score
+            else intelligence_score * 0.45
+        )
         score = base
         reasons = []
+
+        if communications_score:
+            reasons.append(
+                f"communications score {communications_score}"
+            )
         terms = self._candidate_terms(candidate)
         profile_terms = {
             self._token(term)
@@ -517,6 +528,16 @@ class CommunicationsReasoningService:
             "score": scored["score"],
             "reason": "; ".join(scored.get("reasons") or ["strong stored intelligence"]),
             "intelligence_score": candidate.get("intelligence_score", 0),
+            "communications_score": candidate.get("communications_score", 0),
+            "storytelling_score": candidate.get("storytelling_score", 0),
+            "community_engagement_score": candidate.get("community_engagement_score", 0),
+            "educational_value_score": candidate.get("educational_value_score", 0),
+            "recruitment_value_score": candidate.get("recruitment_value_score", 0),
+            "trust_building_score": candidate.get("trust_building_score", 0),
+            "suggested_campaigns": candidate.get("suggested_campaigns", []),
+            "suggested_platform": candidate.get("suggested_platform", ""),
+            "suggested_time_of_year": candidate.get("suggested_time_of_year", ""),
+            "communications_reasoning": candidate.get("communications_reasoning", []),
             "community_score": candidate.get("community_score", 0),
             "recruitment_score": candidate.get("recruitment_score", 0),
             "education_score": candidate.get("education_score", 0),
@@ -598,10 +619,19 @@ class CommunicationsReasoningService:
 
         if media:
             top = media[0]
+
+            if top.get("communications_score"):
+                reasoning.append(
+                    f"Top media has a communications score of {top['communications_score']}."
+                )
+
             reasoning.append(
                 f"Top media has an intelligence score of {top['intelligence_score']}."
             )
             reasoning.append(top.get("reason", "Recommended media has strong intelligence signals."))
+
+            for item in top.get("communications_reasoning", [])[:2]:
+                reasoning.append(item)
 
             if top.get("community_score", 0) >= 70:
                 reasoning.append("Community interaction value is strong.")

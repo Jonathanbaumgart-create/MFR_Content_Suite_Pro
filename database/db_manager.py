@@ -166,6 +166,56 @@ class DatabaseManager:
 
             intelligence_score INTEGER,
 
+            communications_score INTEGER,
+
+            storytelling_score INTEGER,
+
+            community_engagement_score INTEGER,
+
+            educational_value_score INTEGER,
+
+            recruitment_value_score INTEGER,
+
+            recognition_value_score INTEGER,
+
+            emergency_response_value_score INTEGER,
+
+            public_education_value_score INTEGER,
+
+            seasonal_relevance_score INTEGER,
+
+            visual_impact_score INTEGER,
+
+            trust_building_score INTEGER,
+
+            emotional_impact_score INTEGER,
+
+            communications_category_scores TEXT,
+
+            platform_suitability TEXT,
+
+            evergreen_score INTEGER,
+
+            time_sensitive_score INTEGER,
+
+            historical_importance_score INTEGER,
+
+            uniqueness_score INTEGER,
+
+            posting_frequency_risk INTEGER,
+
+            suggested_campaigns TEXT,
+
+            suggested_audience TEXT,
+
+            suggested_platform TEXT,
+
+            suggested_time_of_year TEXT,
+
+            communications_reasoning TEXT,
+
+            communications_scored_at TIMESTAMP,
+
             generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
             source_model TEXT
@@ -1726,6 +1776,206 @@ class DatabaseManager:
 
     ############################################################
 
+    def save_communications_scores(self, media_id, scores):
+
+        conn = self.connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        UPDATE media_intelligence
+
+        SET
+            communications_score=?,
+            storytelling_score=?,
+            community_engagement_score=?,
+            educational_value_score=?,
+            recruitment_value_score=?,
+            recognition_value_score=?,
+            emergency_response_value_score=?,
+            public_education_value_score=?,
+            seasonal_relevance_score=?,
+            visual_impact_score=?,
+            trust_building_score=?,
+            emotional_impact_score=?,
+            communications_category_scores=?,
+            platform_suitability=?,
+            evergreen_score=?,
+            time_sensitive_score=?,
+            historical_importance_score=?,
+            uniqueness_score=?,
+            posting_frequency_risk=?,
+            suggested_campaigns=?,
+            suggested_audience=?,
+            suggested_platform=?,
+            suggested_time_of_year=?,
+            communications_reasoning=?,
+            communications_scored_at=CURRENT_TIMESTAMP
+
+        WHERE media_id=?
+
+        """,
+
+        (
+            self._to_int(scores.get("communications_score")),
+            self._to_int(scores.get("storytelling_score")),
+            self._to_int(scores.get("community_engagement_score")),
+            self._to_int(scores.get("educational_value_score")),
+            self._to_int(scores.get("recruitment_value_score")),
+            self._to_int(scores.get("recognition_value_score")),
+            self._to_int(scores.get("emergency_response_value_score")),
+            self._to_int(scores.get("public_education_value_score")),
+            self._to_int(scores.get("seasonal_relevance_score")),
+            self._to_int(scores.get("visual_impact_score")),
+            self._to_int(scores.get("trust_building_score")),
+            self._to_int(scores.get("emotional_impact_score")),
+            self._to_json(scores.get("communications_category_scores")),
+            self._to_json(scores.get("platform_suitability")),
+            self._to_int(scores.get("evergreen_score")),
+            self._to_int(scores.get("time_sensitive_score")),
+            self._to_int(scores.get("historical_importance_score")),
+            self._to_int(scores.get("uniqueness_score")),
+            self._to_int(scores.get("posting_frequency_risk")),
+            self._to_json(scores.get("suggested_campaigns")),
+            self._to_json(scores.get("suggested_audience")),
+            scores.get("suggested_platform", ""),
+            scores.get("suggested_time_of_year", ""),
+            self._to_json(scores.get("communications_reasoning")),
+            self._to_int(media_id)
+        ))
+
+        conn.commit()
+        conn.close()
+
+    ############################################################
+
+    def get_media_needing_communications_scores(self, limit=None):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+
+        sql = """
+
+        SELECT *
+
+        FROM media_intelligence
+
+        WHERE communications_score IS NULL
+
+        ORDER BY intelligence_score DESC, media_id ASC
+
+        """
+
+        params = []
+
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(
+                self._to_int(limit)
+            )
+
+        cur.execute(
+            sql,
+            params
+        )
+
+        rows = [
+            self._intelligence_from_row(row)
+            for row in cur.fetchall()
+        ]
+
+        conn.close()
+
+        return rows
+
+    ############################################################
+
+    def media_missing_communications_scores_count(self):
+
+        conn = self.connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        SELECT COUNT(*)
+
+        FROM media_intelligence
+
+        WHERE communications_score IS NULL
+
+        """)
+
+        count = cur.fetchone()[0]
+        conn.close()
+
+        return count
+
+    ############################################################
+
+    def communications_score_summary(self):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        SELECT
+            COUNT(*) AS scored_count,
+            AVG(communications_score) AS average_score
+
+        FROM media_intelligence
+
+        WHERE communications_score IS NOT NULL
+
+        """)
+
+        summary = cur.fetchone()
+
+        cur.execute("""
+
+        SELECT
+            media_intelligence.media_id,
+            media.filename,
+            media.path,
+            media_intelligence.communications_score
+
+        FROM media_intelligence
+
+        JOIN media
+        ON media.id = media_intelligence.media_id
+
+        WHERE media_intelligence.communications_score IS NOT NULL
+
+        ORDER BY media_intelligence.communications_score DESC,
+                 media.filename ASC
+
+        LIMIT 5
+
+        """)
+
+        highest = [
+            {
+                "media_id": row["media_id"],
+                "filename": row["filename"] or "",
+                "path": row["path"] or "",
+                "communications_score": row["communications_score"] or 0
+            }
+            for row in cur.fetchall()
+        ]
+
+        conn.close()
+
+        return {
+            "scored_count": summary["scored_count"] or 0,
+            "average_score": round(summary["average_score"] or 0, 1),
+            "highest_scoring_media": highest,
+            "missing_count": self.media_missing_communications_scores_count()
+        }
+
+    ############################################################
+
     def media_intelligence_exists(self, media_id):
 
         conn = self.connection()
@@ -2062,6 +2312,7 @@ class DatabaseManager:
         ON ai_analysis.media_id = media.id
 
         ORDER BY
+            media_intelligence.communications_score DESC,
             media_intelligence.intelligence_score DESC,
             media.filename ASC
 
@@ -3641,6 +3892,30 @@ class DatabaseManager:
                 "media_intelligence.intelligence_score DESC, "
                 "media.filename ASC"
             ),
+            "communications_score": (
+                "media_intelligence.communications_score DESC, "
+                "media.filename ASC"
+            ),
+            "storytelling": (
+                "media_intelligence.storytelling_score DESC, "
+                "media.filename ASC"
+            ),
+            "educational": (
+                "media_intelligence.educational_value_score DESC, "
+                "media.filename ASC"
+            ),
+            "recruitment": (
+                "media_intelligence.recruitment_value_score DESC, "
+                "media.filename ASC"
+            ),
+            "community_engagement": (
+                "media_intelligence.community_engagement_score DESC, "
+                "media.filename ASC"
+            ),
+            "trust_building": (
+                "media_intelligence.trust_building_score DESC, "
+                "media.filename ASC"
+            ),
             "newest": "media.date_added DESC",
             "oldest": "media.date_added ASC"
         }
@@ -3757,6 +4032,31 @@ class DatabaseManager:
             "recommended_uses": self._from_json(row["recommended_uses"]),
             "search_text": row["search_text"] or "",
             "intelligence_score": row["intelligence_score"] or 0,
+            "communications_score": row["communications_score"] or 0,
+            "storytelling_score": row["storytelling_score"] or 0,
+            "community_engagement_score": row["community_engagement_score"] or 0,
+            "educational_value_score": row["educational_value_score"] or 0,
+            "recruitment_value_score": row["recruitment_value_score"] or 0,
+            "recognition_value_score": row["recognition_value_score"] or 0,
+            "emergency_response_value_score": row["emergency_response_value_score"] or 0,
+            "public_education_value_score": row["public_education_value_score"] or 0,
+            "seasonal_relevance_score": row["seasonal_relevance_score"] or 0,
+            "visual_impact_score": row["visual_impact_score"] or 0,
+            "trust_building_score": row["trust_building_score"] or 0,
+            "emotional_impact_score": row["emotional_impact_score"] or 0,
+            "communications_category_scores": self._from_json(row["communications_category_scores"]),
+            "platform_suitability": self._from_json(row["platform_suitability"]),
+            "evergreen_score": row["evergreen_score"] or 0,
+            "time_sensitive_score": row["time_sensitive_score"] or 0,
+            "historical_importance_score": row["historical_importance_score"] or 0,
+            "uniqueness_score": row["uniqueness_score"] or 0,
+            "posting_frequency_risk": row["posting_frequency_risk"] or 0,
+            "suggested_campaigns": self._from_json(row["suggested_campaigns"]),
+            "suggested_audience": self._from_json(row["suggested_audience"]),
+            "suggested_platform": row["suggested_platform"] or "",
+            "suggested_time_of_year": row["suggested_time_of_year"] or "",
+            "communications_reasoning": self._from_json(row["communications_reasoning"]),
+            "communications_scored_at": row["communications_scored_at"] or "",
             "generated_at": row["generated_at"] or "",
             "source_model": row["source_model"] or ""
         }
@@ -3946,7 +4246,32 @@ class DatabaseManager:
         }
 
         additions = {
-            "source_model": "TEXT"
+            "source_model": "TEXT",
+            "communications_score": "INTEGER",
+            "storytelling_score": "INTEGER",
+            "community_engagement_score": "INTEGER",
+            "educational_value_score": "INTEGER",
+            "recruitment_value_score": "INTEGER",
+            "recognition_value_score": "INTEGER",
+            "emergency_response_value_score": "INTEGER",
+            "public_education_value_score": "INTEGER",
+            "seasonal_relevance_score": "INTEGER",
+            "visual_impact_score": "INTEGER",
+            "trust_building_score": "INTEGER",
+            "emotional_impact_score": "INTEGER",
+            "communications_category_scores": "TEXT",
+            "platform_suitability": "TEXT",
+            "evergreen_score": "INTEGER",
+            "time_sensitive_score": "INTEGER",
+            "historical_importance_score": "INTEGER",
+            "uniqueness_score": "INTEGER",
+            "posting_frequency_risk": "INTEGER",
+            "suggested_campaigns": "TEXT",
+            "suggested_audience": "TEXT",
+            "suggested_platform": "TEXT",
+            "suggested_time_of_year": "TEXT",
+            "communications_reasoning": "TEXT",
+            "communications_scored_at": "TIMESTAMP"
         }
 
         for name, definition in additions.items():
@@ -4023,6 +4348,12 @@ class DatabaseManager:
             "CREATE INDEX IF NOT EXISTS idx_intelligence_incident ON media_intelligence(incident_type)",
             "CREATE INDEX IF NOT EXISTS idx_intelligence_activity ON media_intelligence(primary_activity)",
             "CREATE INDEX IF NOT EXISTS idx_intelligence_score ON media_intelligence(intelligence_score)",
+            "CREATE INDEX IF NOT EXISTS idx_intelligence_comm_score ON media_intelligence(communications_score)",
+            "CREATE INDEX IF NOT EXISTS idx_intelligence_storytelling ON media_intelligence(storytelling_score)",
+            "CREATE INDEX IF NOT EXISTS idx_intelligence_education_value ON media_intelligence(educational_value_score)",
+            "CREATE INDEX IF NOT EXISTS idx_intelligence_recruitment_value ON media_intelligence(recruitment_value_score)",
+            "CREATE INDEX IF NOT EXISTS idx_intelligence_community_engagement ON media_intelligence(community_engagement_score)",
+            "CREATE INDEX IF NOT EXISTS idx_intelligence_trust ON media_intelligence(trust_building_score)",
             "CREATE INDEX IF NOT EXISTS idx_recommendation_history_media ON recommendation_history(media_id)",
             "CREATE INDEX IF NOT EXISTS idx_recommendation_history_date ON recommendation_history(recommendation_date)",
             "CREATE INDEX IF NOT EXISTS idx_recommendation_history_opportunity ON recommendation_history(opportunity)",

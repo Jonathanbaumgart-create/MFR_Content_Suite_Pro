@@ -30,6 +30,12 @@ class IntelligenceExplorerPage(ctk.CTkFrame):
         "Filename": "filename",
         "Date": "date",
         "Intelligence Score": "intelligence_score",
+        "Communications Score": "communications_score",
+        "Storytelling": "storytelling",
+        "Educational": "educational",
+        "Recruitment": "recruitment",
+        "Community Engagement": "community_engagement",
+        "Trust Building": "trust_building",
         "Newest": "newest",
         "Oldest": "oldest"
     }

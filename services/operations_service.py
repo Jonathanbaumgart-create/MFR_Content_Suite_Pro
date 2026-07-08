@@ -192,9 +192,14 @@ class OperationsService:
             "unused_high_value_media",
             []
         )
+        score_summary = self.db.communications_score_summary()
         intelligence_count = insights.get(
             "media_with_intelligence",
             0
+        )
+        score_coverage = self._percentage(
+            score_summary.get("scored_count", 0),
+            intelligence_count
         )
 
         return {
@@ -211,7 +216,15 @@ class OperationsService:
                 if gap.get("severity") in ("High", "Medium") or gap.get("count", 0) < 3
             ],
             "high_value_unused_media_count": len(unused),
-            "recommendation_history_count": self.db.recommendation_history_count()
+            "recommendation_history_count": self.db.recommendation_history_count(),
+            "average_communications_score": score_summary.get("average_score", 0),
+            "highest_scoring_media": score_summary.get("highest_scoring_media", []),
+            "media_missing_communications_scores": score_summary.get("missing_count", 0),
+            "communications_readiness": (
+                "Ready"
+                if score_coverage >= 80
+                else f"Scoring {score_coverage}% complete"
+            )
         }
 
     ############################################################
@@ -263,6 +276,11 @@ class OperationsService:
 
         if communications.get("content_gaps"):
             items.append("Content gaps detected")
+
+        if communications.get("media_missing_communications_scores", 0):
+            items.append(
+                f"{communications['media_missing_communications_scores']} media intelligence rows need communications scoring"
+            )
 
         if queue.get("failed_jobs", 0):
             items.append(

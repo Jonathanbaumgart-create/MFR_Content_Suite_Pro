@@ -143,6 +143,34 @@ class MediaIntelligenceService:
             intelligence
         )
 
+        try:
+            from services.communications_memory_service import CommunicationsMemoryService
+            from services.communications_scoring_service import (
+                CommunicationsScoringService
+            )
+            from services.recommendation_learning_service import (
+                RecommendationLearningService
+            )
+
+            CommunicationsScoringService(
+                database=self.db,
+                memory_service=CommunicationsMemoryService(database=self.db),
+                learning_service=RecommendationLearningService(database=self.db)
+            ).score_and_save(
+                media_id
+            )
+
+        except Exception as ex:
+            logger.error(
+                "Communications scoring failed media_id=%s",
+                media_id,
+                exc_info=(
+                    type(ex),
+                    ex,
+                    ex.__traceback__
+                )
+            )
+
         return self.db.get_media_intelligence(media_id)
 
     ############################################################

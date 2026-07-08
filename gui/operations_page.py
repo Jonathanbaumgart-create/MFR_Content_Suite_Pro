@@ -317,11 +317,29 @@ class OperationsPage(ctk.CTkFrame):
         return [
             f"Today's brief status: {data['todays_brief_status']}",
             f"Recommendations generated: {data['recommendations_generated']}",
+            f"Average Communications Score: {data.get('average_communications_score', 0)}",
+            f"Media Missing Communications Scores: {data.get('media_missing_communications_scores', 0)}",
+            f"Communications Readiness: {data.get('communications_readiness', '')}",
+            "Highest Scoring Media: " + self.highest_media_text(data),
             f"Content gaps: {len(data.get('content_gaps') or [])}",
             "Weak areas: " + (", ".join(weak[:5]) if weak else "None"),
             f"High-value unused media count: {data['high_value_unused_media_count']}",
             f"Recommendation history count: {data['recommendation_history_count']}"
         ]
+
+    ##########################################################
+
+    def highest_media_text(self, data):
+
+        rows = data.get("highest_scoring_media") or []
+
+        if not rows:
+            return "None"
+
+        return ", ".join(
+            f"{row['filename']} ({row['communications_score']})"
+            for row in rows[:3]
+        )
 
     ##########################################################
 

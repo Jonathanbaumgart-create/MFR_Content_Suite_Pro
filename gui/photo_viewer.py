@@ -324,6 +324,16 @@ class PhotoViewer(ctk.CTkToplevel):
                 ] + intelligence_lines
             )
 
+        communications_lines = self.communications_intelligence_lines()
+
+        if communications_lines:
+            lines.extend(
+                [
+                    "",
+                    "Communications Intelligence"
+                ] + communications_lines
+            )
+
         self.analysis_text.configure(state="normal")
         self.analysis_text.delete("1.0", "end")
         self.analysis_text.insert("1.0", "\n".join(lines))
@@ -394,6 +404,15 @@ class PhotoViewer(ctk.CTkToplevel):
 
     ##########################################################
 
+    def format_label(self, value):
+
+        return str(value or "").replace(
+            "_",
+            " "
+        ).title()
+
+    ##########################################################
+
     def update_mock_notice(self, analysis=None):
 
         provider = ""
@@ -440,5 +459,59 @@ class PhotoViewer(ctk.CTkToplevel):
                 self.format_list(
                     self.intelligence.get("recommended_uses")
                 )
+            )
+        ]
+
+    ##########################################################
+
+    def communications_intelligence_lines(self):
+
+        if not self.intelligence:
+            return []
+
+        if not self.intelligence.get("communications_score"):
+            return []
+
+        categories = self.intelligence.get("communications_category_scores") or {}
+        platforms = self.intelligence.get("platform_suitability") or {}
+        category_lines = [
+            f"{self.format_label(key)}: {value}"
+            for key, value in sorted(
+                categories.items(),
+                key=lambda item: item[1],
+                reverse=True
+            )[:6]
+        ]
+        platform_lines = [
+            f"{self.format_label(key)}: {value}"
+            for key, value in sorted(
+                platforms.items(),
+                key=lambda item: item[1],
+                reverse=True
+            )
+        ]
+
+        return [
+            f"Overall Score: {self.intelligence.get('communications_score', 0)}",
+            "Category Breakdown: " + self.format_list(category_lines),
+            (
+                "Suggested Campaigns: " +
+                self.format_list(self.intelligence.get("suggested_campaigns"))
+            ),
+            (
+                "Suggested Platforms: " +
+                self.format_list(platform_lines)
+            ),
+            (
+                "Suggested Audience: " +
+                self.format_list(self.intelligence.get("suggested_audience"))
+            ),
+            (
+                "Suggested Time of Year: " +
+                str(self.intelligence.get("suggested_time_of_year", ""))
+            ),
+            (
+                "Reasoning: " +
+                self.format_list(self.intelligence.get("communications_reasoning"))
             )
         ]
