@@ -1,5 +1,6 @@
 from config.ai_config import AI_CONFIG
 from core.app_context import context
+from services.ai_settings_service import AISettingsService
 from services.communications_director import CommunicationsDirector
 from services.communications_reasoning_service import CommunicationsReasoningService
 from services.knowledge_service import KnowledgeService
@@ -33,6 +34,9 @@ class OperationsService:
             database=self.db,
             director=self.director,
             knowledge_service=self.knowledge
+        )
+        self.ai_settings = AISettingsService(
+            base_config=AI_CONFIG
         )
 
     ############################################################
@@ -119,28 +123,41 @@ class OperationsService:
 
     def provider_health(self):
 
-        active = AI_CONFIG.get(
+        config = self.ai_settings.effective_config()
+        active = config.get(
             "default_provider",
             "mock"
         )
+        configured_model = config.get("providers", {}).get(
+            active,
+            {}
+        ).get("model", "")
         failure = self.db.last_provider_failure()
         success = self.db.last_successful_analysis()
         warning = ""
+        recommended = ""
 
         if active == "mock":
             warning = "Mock provider active - test data only"
+            recommended = "Switch to ollama for real image analysis when Ollama diagnostics pass."
 
         status = "Mock testing only" if active == "mock" else "Ready"
 
         if failure and not success:
             status = "Provider failures detected"
+            recommended = (
+                "Run Provider Diagnostics, try CPU mode, try a smaller "
+                "vision model, or keep mock active for testing."
+            )
 
         return {
             "active_provider": active,
+            "configured_model": configured_model,
             "mock_warning": warning,
             "last_provider_failure": failure,
             "last_successful_analysis": success,
-            "provider_status": status
+            "provider_status": status,
+            "recommended_action": recommended
         }
 
     ############################################################

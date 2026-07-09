@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 import requests
 
 from config.ai_config import AI_CONFIG
+from services.ai_settings_service import AISettingsService
 from services.logging_service import LoggingService
 
 
@@ -148,16 +149,47 @@ class VisionService:
         self,
         provider: VisionProvider | None = None,
         config=None,
-        registry=None
+        registry=None,
+        settings_service=None
     ):
 
-        self.config = config or AI_CONFIG
+        self.settings_service = settings_service or AISettingsService(
+            base_config=config or AI_CONFIG
+        )
+        self.config = self.settings_service.effective_config()
         self.registry = registry or self._default_registry()
+        self._provider_key = self.config.get(
+            "default_provider",
+            "ollama"
+        )
         self._provider = provider or self._provider_from_config()
 
     def set_provider(self, provider: VisionProvider):
 
         self._provider = provider
+
+    def switch_provider(self, provider_key, model=None):
+
+        self.config = self.settings_service.save(
+            provider=provider_key,
+            vision_model=model
+        )
+        self._provider_key = self.config.get(
+            "default_provider",
+            provider_key
+        )
+        self._provider = self._provider_from_config()
+
+        logger.info(
+            "Vision provider switched provider=%s model=%s",
+            self._provider_key,
+            self.model_name()
+        )
+
+        return {
+            "provider": self._provider_key,
+            "model": self.model_name()
+        }
 
     def analyze(self, image_path: str) -> str:
 
@@ -169,15 +201,27 @@ class VisionService:
 
     def provider_key(self):
 
-        return self.config.get("default_provider", "ollama")
+        return self._provider_key
 
     def model_name(self):
 
         return self._provider.model_name()
 
+    def available_providers(self):
+
+        return self.registry.names()
+
+    def provider_settings(self):
+
+        return self.config.get("providers", {}).get(
+            self._provider_key,
+            {}
+        )
+
     def _provider_from_config(self):
 
         provider_name = self.config.get("default_provider", "ollama")
+        self._provider_key = provider_name
         provider_settings = self.config.get("providers", {}).get(
             provider_name,
             {}

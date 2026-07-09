@@ -248,16 +248,12 @@ class GalleryPage(ctk.CTkFrame):
 
     def analyze_selected(self):
 
-        if self.brain.is_mock_provider():
+        warning = self.brain.provider_bulk_warning()
 
+        if warning:
             if not messagebox.askyesno(
-                "Mock Provider Active",
-                (
-                    "Mock provider active - test data only.\n\n"
-                    "Selected-photo analysis will save the same test "
-                    "analysis for each photo that does not already have "
-                    "real analysis. Continue?"
-                )
+                "Confirm AI Analysis",
+                warning + "\n\nContinue?"
             ):
                 return
 

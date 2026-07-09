@@ -2,6 +2,7 @@ import customtkinter as ctk
 from tkinter import messagebox
 
 from services.brain_service import BrainService
+from services.provider_diagnostics_service import ProviderDiagnosticsService
 
 
 class AIDashboardPage(ctk.CTkFrame):
@@ -11,7 +12,11 @@ class AIDashboardPage(ctk.CTkFrame):
         super().__init__(parent)
 
         self.brain = BrainService()
+        self.diagnostics = ProviderDiagnosticsService()
         self.metric_labels = {}
+        self.provider_var = ctk.StringVar(
+            value=self.brain.vision.provider_key()
+        )
 
         self.build_page()
         self.refresh_metrics()
@@ -56,6 +61,8 @@ class AIDashboardPage(ctk.CTkFrame):
         )
 
         self.create_metrics()
+        self.create_provider_controls()
+        self.create_diagnostics()
         self.create_controls()
         self.create_bulk_controls()
 
@@ -160,6 +167,258 @@ class AIDashboardPage(ctk.CTkFrame):
                 side="left",
                 padx=(0, 10)
             )
+
+    ##########################################################
+
+    def create_provider_controls(self):
+
+        panel = ctk.CTkFrame(self)
+
+        panel.pack(
+            fill="x",
+            padx=20,
+            pady=(5, 10)
+        )
+
+        heading = ctk.CTkLabel(
+            panel,
+            text="Provider Settings",
+            font=("Segoe UI", 18, "bold")
+        )
+
+        heading.pack(
+            anchor="w",
+            padx=15,
+            pady=(15, 8)
+        )
+
+        row = ctk.CTkFrame(
+            panel,
+            fg_color="transparent"
+        )
+
+        row.pack(
+            fill="x",
+            padx=15,
+            pady=(0, 12)
+        )
+
+        providers = self.brain.available_providers()
+
+        self.provider_menu = ctk.CTkOptionMenu(
+            row,
+            values=providers,
+            variable=self.provider_var
+        )
+
+        self.provider_menu.pack(
+            side="left",
+            padx=(0, 10)
+        )
+
+        self.model_entry = ctk.CTkEntry(
+            row,
+            width=260,
+            placeholder_text="Ollama vision model"
+        )
+        self.model_entry.insert(
+            0,
+            self.brain.vision.model_name()
+        )
+
+        self.model_entry.pack(
+            side="left",
+            padx=(0, 10)
+        )
+
+        apply_button = ctk.CTkButton(
+            row,
+            text="Apply Provider",
+            command=self.apply_provider_settings
+        )
+
+        apply_button.pack(
+            side="left",
+            padx=(0, 10)
+        )
+
+        diagnostics_button = ctk.CTkButton(
+            row,
+            text="Run Diagnostics",
+            command=self.run_provider_diagnostics
+        )
+
+        diagnostics_button.pack(
+            side="left"
+        )
+
+        guidance = ctk.CTkLabel(
+            panel,
+            text=(
+                "If qwen2.5vl crashes with CUDA, try CPU mode, try a "
+                "smaller vision model, or keep mock active for testing."
+            ),
+            justify="left",
+            wraplength=1100,
+            text_color="#f5c542"
+        )
+
+        guidance.pack(
+            anchor="w",
+            padx=15,
+            pady=(0, 12)
+        )
+
+    ##########################################################
+
+    def create_diagnostics(self):
+
+        panel = ctk.CTkFrame(self)
+
+        panel.pack(
+            fill="x",
+            padx=20,
+            pady=(0, 10)
+        )
+
+        heading = ctk.CTkLabel(
+            panel,
+            text="Provider Diagnostics",
+            font=("Segoe UI", 18, "bold")
+        )
+
+        heading.pack(
+            anchor="w",
+            padx=15,
+            pady=(15, 8)
+        )
+
+        self.diagnostics_text = ctk.CTkTextbox(
+            panel,
+            height=150,
+            wrap="word"
+        )
+
+        self.diagnostics_text.pack(
+            fill="x",
+            padx=15,
+            pady=(0, 15)
+        )
+        self.set_diagnostics_text(
+            "Diagnostics have not been run yet."
+        )
+
+    ##########################################################
+
+    def apply_provider_settings(self):
+
+        provider = self.provider_var.get()
+        model = self.model_entry.get().strip()
+
+        if provider == "ollama" and not model:
+            self.status.configure(
+                text="Enter an Ollama vision model before switching."
+            )
+            return
+
+        result = self.brain.switch_provider(
+            provider,
+            model=model
+        )
+        self.diagnostics = ProviderDiagnosticsService()
+
+        self.status.configure(
+            text=(
+                f"Provider set to {result['provider']} "
+                f"({result['model']})"
+            )
+        )
+        self.refresh_metrics()
+
+    ##########################################################
+
+    def run_provider_diagnostics(self):
+
+        self.status.configure(
+            text="Running provider diagnostics..."
+        )
+        self.set_diagnostics_text(
+            "Checking provider. The app remains usable while diagnostics run..."
+        )
+
+        self.brain.jobs.submit(
+            self.diagnostics.run,
+            callback=self.diagnostics_complete,
+            error_callback=self.diagnostics_failed
+        )
+
+    ##########################################################
+
+    def diagnostics_complete(self, result):
+
+        self.after(
+            0,
+            lambda: self.show_diagnostics_result(result)
+        )
+
+    ##########################################################
+
+    def diagnostics_failed(self, error):
+
+        self.after(
+            0,
+            lambda: self.set_diagnostics_text(
+                f"Diagnostics failed: {error}"
+            )
+        )
+
+    ##########################################################
+
+    def show_diagnostics_result(self, result):
+
+        self.set_diagnostics_text(
+            self.format_diagnostics(result)
+        )
+        self.status.configure(
+            text=f"Diagnostics: {result.get('provider_status', '')}"
+        )
+        self.refresh_metrics()
+
+    ##########################################################
+
+    def set_diagnostics_text(self, text):
+
+        self.diagnostics_text.configure(state="normal")
+        self.diagnostics_text.delete("1.0", "end")
+        self.diagnostics_text.insert("1.0", text)
+        self.diagnostics_text.configure(state="disabled")
+
+    ##########################################################
+
+    def format_diagnostics(self, result):
+
+        models = result.get("available_models") or []
+
+        return "\n".join(
+            [
+                f"Active provider: {result.get('active_provider', '')}",
+                f"Configured model: {result.get('configured_model', '')}",
+                "Available Ollama models: " + (
+                    ", ".join(models)
+                    if models
+                    else "None detected"
+                ),
+                f"Ollama reachable: {result.get('ollama_reachable')}",
+                f"Configured model present: {result.get('configured_model_present')}",
+                f"Simple text call: {result.get('simple_text_call')}",
+                f"Vision model call: {result.get('vision_model_call')}",
+                f"Status: {result.get('provider_status', '')}",
+                f"Last error: {result.get('last_error', '') or 'None'}",
+                f"GPU/CPU notes: {result.get('gpu_cpu_notes', '')}",
+                f"Recommended fix: {result.get('recommended_action', '')}",
+                result.get("mock_warning", "")
+            ]
+        )
 
     ##########################################################
 
@@ -282,7 +541,7 @@ class AIDashboardPage(ctk.CTkFrame):
             )
             return
 
-        if not self.confirm_mock_bulk_analysis():
+        if not self.confirm_bulk_analysis():
             return
 
         futures = self.brain.analyze_folder(
@@ -298,7 +557,7 @@ class AIDashboardPage(ctk.CTkFrame):
 
     def analyze_library(self):
 
-        if not self.confirm_mock_bulk_analysis():
+        if not self.confirm_bulk_analysis():
             return
 
         futures = self.brain.analyze_entire_library(
@@ -350,18 +609,16 @@ class AIDashboardPage(ctk.CTkFrame):
 
     ##########################################################
 
-    def confirm_mock_bulk_analysis(self):
+    def confirm_bulk_analysis(self):
 
-        if not self.brain.is_mock_provider():
+        warning = self.brain.provider_bulk_warning()
+
+        if not warning:
             return True
 
         return messagebox.askyesno(
-            "Mock Provider Active",
-            (
-                "Mock provider active - test data only.\n\n"
-                "Bulk analysis will save the same test analysis for each "
-                "photo that does not already have real analysis. Continue?"
-            )
+            "Confirm AI Analysis",
+            warning + "\n\nContinue?"
         )
 
     ##########################################################

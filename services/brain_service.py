@@ -74,6 +74,52 @@ class BrainService:
 
     ############################################################
 
+    def available_providers(self):
+
+        return self.vision.available_providers()
+
+    ############################################################
+
+    def switch_provider(self, provider_key, model=None):
+
+        return self.vision.switch_provider(
+            provider_key,
+            model=model
+        )
+
+    ############################################################
+
+    def provider_bulk_warning(self):
+
+        if self.is_mock_provider():
+            return (
+                "Mock provider active - test data only.\n\n"
+                "Bulk analysis will save the same test analysis for each "
+                "photo that does not already have real analysis."
+            )
+
+        failure = self.db.last_provider_failure()
+
+        if not failure:
+            return ""
+
+        if failure.get("provider") != self.vision.provider_key():
+            return ""
+
+        if failure.get("model") and failure.get("model") != self.vision.model_name():
+            return ""
+
+        return (
+            "The active real provider has a recent recorded failure.\n\n"
+            f"Provider: {failure.get('provider', '')}\n"
+            f"Model: {failure.get('model', '')}\n"
+            f"Last error: {failure.get('failure_reason', '')}\n\n"
+            "Run Provider Diagnostics first, try CPU mode, try a smaller "
+            "vision model, or switch to mock for testing."
+        )
+
+    ############################################################
+
     def clear_mock_analysis(self):
 
         return self.db.clear_mock_analysis()

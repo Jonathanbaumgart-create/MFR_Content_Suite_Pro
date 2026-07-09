@@ -273,6 +273,7 @@ class OperationsPage(ctk.CTkFrame):
         success = data.get("last_successful_analysis") or {}
         lines = [
             f"Active provider: {data['active_provider']}",
+            f"Configured model: {data.get('configured_model', '')}",
             f"Provider status: {data['provider_status']}",
             data.get("mock_warning", ""),
             "Last provider failure: " + (
@@ -284,6 +285,9 @@ class OperationsPage(ctk.CTkFrame):
                 success.get("last_analyzed", "None")
                 if success
                 else "None"
+            ),
+            "Recommended action: " + (
+                data.get("recommended_action") or "None"
             )
         ]
 
