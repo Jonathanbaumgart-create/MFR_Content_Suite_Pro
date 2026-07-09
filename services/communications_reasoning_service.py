@@ -911,11 +911,44 @@ class CommunicationsReasoningService:
         ):
             values.extend(candidate.get(key) or [])
 
+        fire_service = self._fire_service_intelligence(
+            candidate.get("media_id")
+        )
+
+        if fire_service:
+            for key in (
+                "incident_classification",
+                "operational_activity",
+                "group_size"
+            ):
+                values.append(fire_service.get(key, ""))
+
+            for key in (
+                "ppe",
+                "equipment",
+                "apparatus",
+                "communications_uses"
+            ):
+                values.extend(fire_service.get(key) or [])
+
         return {
             self._token(value)
             for value in values
             if value
         }
+
+    ############################################################
+
+    def _fire_service_intelligence(self, media_id):
+
+        if not media_id or not self.db:
+            return None
+
+        try:
+            return self.db.get_fire_service_intelligence(media_id)
+
+        except Exception:
+            return None
 
     ############################################################
 

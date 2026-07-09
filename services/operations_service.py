@@ -81,6 +81,7 @@ class OperationsService:
         total = self.db.media_count()
         analyzed = self.db.analyzed_media_count()
         intelligence = self.db.media_intelligence_count()
+        fire_service = self.db.fire_service_intelligence_count()
         unanalyzed = self.db.media_needing_analysis_count()
         missing_intelligence = self.db.media_needing_intelligence_count()
 
@@ -88,6 +89,15 @@ class OperationsService:
             "total_media_scanned": total,
             "ai_analyzed_count": analyzed,
             "media_intelligence_count": intelligence,
+            "fire_service_intelligence_count": fire_service,
+            "fire_service_unknown_count": self.db.fire_service_unknown_count(),
+            "top_fire_service_incident_types": self.db.fire_service_top_values(
+                "incident_classification",
+                limit=5
+            ),
+            "top_fire_service_opportunities": (
+                self.db.fire_service_top_communications_uses(limit=5)
+            ),
             "unanalyzed_count": unanalyzed,
             "intelligence_missing_count": missing_intelligence,
             "analysis_coverage_percentage": self._percentage(
@@ -268,6 +278,11 @@ class OperationsService:
         if library.get("intelligence_missing_count", 0):
             items.append(
                 f"{library['intelligence_missing_count']} analyzed media items need intelligence indexing"
+            )
+
+        if library.get("fire_service_unknown_count", 0):
+            items.append(
+                f"{library['fire_service_unknown_count']} media items have unknown fire-service classifications"
             )
 
         if provider.get("last_provider_failure"):

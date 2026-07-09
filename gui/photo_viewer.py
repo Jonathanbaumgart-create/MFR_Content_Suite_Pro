@@ -28,6 +28,7 @@ class PhotoViewer(ctk.CTkToplevel):
         self.brain = BrainService()
         self.analysis = None
         self.intelligence = None
+        self.fire_service_intelligence = None
 
         self.build_ui()
         self.load_analysis()
@@ -268,6 +269,9 @@ class PhotoViewer(ctk.CTkToplevel):
 
         self.analysis = analysis
         self.intelligence = self.brain.get_intelligence(self.media_id)
+        self.fire_service_intelligence = (
+            self.brain.get_fire_service_intelligence(self.media_id)
+        )
         self.update_mock_notice(analysis)
 
         failure = analysis.get("failure_reason", "")
@@ -332,6 +336,16 @@ class PhotoViewer(ctk.CTkToplevel):
                     "",
                     "Communications Intelligence"
                 ] + communications_lines
+            )
+
+        fire_service_lines = self.fire_service_intelligence_lines()
+
+        if fire_service_lines:
+            lines.extend(
+                [
+                    "",
+                    "Fire Service Intelligence"
+                ] + fire_service_lines
             )
 
         self.analysis_text.configure(state="normal")
@@ -513,5 +527,44 @@ class PhotoViewer(ctk.CTkToplevel):
             (
                 "Reasoning: " +
                 self.format_list(self.intelligence.get("communications_reasoning"))
+            )
+        ]
+
+    ##########################################################
+
+    def fire_service_intelligence_lines(self):
+
+        fire_service = getattr(
+            self,
+            "fire_service_intelligence",
+            None
+        )
+
+        if not fire_service:
+            return []
+
+        personnel = fire_service.get("personnel") or {}
+
+        return [
+            f"Incident: {fire_service.get('incident_classification', '')}",
+            f"Activity: {fire_service.get('operational_activity', '')}",
+            (
+                "Personnel: " +
+                f"firefighters {fire_service.get('firefighter_count', 0)}, " +
+                f"civilians {fire_service.get('civilian_count', 0)}, " +
+                f"group {fire_service.get('group_size', '')}, " +
+                f"officer {'yes' if fire_service.get('officer_presence') else 'unknown'}, " +
+                f"children {'yes' if fire_service.get('children_present') else 'unknown'}"
+            ),
+            "PPE: " + self.format_list(fire_service.get("ppe")),
+            "Equipment: " + self.format_list(fire_service.get("equipment")),
+            "Apparatus: " + self.format_list(fire_service.get("apparatus")),
+            (
+                "Communications Uses: " +
+                self.format_list(fire_service.get("communications_uses"))
+            ),
+            (
+                "Reasoning: " +
+                self.format_list(fire_service.get("reasoning"))
             )
         ]

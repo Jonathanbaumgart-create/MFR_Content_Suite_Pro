@@ -23,6 +23,7 @@ class MediaIntelligenceService:
             analysis.get("apparatus"),
             text,
             {
+                "apparatus": ("apparatus", "fire apparatus"),
                 "engine": ("engine", "pumper", "truck"),
                 "ladder": ("ladder truck", "aerial", "platform"),
                 "rescue": ("rescue", "squad"),
@@ -39,6 +40,10 @@ class MediaIntelligenceService:
                 "hose": ("hose", "attack line", "supply line"),
                 "ladder": ("ladder",),
                 "scba": ("scba", "air pack"),
+                "ppe": ("ppe", "personal protective equipment"),
+                "rope": ("rope", "rope rescue"),
+                "rescue_equipment": ("rescue equipment", "rescue gear"),
+                "training_tower": ("training tower",),
                 "nozzle": ("nozzle",),
                 "hydrant": ("hydrant",),
                 "extrication_tools": ("extrication", "jaws", "cutter"),
@@ -52,6 +57,7 @@ class MediaIntelligenceService:
             {
                 "helmet": ("helmet",),
                 "turnout_gear": ("turnout", "bunker gear"),
+                "ppe": ("ppe", "personal protective equipment"),
                 "scba": ("scba", "air pack"),
                 "gloves": ("gloves",),
                 "boots": ("boots",),
@@ -62,7 +68,8 @@ class MediaIntelligenceService:
         normalized_scene = self._scene(analysis, text)
         incident_type = self._incident_type(text, normalized_scene)
         primary_activity = self._primary_activity(analysis, text)
-        people_tags = self._people_tags(analysis.get("people_count"))
+        people_count = self._effective_people_count(analysis, text)
+        people_tags = self._people_tags(people_count)
         content_tags = self._content_tags(
             analysis,
             text,
@@ -142,6 +149,30 @@ class MediaIntelligenceService:
             media_id,
             intelligence
         )
+
+        try:
+            from services.fire_service_intelligence_service import (
+                FireServiceIntelligenceService
+            )
+
+            FireServiceIntelligenceService(
+                database=self.db
+            ).generate_and_save(
+                media_id,
+                analysis,
+                media_intelligence=intelligence
+            )
+
+        except Exception as ex:
+            logger.error(
+                "Fire service intelligence failed media_id=%s",
+                media_id,
+                exc_info=(
+                    type(ex),
+                    ex,
+                    ex.__traceback__
+                )
+            )
 
         try:
             from services.communications_memory_service import CommunicationsMemoryService
@@ -230,10 +261,11 @@ class MediaIntelligenceService:
 
         scene = self._slug(analysis.get("scene_type"))
 
-        if scene:
+        if self._known(scene):
             return scene
 
         rules = (
+            ("training_tower", ("training tower",)),
             ("training", ("training", "drill", "exercise")),
             ("public_education", ("education", "school", "prevention")),
             ("community", ("community", "parade", "open house", "event")),
@@ -276,10 +308,12 @@ class MediaIntelligenceService:
 
         activity = self._slug(analysis.get("activity"))
 
-        if activity:
+        if self._known(activity):
             return activity
 
         rules = (
+            ("rope_rescue_training", ("rope rescue training", "rope training")),
+            ("hose_line_training", ("hose line training", "hose-line training")),
             ("fire_suppression", ("fire suppression", "attack line", "extinguish")),
             ("ventilation", ("ventilation", "venting")),
             ("search_and_rescue", ("search", "rescue")),
@@ -291,7 +325,7 @@ class MediaIntelligenceService:
             ("recruitment", ("recruit", "join", "volunteer"))
         )
 
-        return self._first_match(text, rules, "unspecified")
+        return self._first_match(text, rules, "unknown")
 
     ############################################################
 
@@ -328,6 +362,24 @@ class MediaIntelligenceService:
 
         if "safety" in words:
             tags.append("safety")
+
+        term_rules = (
+            ("firefighter", ("firefighter", "firefighters")),
+            ("helmet", ("helmet",)),
+            ("scba", ("scba", "air pack")),
+            ("ppe", ("ppe", "turnout", "bunker gear")),
+            ("ladder", ("ladder",)),
+            ("hose", ("hose", "attack line", "supply line")),
+            ("rope", ("rope",)),
+            ("training_tower", ("training tower",)),
+            ("apparatus", ("apparatus", "engine", "pumper", "truck")),
+            ("rescue_equipment", ("rescue equipment", "rescue gear"))
+        )
+
+        for tag, terms in term_rules:
+
+            if any(term in text for term in terms):
+                tags.append(tag)
 
         return self._unique(tags)
 
@@ -406,15 +458,15 @@ class MediaIntelligenceService:
         count = self._to_int(people_count)
 
         if count <= 0:
-            return ["no_people"]
+            return ["unknown_people"]
 
         if count <= 2:
-            return ["small_group"]
+            return ["people", "small_group"]
 
         if count <= 6:
-            return ["crew"]
+            return ["people", "crew"]
 
-        return ["large_group"]
+        return ["people", "large_group"]
 
     ############################################################
 
@@ -526,7 +578,43 @@ class MediaIntelligenceService:
 
     def _to_int(self, value):
 
+        if isinstance(value, str):
+            match = re.search(r"-?\d+", value)
+
+            if match:
+                value = match.group(0)
+
         try:
             return int(value)
         except Exception:
             return 0
+
+    ############################################################
+
+    def _effective_people_count(self, analysis, text):
+
+        count = self._to_int(analysis.get("people_count"))
+
+        if count > 0:
+            return count
+
+        if re.search(r"\b(firefighter|firefighters|person|people|crew member)\b", text):
+            return 1
+
+        return count
+
+    ############################################################
+
+    def _known(self, value):
+
+        return value not in (
+            "",
+            "none",
+            "no",
+            "n_a",
+            "na",
+            "null",
+            "unknown",
+            "unspecified",
+            "not_applicable"
+        )

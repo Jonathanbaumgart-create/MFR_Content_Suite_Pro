@@ -1,6 +1,7 @@
 import sqlite3
 from pathlib import Path
 import json
+import re
 
 from services.logging_service import LoggingService
 
@@ -215,6 +216,50 @@ class DatabaseManager:
             communications_reasoning TEXT,
 
             communications_scored_at TIMESTAMP,
+
+            generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+            source_model TEXT
+
+        )
+
+        """)
+
+        ########################################################
+        # Fire Service Intelligence
+        ########################################################
+
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS fire_service_intelligence(
+
+            media_id INTEGER PRIMARY KEY,
+
+            firefighter_count INTEGER,
+
+            civilian_count INTEGER,
+
+            officer_presence INTEGER,
+
+            children_present INTEGER,
+
+            group_size TEXT,
+
+            personnel TEXT,
+
+            ppe TEXT,
+
+            equipment TEXT,
+
+            apparatus TEXT,
+
+            incident_classification TEXT,
+
+            operational_activity TEXT,
+
+            communications_uses TEXT,
+
+            reasoning TEXT,
 
             generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
@@ -1618,6 +1663,23 @@ class DatabaseManager:
 
         cur.execute("""
 
+        DELETE FROM fire_service_intelligence
+
+        WHERE source_model LIKE 'mock%'
+        OR media_id IN (
+            SELECT media_id
+            FROM ai_analysis
+            WHERE provider='mock'
+            OR model LIKE 'mock%'
+            OR description LIKE 'MOCK TEST ANALYSIS%'
+        )
+
+        """)
+
+        fire_service_deleted = cur.rowcount
+
+        cur.execute("""
+
         DELETE FROM media_intelligence
 
         WHERE source_model LIKE 'mock%'
@@ -1650,14 +1712,16 @@ class DatabaseManager:
         conn.close()
 
         logger.info(
-            "Cleared mock analysis rows analysis=%s intelligence=%s",
+            "Cleared mock analysis rows analysis=%s intelligence=%s fire_service=%s",
             analysis_deleted,
-            intelligence_deleted
+            intelligence_deleted,
+            fire_service_deleted
         )
 
         return {
             "analysis_deleted": analysis_deleted,
-            "intelligence_deleted": intelligence_deleted
+            "intelligence_deleted": intelligence_deleted,
+            "fire_service_deleted": fire_service_deleted
         }
 
     ############################################################
@@ -1772,7 +1836,238 @@ class DatabaseManager:
         if row is None:
             return None
 
-        return self._intelligence_from_row(row)
+        intelligence = self._intelligence_from_row(row)
+        intelligence["fire_service_intelligence"] = (
+            self.get_fire_service_intelligence(media_id)
+        )
+
+        return intelligence
+
+    ############################################################
+
+    def save_fire_service_intelligence(self, media_id, intelligence):
+
+        conn = self.connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        INSERT OR REPLACE INTO fire_service_intelligence(
+
+            media_id,
+
+            firefighter_count,
+
+            civilian_count,
+
+            officer_presence,
+
+            children_present,
+
+            group_size,
+
+            personnel,
+
+            ppe,
+
+            equipment,
+
+            apparatus,
+
+            incident_classification,
+
+            operational_activity,
+
+            communications_uses,
+
+            reasoning,
+
+            generated_at,
+
+            source_model
+
+        )
+
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,?)
+
+        """,
+
+        (
+            self._to_int(media_id),
+            self._to_int(intelligence.get("firefighter_count")),
+            self._to_int(intelligence.get("civilian_count")),
+            1 if intelligence.get("officer_presence") else 0,
+            1 if intelligence.get("children_present") else 0,
+            intelligence.get("group_size", ""),
+            self._to_json(intelligence.get("personnel")),
+            self._to_json(intelligence.get("ppe")),
+            self._to_json(intelligence.get("equipment")),
+            self._to_json(intelligence.get("apparatus")),
+            intelligence.get("incident_classification", ""),
+            intelligence.get("operational_activity", ""),
+            self._to_json(intelligence.get("communications_uses")),
+            self._to_json(intelligence.get("reasoning")),
+            intelligence.get("source_model", "")
+        ))
+
+        conn.commit()
+        conn.close()
+
+    ############################################################
+
+    def get_fire_service_intelligence(self, media_id):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        SELECT *
+
+        FROM fire_service_intelligence
+
+        WHERE media_id=?
+
+        """,
+
+        (self._to_int(media_id),))
+
+        row = cur.fetchone()
+
+        conn.close()
+
+        if row is None:
+            return None
+
+        return self._fire_service_intelligence_from_row(row)
+
+    ############################################################
+
+    def fire_service_intelligence_count(self):
+
+        conn = self.connection()
+        cur = conn.cursor()
+
+        cur.execute("SELECT COUNT(*) FROM fire_service_intelligence")
+
+        count = cur.fetchone()[0]
+
+        conn.close()
+
+        return count or 0
+
+    ############################################################
+
+    def fire_service_unknown_count(self):
+
+        conn = self.connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        SELECT COUNT(*)
+
+        FROM fire_service_intelligence
+
+        WHERE incident_classification='unknown'
+        OR operational_activity='unknown'
+
+        """)
+
+        count = cur.fetchone()[0]
+
+        conn.close()
+
+        return count or 0
+
+    ############################################################
+
+    def fire_service_top_values(self, field, limit=5):
+
+        allowed = {
+            "incident_classification",
+            "operational_activity"
+        }
+
+        if field not in allowed:
+            return []
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+
+        cur.execute(f"""
+
+        SELECT {field} AS name, COUNT(*) AS count
+
+        FROM fire_service_intelligence
+
+        WHERE {field} IS NOT NULL
+        AND {field} != ''
+
+        GROUP BY {field}
+
+        ORDER BY count DESC, {field}
+
+        LIMIT ?
+
+        """,
+
+        (self._to_int(limit),))
+
+        rows = [
+            {
+                "name": row["name"],
+                "count": row["count"] or 0
+            }
+            for row in cur.fetchall()
+        ]
+
+        conn.close()
+
+        return rows
+
+    ############################################################
+
+    def fire_service_top_communications_uses(self, limit=5):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        SELECT json_each.value AS name,
+               COUNT(DISTINCT fire_service_intelligence.media_id) AS count
+
+        FROM fire_service_intelligence,
+             json_each(fire_service_intelligence.communications_uses)
+
+        WHERE json_each.value IS NOT NULL
+        AND json_each.value != ''
+
+        GROUP BY json_each.value
+
+        ORDER BY count DESC, json_each.value
+
+        LIMIT ?
+
+        """,
+
+        (self._to_int(limit),))
+
+        rows = [
+            {
+                "name": row["name"],
+                "count": row["count"] or 0
+            }
+            for row in cur.fetchall()
+        ]
+
+        conn.close()
+
+        return rows
 
     ############################################################
 
@@ -4063,6 +4358,29 @@ class DatabaseManager:
 
     ############################################################
 
+    def _fire_service_intelligence_from_row(self, row):
+
+        return {
+            "media_id": row["media_id"],
+            "firefighter_count": row["firefighter_count"] or 0,
+            "civilian_count": row["civilian_count"] or 0,
+            "officer_presence": bool(row["officer_presence"]),
+            "children_present": bool(row["children_present"]),
+            "group_size": row["group_size"] or "",
+            "personnel": self._from_json(row["personnel"]),
+            "ppe": self._from_json(row["ppe"]),
+            "equipment": self._from_json(row["equipment"]),
+            "apparatus": self._from_json(row["apparatus"]),
+            "incident_classification": row["incident_classification"] or "",
+            "operational_activity": row["operational_activity"] or "",
+            "communications_uses": self._from_json(row["communications_uses"]),
+            "reasoning": self._from_json(row["reasoning"]),
+            "generated_at": row["generated_at"] or "",
+            "source_model": row["source_model"] or ""
+        }
+
+    ############################################################
+
     def _knowledge_item_from_row(self, row):
 
         return {
@@ -4168,6 +4486,12 @@ class DatabaseManager:
     ############################################################
 
     def _to_int(self, value):
+
+        if isinstance(value, str):
+            match = re.search(r"-?\d+", value)
+
+            if match:
+                value = match.group(0)
 
         try:
             return int(value)
@@ -4354,6 +4678,10 @@ class DatabaseManager:
             "CREATE INDEX IF NOT EXISTS idx_intelligence_recruitment_value ON media_intelligence(recruitment_value_score)",
             "CREATE INDEX IF NOT EXISTS idx_intelligence_community_engagement ON media_intelligence(community_engagement_score)",
             "CREATE INDEX IF NOT EXISTS idx_intelligence_trust ON media_intelligence(trust_building_score)",
+            "CREATE INDEX IF NOT EXISTS idx_fire_service_media ON fire_service_intelligence(media_id)",
+            "CREATE INDEX IF NOT EXISTS idx_fire_service_incident ON fire_service_intelligence(incident_classification)",
+            "CREATE INDEX IF NOT EXISTS idx_fire_service_activity ON fire_service_intelligence(operational_activity)",
+            "CREATE INDEX IF NOT EXISTS idx_fire_service_group ON fire_service_intelligence(group_size)",
             "CREATE INDEX IF NOT EXISTS idx_recommendation_history_media ON recommendation_history(media_id)",
             "CREATE INDEX IF NOT EXISTS idx_recommendation_history_date ON recommendation_history(recommendation_date)",
             "CREATE INDEX IF NOT EXISTS idx_recommendation_history_opportunity ON recommendation_history(opportunity)",

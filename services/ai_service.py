@@ -55,10 +55,16 @@ class AIService:
         for k, v in defaults.items():
             data.setdefault(k, v)
 
+        data["description"] = self._ensure_text(data.get("description"))
+        data["scene_type"] = self._ensure_text(data.get("scene_type"))
+        data["activity"] = self._ensure_text(data.get("activity"))
         data["apparatus"] = self._ensure_list(data.get("apparatus"))
         data["equipment"] = self._ensure_list(data.get("equipment"))
         data["keywords"] = self._ensure_list(data.get("keywords"))
-        data["people_count"] = self._ensure_int(data.get("people_count"))
+        data["people_count"] = self._ensure_people_count(
+            data.get("people_count"),
+            data
+        )
 
         for key in (
             "community_score",
@@ -107,7 +113,11 @@ class AIService:
         if isinstance(value, str):
             if not value.strip():
                 return []
-            return [value]
+            return [
+                item.strip()
+                for item in re.split(r"[,;\n]+", value)
+                if item.strip()
+            ]
 
         return [str(value)]
 
@@ -115,7 +125,56 @@ class AIService:
 
     def _ensure_int(self, value):
 
+        if isinstance(value, str):
+            match = re.search(r"-?\d+", value)
+
+            if match:
+                value = match.group(0)
+
         try:
             return int(value)
         except Exception:
             return 0
+
+    ############################################################
+
+    def _ensure_people_count(self, value, data):
+
+        count = self._ensure_int(value)
+
+        if count > 0:
+            return count
+
+        text = self._analysis_text(data)
+
+        if re.search(r"\b(one|single|a)\s+(firefighter|person|worker)\b", text):
+            return 1
+
+        if re.search(r"\b(firefighter|firefighters|person|people|crew member)\b", text):
+            return 1
+
+        return 0
+
+    ############################################################
+
+    def _analysis_text(self, data):
+
+        parts = [
+            data.get("description", ""),
+            data.get("scene_type", ""),
+            data.get("activity", ""),
+            " ".join(self._ensure_list(data.get("apparatus"))),
+            " ".join(self._ensure_list(data.get("equipment"))),
+            " ".join(self._ensure_list(data.get("keywords")))
+        ]
+
+        return " ".join(str(part).lower() for part in parts if part)
+
+    ############################################################
+
+    def _ensure_text(self, value):
+
+        if value is None:
+            return ""
+
+        return str(value).strip()

@@ -68,6 +68,12 @@ class BrainService:
 
     ############################################################
 
+    def get_fire_service_intelligence(self, media_id):
+
+        return self.db.get_fire_service_intelligence(media_id)
+
+    ############################################################
+
     def is_mock_provider(self):
 
         return self.vision.provider_key() == "mock"

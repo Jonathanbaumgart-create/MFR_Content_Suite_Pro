@@ -491,11 +491,44 @@ class ContentDirectorService:
         ):
             terms.extend(candidate.get(key) or [])
 
+        fire_service = self._fire_service_intelligence(
+            candidate.get("media_id")
+        )
+
+        if fire_service:
+            for key in (
+                "incident_classification",
+                "operational_activity",
+                "group_size"
+            ):
+                terms.append(fire_service.get(key, ""))
+
+            for key in (
+                "ppe",
+                "equipment",
+                "apparatus",
+                "communications_uses"
+            ):
+                terms.extend(fire_service.get(key) or [])
+
         return {
             self._normalize_token(term)
             for term in terms
             if term
         }
+
+    ############################################################
+
+    def _fire_service_intelligence(self, media_id):
+
+        if not media_id:
+            return None
+
+        try:
+            return self.db.get_fire_service_intelligence(media_id)
+
+        except Exception:
+            return None
 
     ############################################################
 

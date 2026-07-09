@@ -1,5 +1,6 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import json
 import os
 import sys
 
@@ -10,6 +11,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from database.db_manager import DatabaseManager
+from services.ai_service import AIService
 from services.job_manager import JobManager
 from services.media_intelligence_service import MediaIntelligenceService
 from services.vision_service import MockVisionProvider, VisionService
@@ -207,6 +209,91 @@ def main():
             assert preserved_real["provider"] == "ollama", preserved_real
             assert preserved_real["description"] == "Real Ollama analysis", preserved_real
             assert preserved_real["overall_score"] == 91, preserved_real
+
+            add_media(db, 7)
+            add_media(db, 8)
+
+            weak_analysis = sample_analysis(model="moondream:latest")
+            weak_analysis.update(
+                {
+                    "description": "Unclear image with limited detail.",
+                    "scene_type": "",
+                    "activity": "",
+                    "people_count": 0,
+                    "apparatus": [],
+                    "equipment": [],
+                    "keywords": [],
+                    "community_score": 20,
+                    "recruitment_score": 20,
+                    "education_score": 20,
+                    "technical_score": 20,
+                    "overall_score": 20,
+                    "provider": "ollama"
+                }
+            )
+            db.save_ai_analysis(7, weak_analysis)
+            weak_intelligence = service.generate_and_save(
+                7,
+                db.get_ai_analysis(7)
+            )
+
+            provider_payload = json.dumps(
+                {
+                    "description": (
+                        "A firefighter wearing a helmet and SCBA is at the "
+                        "training tower with a hose, ladder, rope, apparatus, "
+                        "and rescue equipment."
+                    ),
+                    "scene_type": "training tower",
+                    "activity": "rope rescue training",
+                    "people_count": "1 person",
+                    "apparatus": "apparatus",
+                    "equipment": "helmet, SCBA, hose, rope, rescue equipment",
+                    "keywords": "firefighter, PPE, ladder, training tower",
+                    "community_score": 64,
+                    "recruitment_score": 74,
+                    "education_score": 70,
+                    "technical_score": 78,
+                    "overall_score": 82,
+                    "facebook_caption": "",
+                    "instagram_caption": "",
+                    "model": "moondream:latest"
+                }
+            )
+            parsed = AIService().parse_analysis(
+                provider_payload,
+                model="moondream:latest"
+            )
+            parsed["provider"] = "ollama"
+            db.save_ai_analysis(8, parsed)
+
+            saved_provider_analysis = db.get_ai_analysis(8)
+            assert saved_provider_analysis["people_count"] == 1, saved_provider_analysis
+            assert saved_provider_analysis["scene_type"] == "training tower", saved_provider_analysis
+            assert saved_provider_analysis["activity"] == "rope rescue training", saved_provider_analysis
+
+            rich_intelligence = service.generate_and_save(
+                8,
+                saved_provider_analysis
+            )
+
+            assert rich_intelligence["normalized_scene"] == "training_tower", rich_intelligence
+            assert rich_intelligence["primary_activity"] == "rope_rescue_training", rich_intelligence
+            assert "no_people" not in rich_intelligence["people_tags"], rich_intelligence
+            assert "people" in rich_intelligence["people_tags"], rich_intelligence
+            assert "small_group" in rich_intelligence["people_tags"], rich_intelligence
+
+            equipment_tags = set(rich_intelligence["equipment_tags"])
+            assert {"scba", "hose", "rope", "rescue_equipment"}.issubset(
+                equipment_tags
+            ), rich_intelligence
+            assert "helmet" in rich_intelligence["ppe_tags"], rich_intelligence
+            assert "ppe" in rich_intelligence["ppe_tags"], rich_intelligence
+            assert "firefighter" in rich_intelligence["content_tags"], rich_intelligence
+            assert "training_tower" in rich_intelligence["content_tags"], rich_intelligence
+            assert rich_intelligence["communications_score"] > weak_intelligence[
+                "communications_score"
+            ], (rich_intelligence, weak_intelligence)
 
             for index in range(2, 5):
                 add_media(db, index)

@@ -247,6 +247,16 @@ class OperationsPage(ctk.CTkFrame):
             f"Total media scanned: {data['total_media_scanned']}",
             f"AI analyzed count: {data['ai_analyzed_count']}",
             f"Media Intelligence count: {data['media_intelligence_count']}",
+            f"Fire Service Intelligence count: {data.get('fire_service_intelligence_count', 0)}",
+            f"Unknown fire-service classifications: {data.get('fire_service_unknown_count', 0)}",
+            (
+                "Top fire-service incident types: " +
+                self.count_rows_text(data.get("top_fire_service_incident_types"))
+            ),
+            (
+                "Top communications opportunities: " +
+                self.count_rows_text(data.get("top_fire_service_opportunities"))
+            ),
             f"Unanalyzed count: {data['unanalyzed_count']}",
             f"Intelligence missing count: {data['intelligence_missing_count']}",
             f"Analysis coverage: {data['analysis_coverage_percentage']}%",
@@ -343,6 +353,20 @@ class OperationsPage(ctk.CTkFrame):
         return ", ".join(
             f"{row['filename']} ({row['communications_score']})"
             for row in rows[:3]
+        )
+
+    ##########################################################
+
+    def count_rows_text(self, rows):
+
+        rows = rows or []
+
+        if not rows:
+            return "None"
+
+        return ", ".join(
+            f"{row['name']} ({row['count']})"
+            for row in rows[:5]
         )
 
     ##########################################################

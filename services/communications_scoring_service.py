@@ -76,7 +76,15 @@ class CommunicationsScoringService:
             ),
             "recruitment_value": self._keyword_score(
                 terms,
-                ("recruitment", "training", "crew", "firefighter", "volunteer"),
+                (
+                    "recruitment",
+                    "training",
+                    "crew",
+                    "firefighter",
+                    "volunteer",
+                    "training_tuesday",
+                    "volunteer_spotlight"
+                ),
                 35
             ),
             "recognition_value": self._keyword_score(
@@ -91,7 +99,16 @@ class CommunicationsScoringService:
             ),
             "public_education_value": self._keyword_score(
                 terms,
-                ("smoke_alarm", "fire_prevention", "public_education", "school", "safety"),
+                (
+                    "smoke_alarm",
+                    "fire_prevention",
+                    "public_education",
+                    "school",
+                    "safety",
+                    "community_education",
+                    "hydrant_heroes",
+                    "travelling_sparky"
+                ),
                 36
             ),
             "seasonal_relevance": self._seasonal_score(terms, context),
@@ -295,7 +312,16 @@ class CommunicationsScoringService:
         if intelligence.get("ppe_tags"):
             score += 10
 
-        if terms & {"community", "training", "fireground", "apparatus"}:
+        if terms & {
+            "community",
+            "training",
+            "fireground",
+            "apparatus",
+            "structural_ppe",
+            "turnout_gear",
+            "ladder_operations",
+            "training_evolution"
+        }:
             score += 12
 
         return self._clamp(score)
@@ -462,8 +488,11 @@ class CommunicationsScoringService:
         if terms & {"fire_prevention", "smoke_alarm", "public_education"}:
             campaigns.append("Fire Prevention")
 
-        if terms & {"recruitment", "training"}:
+        if terms & {"recruitment", "training", "training_tuesday", "officer_development"}:
             campaigns.append("Recruitment")
+
+        if terms & {"training_tuesday", "technical_education", "officer_development"}:
+            campaigns.append("Training")
 
         if terms & {"community", "children", "school"}:
             campaigns.append("Community Engagement")
@@ -501,6 +530,9 @@ class CommunicationsScoringService:
 
         if terms & {"recruitment", "training"}:
             audience.append("Prospective firefighters")
+
+        if terms & {"officer_development", "technical_education", "internal_training"}:
+            audience.append("Fire service members")
 
         if terms & {"community", "safety", "prevention"}:
             audience.append("Morden residents")
@@ -692,6 +724,24 @@ class CommunicationsScoringService:
             "recommended_uses"
         ):
             for value in intelligence.get(key) or []:
+                terms.add(self._token(value))
+
+        fire_service = intelligence.get("fire_service_intelligence") or {}
+
+        for key in (
+            "incident_classification",
+            "operational_activity",
+            "group_size"
+        ):
+            terms.add(self._token(fire_service.get(key)))
+
+        for key in (
+            "ppe",
+            "equipment",
+            "apparatus",
+            "communications_uses"
+        ):
+            for value in fire_service.get(key) or []:
                 terms.add(self._token(value))
 
         return {
