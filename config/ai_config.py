@@ -26,7 +26,7 @@ AI_CONFIG = {
             "text_model": "llama3.1:8b",
             "timeout": 300,
             "diagnostics_timeout": 5,
-            "vision_diagnostics_timeout": 30
+            "vision_diagnostics_timeout": 120
         },
         "mock": {
             "model": "mock"

@@ -557,6 +557,7 @@ class AIDashboardPage(ctk.CTkFrame):
                 f"Configured model present: {result.get('configured_model_present')}",
                 f"Simple text call: {result.get('simple_text_call')}",
                 f"Vision model call: {result.get('vision_model_call')}",
+                f"Model loading: {result.get('model_loading', False)}",
                 f"Status: {result.get('provider_status', '')}",
                 f"Last error: {result.get('last_error', '') or 'None'}",
                 f"GPU/CPU notes: {result.get('gpu_cpu_notes', '')}",

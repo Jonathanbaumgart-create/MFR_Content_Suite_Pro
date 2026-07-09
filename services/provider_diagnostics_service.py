@@ -141,6 +141,31 @@ class ProviderDiagnosticsService:
                 "Ollama vision diagnostics passed. Real analysis can be retried."
             )
 
+        except requests.exceptions.ReadTimeout as ex:
+            result["last_error"] = str(ex)
+            result["provider_status"] = "Model may still be loading"
+            result["model_loading"] = True
+            result["recommended_action"] = (
+                "The configured vision model is installed, but the first "
+                "diagnostic call timed out while waiting for a response. "
+                "This can happen while Ollama loads a model on Windows. "
+                "Wait for the model load to finish, then run diagnostics "
+                "again. This is not marked as a permanent provider failure."
+            )
+            result["gpu_cpu_notes"] = (
+                "First local model load can be slow. If repeated timeouts "
+                "continue, try CPU mode, try a smaller vision model, or "
+                "keep mock active for testing."
+            )
+
+            logger.warning(
+                "Provider diagnostics timed out while model may still be loading provider=%s model=%s",
+                result.get("active_provider"),
+                result.get("configured_model")
+            )
+
+            return result
+
         except Exception as ex:
             return self._fail(
                 result,
@@ -201,6 +226,7 @@ class ProviderDiagnosticsService:
             "configured_model_present": False,
             "simple_text_call": False,
             "vision_model_call": False,
+            "model_loading": False,
             "gpu_cpu_notes": "",
             "last_error": "",
             "provider_status": "",

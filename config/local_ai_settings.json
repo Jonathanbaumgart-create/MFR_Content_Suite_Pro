@@ -1,5 +1,5 @@
 {
   "provider": "ollama",
-  "vision_model": "qwen2.5vl:7b",
+  "vision_model": "moondream:latest",
   "vision_provider": "ollama"
 }

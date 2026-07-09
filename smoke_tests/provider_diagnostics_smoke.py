@@ -4,6 +4,8 @@ import json
 import os
 import sys
 
+from requests.exceptions import ReadTimeout
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -35,10 +37,11 @@ class FakeResponse:
 
 class FakeHTTP:
 
-    def __init__(self, models=None, post_error=None):
+    def __init__(self, models=None, post_error=None, timeout_on_vision=False):
 
         self.models = models or []
         self.post_error = post_error
+        self.timeout_on_vision = timeout_on_vision
         self.posts = []
 
     def get(self, url, timeout=0):
@@ -57,6 +60,9 @@ class FakeHTTP:
     def post(self, url, json=None, timeout=0):
 
         self.posts.append(json or {})
+
+        if self.timeout_on_vision and json and json.get("images"):
+            raise ReadTimeout("read timeout while loading model")
 
         if self.post_error:
             return FakeResponse(error=self.post_error)
@@ -103,7 +109,7 @@ def base_config(provider="mock", model="qwen2.5vl:7b"):
                 "text_model": "llama3.1:8b",
                 "timeout": 1,
                 "diagnostics_timeout": 1,
-                "vision_diagnostics_timeout": 1
+                "vision_diagnostics_timeout": 120
             }
         }
     }
@@ -225,6 +231,21 @@ def main():
             assert healthy["configured_model"] == "qwen2.5vl:7b", healthy
             assert healthy["simple_text_call"] is True, healthy
             assert healthy["vision_model_call"] is True, healthy
+
+            loading_http = FakeHTTP(
+                models=["qwen2.5vl:7b", "llama3.1:8b"],
+                timeout_on_vision=True
+            )
+            loading = ProviderDiagnosticsService(
+                settings_service=settings,
+                http_client=loading_http
+            ).run()
+            assert loading["provider_status"] == "Model may still be loading", loading
+            assert loading["model_loading"] is True, loading
+            assert loading["configured_model_present"] is True, loading
+            assert "run diagnostics again" in loading["recommended_action"].lower(), loading
+            assert "permanent provider failure" in loading["recommended_action"], loading
+            assert loading_http.posts[-1]["model"] == "qwen2.5vl:7b", loading_http.posts
 
             failed = ProviderDiagnosticsService(
                 settings_service=settings,
