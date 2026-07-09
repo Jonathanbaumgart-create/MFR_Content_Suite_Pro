@@ -1,5 +1,6 @@
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import json
 import os
 import sys
 
@@ -175,31 +176,60 @@ def main():
             settings = AISettingsService(
                 base_config=base_config("mock")
             )
+            settings.settings_path.parent.mkdir(
+                parents=True,
+                exist_ok=True
+            )
+            settings.settings_path.write_text(
+                json.dumps(
+                    {
+                        "provider": "ollama",
+                        "vision_model": "Ollama"
+                    }
+                ),
+                encoding="utf-8"
+            )
+            migrated = settings.load()
+            assert migrated["vision_provider"] == "ollama", migrated
+            assert migrated["vision_model"] == "qwen2.5vl:7b", migrated
+
             vision = VisionService(
                 config=base_config("mock"),
                 settings_service=settings
             )
-            assert vision.provider_key() == "mock", vision.provider_key()
+            assert vision.provider_key() == "ollama", vision.provider_key()
+            assert vision.model_name() == "qwen2.5vl:7b", vision.model_name()
+
             switched = vision.switch_provider(
                 "ollama",
-                model="llava:7b"
+                model="qwen2.5vl:7b"
             )
             assert switched["provider"] == "ollama", switched
-            assert switched["model"] == "llava:7b", switched
+            assert switched["model"] == "qwen2.5vl:7b", switched
             assert settings.load()["provider"] == "ollama", settings.load()
+            assert settings.load()["vision_model"] == "qwen2.5vl:7b", settings.load()
+
+            from services.writing_service import WritingService
+
+            writing = WritingService(
+                settings_service=settings
+            )
+            assert writing.provider_key() == "ollama", writing.status()
+            assert writing.model_name() == "llama3.1:8b", writing.status()
 
             healthy = ProviderDiagnosticsService(
                 settings_service=settings,
-                http_client=FakeHTTP(models=["llava:7b", "llama3.1:8b"])
+                http_client=FakeHTTP(models=["qwen2.5vl:7b", "llama3.1:8b"])
             ).run()
             assert healthy["provider_status"] == "Ready", healthy
+            assert healthy["configured_model"] == "qwen2.5vl:7b", healthy
             assert healthy["simple_text_call"] is True, healthy
             assert healthy["vision_model_call"] is True, healthy
 
             failed = ProviderDiagnosticsService(
                 settings_service=settings,
                 http_client=FakeHTTP(
-                    models=["llava:7b", "llama3.1:8b"],
+                    models=["qwen2.5vl:7b", "llama3.1:8b"],
                     post_error="CUDA out of memory"
                 )
             ).run()

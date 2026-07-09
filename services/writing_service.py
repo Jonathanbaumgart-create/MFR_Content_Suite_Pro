@@ -5,6 +5,7 @@ from abc import ABC, abstractmethod
 import requests
 
 from config.writing_config import WRITING_CONFIG
+from services.ai_settings_service import AISettingsService
 from services.logging_service import LoggingService
 from services.prompt_engine import PromptEngine
 
@@ -204,10 +205,15 @@ class WritingService:
         fallback_provider=None,
         config=None,
         registry=None,
-        prompt_engine=None
+        prompt_engine=None,
+        settings_service=None
     ):
 
-        self.config = config or WRITING_CONFIG
+        self.settings_service = settings_service or AISettingsService()
+        self.config = (
+            config or
+            self.settings_service.effective_writing_config(WRITING_CONFIG)
+        )
         self.registry = registry or self._default_registry()
         self.prompt_engine = prompt_engine or PromptEngine()
         self._provider_key = self.config.get("default_provider", "ollama")
@@ -228,6 +234,46 @@ class WritingService:
             "available": None,
             "last_error": ""
         }
+
+    def switch_provider(self, provider_key, model=None):
+
+        self.config = self.settings_service.save_writing(
+            provider=provider_key,
+            writing_model=model,
+            base_config=WRITING_CONFIG
+        )
+        self._provider_key = self.config.get(
+            "default_provider",
+            provider_key
+        )
+        self._provider = self._provider_from_config(
+            self._provider_key
+        )
+        self._status.update(
+            {
+                "provider": self._provider_key,
+                "model": self._provider.model_name(),
+                "active_provider": self._provider_key,
+                "active_model": self._provider.model_name(),
+                "fallback_used": False,
+                "last_error": ""
+            }
+        )
+
+        logger.info(
+            "Writing provider switched provider=%s model=%s",
+            self._provider_key,
+            self._provider.model_name()
+        )
+
+        return {
+            "provider": self._provider_key,
+            "model": self._provider.model_name()
+        }
+
+    def available_providers(self):
+
+        return self.registry.names()
 
     def generate(self, request):
 

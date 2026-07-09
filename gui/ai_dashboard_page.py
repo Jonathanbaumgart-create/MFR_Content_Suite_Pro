@@ -3,6 +3,7 @@ from tkinter import messagebox
 
 from services.brain_service import BrainService
 from services.provider_diagnostics_service import ProviderDiagnosticsService
+from services.writing_service import WritingService
 
 
 class AIDashboardPage(ctk.CTkFrame):
@@ -13,9 +14,13 @@ class AIDashboardPage(ctk.CTkFrame):
 
         self.brain = BrainService()
         self.diagnostics = ProviderDiagnosticsService()
+        self.writing = WritingService()
         self.metric_labels = {}
         self.provider_var = ctk.StringVar(
             value=self.brain.vision.provider_key()
+        )
+        self.writing_provider_var = ctk.StringVar(
+            value=self.writing.status().get("provider", "ollama")
         )
 
         self.build_page()
@@ -192,6 +197,18 @@ class AIDashboardPage(ctk.CTkFrame):
             pady=(15, 8)
         )
 
+        vision_label = ctk.CTkLabel(
+            panel,
+            text="Vision Provider",
+            font=("Segoe UI", 14, "bold")
+        )
+
+        vision_label.pack(
+            anchor="w",
+            padx=15,
+            pady=(0, 4)
+        )
+
         row = ctk.CTkFrame(
             panel,
             fg_color="transparent"
@@ -208,7 +225,8 @@ class AIDashboardPage(ctk.CTkFrame):
         self.provider_menu = ctk.CTkOptionMenu(
             row,
             values=providers,
-            variable=self.provider_var
+            variable=self.provider_var,
+            command=self.vision_provider_changed
         )
 
         self.provider_menu.pack(
@@ -252,6 +270,66 @@ class AIDashboardPage(ctk.CTkFrame):
             side="left"
         )
 
+        writing_label = ctk.CTkLabel(
+            panel,
+            text="Writing Provider",
+            font=("Segoe UI", 14, "bold")
+        )
+
+        writing_label.pack(
+            anchor="w",
+            padx=15,
+            pady=(4, 4)
+        )
+
+        writing_row = ctk.CTkFrame(
+            panel,
+            fg_color="transparent"
+        )
+
+        writing_row.pack(
+            fill="x",
+            padx=15,
+            pady=(0, 12)
+        )
+
+        self.writing_provider_menu = ctk.CTkOptionMenu(
+            writing_row,
+            values=self.writing.available_providers(),
+            variable=self.writing_provider_var,
+            command=self.writing_provider_changed
+        )
+
+        self.writing_provider_menu.pack(
+            side="left",
+            padx=(0, 10)
+        )
+
+        self.writing_model_entry = ctk.CTkEntry(
+            writing_row,
+            width=260,
+            placeholder_text="Ollama writing model"
+        )
+        self.writing_model_entry.insert(
+            0,
+            self.writing.model_name()
+        )
+
+        self.writing_model_entry.pack(
+            side="left",
+            padx=(0, 10)
+        )
+
+        writing_apply = ctk.CTkButton(
+            writing_row,
+            text="Apply Writing Provider",
+            command=self.apply_writing_settings
+        )
+
+        writing_apply.pack(
+            side="left"
+        )
+
         guidance = ctk.CTkLabel(
             panel,
             text=(
@@ -267,6 +345,49 @@ class AIDashboardPage(ctk.CTkFrame):
             anchor="w",
             padx=15,
             pady=(0, 12)
+        )
+
+    ##########################################################
+
+    def vision_provider_changed(self, provider):
+
+        self.replace_entry_text(
+            self.model_entry,
+            self.provider_model(
+                self.brain.vision.config,
+                provider
+            )
+        )
+
+    ##########################################################
+
+    def writing_provider_changed(self, provider):
+
+        self.replace_entry_text(
+            self.writing_model_entry,
+            self.provider_model(
+                self.writing.config,
+                provider
+            )
+        )
+
+    ##########################################################
+
+    def provider_model(self, config, provider):
+
+        return config.get("providers", {}).get(
+            provider,
+            {}
+        ).get("model", "")
+
+    ##########################################################
+
+    def replace_entry_text(self, entry, value):
+
+        entry.delete(0, "end")
+        entry.insert(
+            0,
+            value
         )
 
     ##########################################################
@@ -334,6 +455,30 @@ class AIDashboardPage(ctk.CTkFrame):
             )
         )
         self.refresh_metrics()
+
+    ##########################################################
+
+    def apply_writing_settings(self):
+
+        provider = self.writing_provider_var.get()
+        model = self.writing_model_entry.get().strip()
+
+        if not model:
+            self.status.configure(
+                text="Enter a writing model before switching."
+            )
+            return
+
+        result = self.writing.switch_provider(
+            provider,
+            model=model
+        )
+        self.status.configure(
+            text=(
+                f"Writing provider set to {result['provider']} "
+                f"({result['model']})"
+            )
+        )
 
     ##########################################################
 

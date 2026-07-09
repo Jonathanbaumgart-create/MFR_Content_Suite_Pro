@@ -18,9 +18,7 @@ class ProviderDiagnosticsService:
 
     def __init__(self, settings_service=None, config=None, http_client=None):
 
-        self.settings_service = settings_service or AISettingsService(
-            base_config=config
-        )
+        self.settings_service = settings_service
         self.config = config
         self.http = http_client or requests
 
@@ -28,13 +26,12 @@ class ProviderDiagnosticsService:
 
     def run(self):
 
-        config = (
-            self.settings_service.effective_config()
-            if self.config is None
-            else AISettingsService(
-                base_config=self.config
-            ).effective_config()
-        )
+        if self.settings_service is not None:
+            config = self.settings_service.effective_config()
+        elif self.config is not None:
+            config = self.config
+        else:
+            config = AISettingsService().effective_config()
         provider = config.get("default_provider", "mock")
         provider_settings = config.get("providers", {}).get(provider, {})
 
