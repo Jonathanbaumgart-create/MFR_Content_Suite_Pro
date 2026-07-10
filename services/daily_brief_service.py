@@ -1,7 +1,10 @@
 from datetime import datetime
+import threading
+import time
 
 from core.app_context import context
 from services.communications_reasoning_service import CommunicationsReasoningService
+from services.editorial_recommendation_service import EditorialRecommendationService
 from services.knowledge_service import KnowledgeService
 from services.logging_service import LoggingService
 from services.time_service import TimeService
@@ -16,7 +19,8 @@ class DailyBriefService:
         self,
         database=None,
         reasoning_service=None,
-        knowledge_service=None
+        knowledge_service=None,
+        editorial_recommendation_service=None
     ):
 
         self.db = database or context.database
@@ -26,20 +30,39 @@ class DailyBriefService:
         self.knowledge = knowledge_service or KnowledgeService(
             database=self.db
         )
+        self.editorial_recommendations = (
+            editorial_recommendation_service or
+            EditorialRecommendationService(
+                database=self.db
+            )
+        )
+        self.last_metrics = {}
 
     ############################################################
 
     def generate(self, now=None):
 
+        started = time.perf_counter()
+        ran_on_main_thread = threading.current_thread() is threading.main_thread()
         now = now or datetime.now()
         generated_at = TimeService.utc_now_iso()
+        step = time.perf_counter()
         reasoning_brief = self.reasoning.todays_communications_brief()
+        reasoning_seconds = round(time.perf_counter() - step, 3)
         top = reasoning_brief.get("top_recommendation")
         additional = reasoning_brief.get("additional_opportunities", [])[:3]
         context_snapshot = reasoning_brief.get("context_snapshot", {})
+        step = time.perf_counter()
         library_health = self._library_health(reasoning_brief)
+        library_health_seconds = round(time.perf_counter() - step, 3)
         processing_status = reasoning_brief.get("processing_status", {})
         learning = self._recent_learning(reasoning_brief)
+        step = time.perf_counter()
+        editorial_recommendations = self.editorial_recommendations.generate_recommendations(
+            limit=5,
+            as_of=now
+        )
+        editorial_seconds = round(time.perf_counter() - step, 3)
 
         brief = {
             "title": "Daily Communications Brief",
@@ -76,16 +99,39 @@ class DailyBriefService:
             "content_gaps": reasoning_brief.get("content_gaps", []),
             "processing_status": processing_status,
             "recent_learning": learning,
+            "editorial_recommendations": editorial_recommendations,
             "source_brief": reasoning_brief
         }
 
         logger.info(
-            "Daily Brief generated top=%s confidence=%s opportunities=%s gaps=%s",
+            (
+                "Daily Brief generated top=%s confidence=%s "
+                "opportunities=%s editorial_recommendations=%s gaps=%s "
+                "elapsed=%s reasoning_seconds=%s editorial_seconds=%s "
+                "main_thread=%s"
+            ),
             (top or {}).get("opportunity_type", ""),
             brief["recommendation_confidence"],
             len(brief["additional_opportunities"]),
-            len(brief["content_gaps"])
+            len(editorial_recommendations),
+            len(brief["content_gaps"]),
+            round(time.perf_counter() - started, 3),
+            reasoning_seconds,
+            editorial_seconds,
+            ran_on_main_thread
         )
+        self.last_metrics = {
+            "total_seconds": round(time.perf_counter() - started, 3),
+            "reasoning_seconds": reasoning_seconds,
+            "library_health_seconds": library_health_seconds,
+            "editorial_seconds": editorial_seconds,
+            "editorial_metrics": getattr(
+                self.editorial_recommendations,
+                "last_metrics",
+                {}
+            ),
+            "ran_on_main_thread": ran_on_main_thread
+        }
 
         return brief
 

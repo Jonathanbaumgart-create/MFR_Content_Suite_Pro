@@ -11,7 +11,8 @@ from services.thumbnail_service import ThumbnailService
 class GalleryPage(ctk.CTkFrame):
 
     PAGE_SIZE = 200
-    CARD_RENDER_CHUNK = 10
+    CARD_RENDER_CHUNK = 4
+    CARD_RENDER_DELAY_MS = 50
 
     def __init__(self, parent):
 
@@ -196,7 +197,7 @@ class GalleryPage(ctk.CTkFrame):
         if self.pending_cards:
 
             self.after(
-                50,
+                self.CARD_RENDER_DELAY_MS,
                 self.render_card_chunk
             )
             return

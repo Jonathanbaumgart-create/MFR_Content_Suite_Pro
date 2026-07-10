@@ -4171,6 +4171,91 @@ class DatabaseManager:
 
     ############################################################
 
+    def active_media_corrections_for_media_ids(self, media_ids):
+
+        media_ids = [
+            self._to_int(media_id)
+            for media_id in media_ids
+            if self._to_int(media_id)
+        ]
+
+        if not media_ids:
+            return {}
+
+        placeholders = ",".join("?" for _ in media_ids)
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+
+        cur.execute(f"""
+
+        SELECT *
+
+        FROM media_corrections
+
+        WHERE active=1
+        AND media_id IN ({placeholders})
+
+        ORDER BY media_id, updated_at DESC, id DESC
+
+        """,
+
+        tuple(media_ids))
+
+        grouped = {}
+
+        for row in cur.fetchall():
+            correction = self._media_correction_from_row(row)
+            grouped.setdefault(
+                correction["media_id"],
+                []
+            ).append(correction)
+
+        conn.close()
+
+        return grouped
+
+    ############################################################
+
+    def fire_service_intelligence_for_media_ids(self, media_ids):
+
+        media_ids = [
+            self._to_int(media_id)
+            for media_id in media_ids
+            if self._to_int(media_id)
+        ]
+
+        if not media_ids:
+            return {}
+
+        placeholders = ",".join("?" for _ in media_ids)
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+
+        cur.execute(f"""
+
+        SELECT *
+
+        FROM fire_service_intelligence
+
+        WHERE media_id IN ({placeholders})
+
+        """,
+
+        tuple(media_ids))
+
+        rows = {
+            row["media_id"]: self._fire_service_intelligence_from_row(row)
+            for row in cur.fetchall()
+        }
+
+        conn.close()
+
+        return rows
+
+    ############################################################
+
     def correction_history_for_media(self, media_id, limit=50):
 
         conn = self.connection()

@@ -218,11 +218,272 @@ class HomePage(ctk.CTkFrame):
             ]
         )
         self.render_context()
+        self.render_editorial_recommendations()
         self.render_top_recommendation()
         self.render_additional_opportunities()
         self.render_library_health()
         self.render_learning()
         self.render_gaps()
+
+    ##########################################################
+
+    def render_editorial_recommendations(self):
+
+        recommendations = self.brief.get("editorial_recommendations", [])
+
+        frame = ctk.CTkFrame(
+            self.content,
+            corner_radius=8
+        )
+        frame.pack(
+            fill="x",
+            padx=10,
+            pady=8
+        )
+
+        heading = ctk.CTkLabel(
+            frame,
+            text="Today's Top Communication Opportunities",
+            font=("Segoe UI", 20, "bold")
+        )
+        heading.pack(
+            anchor="w",
+            padx=15,
+            pady=(12, 5)
+        )
+
+        if not recommendations:
+            ctk.CTkLabel(
+                frame,
+                text=(
+                    "No ranked editorial recommendations are available yet. "
+                    "Analyze media and build Media Intelligence to unlock this section."
+                ),
+                wraplength=1050,
+                justify="left"
+            ).pack(
+                anchor="w",
+                padx=15,
+                pady=(0, 12)
+            )
+            return
+
+        for recommendation in recommendations[:5]:
+            self.add_recommendation_card(
+                frame,
+                recommendation
+            )
+
+    ##########################################################
+
+    def add_recommendation_card(self, parent, recommendation):
+
+        card = ctk.CTkFrame(
+            parent,
+            corner_radius=6
+        )
+        card.pack(
+            fill="x",
+            padx=15,
+            pady=6
+        )
+        card.grid_columnconfigure(0, weight=1)
+
+        title = (
+            f"{recommendation.get('title', '')} "
+            f"({recommendation.get('priority_score', 0)} priority, "
+            f"{recommendation.get('confidence_score', 0)} confidence)"
+        )
+        ctk.CTkLabel(
+            card,
+            text=title,
+            font=("Segoe UI", 15, "bold"),
+            wraplength=950,
+            justify="left"
+        ).grid(
+            row=0,
+            column=0,
+            sticky="w",
+            padx=12,
+            pady=(10, 2)
+        )
+
+        details = [
+            recommendation.get("primary_reason", ""),
+            (
+                f"Support: {recommendation.get('supporting_photo_count', 0)} photo(s), "
+                f"{recommendation.get('supporting_video_count', 0)} video(s)"
+            ),
+            (
+                "Strongest angle: " +
+                self.format_list(recommendation.get("editorial_angles", [])[:1])
+            ),
+            (
+                "Platforms: " +
+                self.format_list(recommendation.get("recommended_platforms", []))
+            ),
+            (
+                "Window: " +
+                recommendation.get("recommended_posting_window", "")
+            )
+        ]
+
+        ctk.CTkLabel(
+            card,
+            text="\n".join(line for line in details if line),
+            wraplength=950,
+            justify="left"
+        ).grid(
+            row=1,
+            column=0,
+            sticky="w",
+            padx=12,
+            pady=(0, 10)
+        )
+
+        ctk.CTkButton(
+            card,
+            text="Details",
+            width=120,
+            command=lambda item=recommendation: self.show_recommendation_details(item)
+        ).grid(
+            row=0,
+            column=1,
+            rowspan=2,
+            sticky="e",
+            padx=12,
+            pady=10
+        )
+
+    ##########################################################
+
+    def show_recommendation_details(self, recommendation):
+
+        window = ctk.CTkToplevel(self)
+        window.title(recommendation.get("title", "Recommendation Details"))
+        window.geometry("900x700")
+        window.transient(self.winfo_toplevel())
+        window.lift()
+
+        frame = ctk.CTkFrame(window)
+        frame.pack(
+            fill="both",
+            expand=True,
+            padx=15,
+            pady=15
+        )
+        frame.grid_columnconfigure(0, weight=1)
+        frame.grid_rowconfigure(1, weight=1)
+
+        ctk.CTkLabel(
+            frame,
+            text=recommendation.get("title", "Recommendation Details"),
+            font=("Segoe UI", 22, "bold")
+        ).grid(
+            row=0,
+            column=0,
+            sticky="w",
+            padx=12,
+            pady=(12, 6)
+        )
+
+        text = ctk.CTkTextbox(frame)
+        text.grid(
+            row=1,
+            column=0,
+            sticky="nsew",
+            padx=12,
+            pady=8
+        )
+        text.insert(
+            "1.0",
+            self.recommendation_detail_text(recommendation)
+        )
+        text.configure(state="disabled")
+
+        ctk.CTkButton(
+            frame,
+            text="Close",
+            command=window.destroy
+        ).grid(
+            row=2,
+            column=0,
+            sticky="e",
+            padx=12,
+            pady=(4, 12)
+        )
+
+    ##########################################################
+
+    def recommendation_detail_text(self, recommendation):
+
+        positive = [
+            factor
+            for factor in recommendation.get("reasoning_factors", [])
+            if factor.get("direction") == "positive"
+        ]
+        negative = [
+            factor
+            for factor in recommendation.get("reasoning_factors", [])
+            if factor.get("direction") == "negative"
+        ]
+
+        lines = [
+            recommendation.get("summary", ""),
+            "",
+            f"Category: {recommendation.get('category', '')}",
+            f"Topic: {recommendation.get('topic', '')}",
+            f"Priority score: {recommendation.get('priority_score', 0)}",
+            f"Confidence score: {recommendation.get('confidence_score', 0)}",
+            f"Scoring version: {recommendation.get('scoring_version', '')}",
+            f"Primary reason: {recommendation.get('primary_reason', '')}",
+            f"Communications gap: {recommendation.get('communications_gap', '')}",
+            f"Repetition risk: {recommendation.get('repetition_risk', '')}",
+            "",
+            "Positive Factors:"
+        ]
+
+        lines.extend(
+            self.factor_lines(positive)
+        )
+        lines.append("")
+        lines.append("Negative Factors:")
+        lines.extend(
+            self.factor_lines(negative)
+        )
+        lines.extend(
+            [
+                "",
+                "Supporting Assets:",
+                "All: " + self.format_list(recommendation.get("supporting_asset_ids", [])),
+                "Best: " + self.format_list(recommendation.get("best_asset_ids", [])),
+                "",
+                "Editorial Angles: " + self.format_list(recommendation.get("editorial_angles", [])),
+                "Platforms: " + self.format_list(recommendation.get("recommended_platforms", [])),
+                "Audiences: " + self.format_list(recommendation.get("recommended_audiences", [])),
+                "Formats: " + self.format_list(recommendation.get("recommended_content_formats", [])),
+                "Posting Window: " + recommendation.get("recommended_posting_window", ""),
+                "",
+                "Source Signals:"
+            ]
+        )
+        lines.extend(
+            recommendation.get("source_signals", [])
+        )
+
+        return "\n".join(str(line) for line in lines if line is not None)
+
+    ##########################################################
+
+    def factor_lines(self, factors):
+
+        if not factors:
+            return ["None"]
+
+        return [
+            f"{factor.get('score', 0):+}: {factor.get('label', '')}"
+            for factor in factors
+        ]
 
     ##########################################################
 
