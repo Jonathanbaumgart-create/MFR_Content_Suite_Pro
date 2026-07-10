@@ -29,6 +29,7 @@ class FireReasoningService:
             self.knowledge = KnowledgeService(
                 database=self.db
             )
+        self.graph = None
 
     ############################################################
 
@@ -56,6 +57,8 @@ class FireReasoningService:
             communications_context,
             recommendation_learning
         )
+        graph_context = self._graph_context(terms)
+        terms |= self._graph_terms(graph_context)
         evidence = []
         skills = []
         intents = []
@@ -335,6 +338,12 @@ class FireReasoningService:
                 terms
             )
         )
+        intents.extend(
+            graph_context.get("communications_intent", [])
+        )
+        skills.extend(
+            graph_context.get("operational_skills", [])
+        )
 
         if not evidence:
             evidence.append(
@@ -344,6 +353,10 @@ class FireReasoningService:
                     "reason": "Stored intelligence did not provide enough specific operational signals."
                 }
             )
+
+        evidence.extend(
+            graph_context.get("evidence", [])
+        )
 
         result = {
             "operational_context": operational_context,
@@ -356,7 +369,7 @@ class FireReasoningService:
                 skills,
                 intents,
                 evidence
-            )
+            ) + graph_context.get("reasoning", [])
         }
 
         logger.info(
@@ -496,10 +509,22 @@ class FireReasoningService:
         ]
 
         for item in evidence[:4]:
+            confidence = item.get(
+                "confidence",
+                0
+            )
+            reason = item.get(
+                "reason",
+                item.get("relationship", "")
+            )
+            evidence_text = item.get(
+                "evidence",
+                item.get("entity", "")
+            )
             lines.append(
                 (
-                    f"Confidence {item['confidence']}: {item['reason']} "
-                    f"Evidence: {item['evidence']}"
+                    f"Confidence {confidence}: {reason} "
+                    f"Evidence: {evidence_text}"
                 )
             )
 
@@ -570,6 +595,55 @@ class FireReasoningService:
             terms.add("training_ground")
 
         return terms
+
+    ############################################################
+
+    def _graph_context(self, terms):
+
+        if not terms or not self.db:
+            return {}
+
+        try:
+            if self.graph is None:
+                from services.knowledge_graph_service import KnowledgeGraphService
+
+                self.graph = KnowledgeGraphService(
+                    database=self.db,
+                    knowledge_service=self.knowledge
+                )
+
+            return self.graph.reasoning_context(list(terms))
+
+        except Exception:
+            return {}
+
+    ############################################################
+
+    def _graph_terms(self, graph_context):
+
+        values = set()
+
+        for key in (
+            "operational_skills",
+            "communications_intent",
+            "campaigns"
+        ):
+            values.update(
+                self._token(value)
+                for value in graph_context.get(key, [])
+            )
+
+        for rows in graph_context.get("expanded_terms", {}).values():
+            values.update(
+                self._token(row.get("name", ""))
+                for row in rows
+            )
+
+        return {
+            value
+            for value in values
+            if value
+        }
 
     ############################################################
 

@@ -133,6 +133,19 @@ class FireServiceIntelligenceService:
             department_knowledge,
             communications_memory
         )
+        graph_context = self._graph_context(
+            ppe,
+            equipment,
+            apparatus,
+            incident,
+            activity,
+            communications_uses
+        )
+        communications_uses = self._unique(
+            communications_uses +
+            graph_context.get("communications_intent", []) +
+            graph_context.get("campaigns", [])
+        )
         reasoning = self._reasoning(
             personnel,
             ppe,
@@ -158,6 +171,7 @@ class FireServiceIntelligenceService:
             "operational_activity": activity,
             "communications_uses": communications_uses,
             "reasoning": reasoning,
+            "knowledge_graph_context": graph_context,
             "source_model": analysis.get("model", "")
         }
 
@@ -177,6 +191,22 @@ class FireServiceIntelligenceService:
                 communications_context=communications_context
             )
             result.update(operational)
+            result["communications_intent"] = self._unique(
+                result.get("communications_intent", []) +
+                graph_context.get("communications_intent", [])
+            )
+            result["operational_skills"] = self._unique(
+                result.get("operational_skills", []) +
+                graph_context.get("operational_skills", [])
+            )
+            result["reasoning_evidence"] = (
+                result.get("reasoning_evidence", []) +
+                graph_context.get("evidence", [])
+            )
+            result["operational_reasoning"] = self._unique_text(
+                result.get("operational_reasoning", []) +
+                graph_context.get("reasoning", [])
+            )
 
         except Exception as ex:
             logger.error(
@@ -207,6 +237,51 @@ class FireServiceIntelligenceService:
         )
 
         return result
+
+    ############################################################
+
+    def _graph_context(
+        self,
+        ppe,
+        equipment,
+        apparatus,
+        incident,
+        activity,
+        communications_uses
+    ):
+
+        if not self.db:
+            return {}
+
+        try:
+            from services.knowledge_graph_service import KnowledgeGraphService
+
+            terms = (
+                list(ppe or []) +
+                list(equipment or []) +
+                list(apparatus or []) +
+                list(communications_uses or []) +
+                [
+                    incident,
+                    activity
+                ]
+            )
+
+            return KnowledgeGraphService(
+                database=self.db,
+                knowledge_service=self.knowledge
+            ).reasoning_context(terms)
+
+        except Exception as ex:
+            logger.error(
+                "Knowledge graph enrichment failed",
+                exc_info=(
+                    type(ex),
+                    ex,
+                    ex.__traceback__
+                )
+            )
+            return {}
 
     ############################################################
 
@@ -645,5 +720,23 @@ class FireServiceIntelligenceService:
 
             seen.add(value)
             unique.append(value)
+
+        return unique
+
+    ############################################################
+
+    def _unique_text(self, values):
+
+        unique = []
+        seen = set()
+
+        for value in values or []:
+            text = str(value or "").strip()
+
+            if not text or text in seen:
+                continue
+
+            seen.add(text)
+            unique.append(text)
 
         return unique

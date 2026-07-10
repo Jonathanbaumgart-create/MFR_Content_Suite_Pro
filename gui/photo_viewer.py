@@ -601,11 +601,19 @@ class PhotoViewer(ctk.CTkToplevel):
         for item in evidence or []:
 
             if isinstance(item, dict):
+                reason = item.get(
+                    "reason",
+                    item.get("relationship", "")
+                )
+                evidence = item.get(
+                    "evidence",
+                    item.get("entity", "")
+                )
                 lines.append(
                     (
                         f"{item.get('confidence', 0)} - "
-                        f"{item.get('reason', '')}: "
-                        f"{item.get('evidence', '')}"
+                        f"{reason}: "
+                        f"{evidence}"
                     )
                 )
             else:

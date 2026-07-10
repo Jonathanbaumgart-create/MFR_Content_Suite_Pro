@@ -424,6 +424,146 @@ class DatabaseManager:
         """)
 
         ########################################################
+        # Knowledge Graph
+        ########################################################
+
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS entity_types(
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            name TEXT UNIQUE,
+
+            description TEXT,
+
+            active INTEGER DEFAULT 1
+
+        )
+
+        """)
+
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS knowledge_categories(
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            name TEXT UNIQUE,
+
+            description TEXT,
+
+            active INTEGER DEFAULT 1
+
+        )
+
+        """)
+
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS knowledge_sources(
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            name TEXT UNIQUE,
+
+            source_type TEXT,
+
+            path TEXT,
+
+            imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+            confidence INTEGER DEFAULT 80,
+
+            active INTEGER DEFAULT 1
+
+        )
+
+        """)
+
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS entities(
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            name TEXT NOT NULL,
+
+            type TEXT,
+
+            description TEXT,
+
+            aliases TEXT,
+
+            confidence INTEGER DEFAULT 80,
+
+            active INTEGER DEFAULT 1,
+
+            source TEXT,
+
+            created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+            updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+            UNIQUE(name, type)
+
+        )
+
+        """)
+
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS entity_aliases(
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            entity_id INTEGER,
+
+            alias TEXT,
+
+            normalized_alias TEXT,
+
+            confidence INTEGER DEFAULT 80,
+
+            active INTEGER DEFAULT 1,
+
+            UNIQUE(entity_id, normalized_alias)
+
+        )
+
+        """)
+
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS entity_relationships(
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            source_entity_id INTEGER,
+
+            target_entity_id INTEGER,
+
+            relationship_type TEXT,
+
+            description TEXT,
+
+            confidence INTEGER DEFAULT 80,
+
+            active INTEGER DEFAULT 1,
+
+            source TEXT,
+
+            created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+            updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+            UNIQUE(source_entity_id, target_entity_id, relationship_type)
+
+        )
+
+        """)
+
+        ########################################################
         # Communications Memory
         ########################################################
 
@@ -3120,6 +3260,641 @@ class DatabaseManager:
 
     ############################################################
 
+    def ensure_knowledge_graph_defaults(self, entity_types, categories):
+
+        conn = self.connection()
+        cur = conn.cursor()
+
+        for name in entity_types or []:
+            cur.execute("""
+
+            INSERT OR IGNORE INTO entity_types(
+
+                name,
+
+                active
+
+            )
+
+            VALUES(?,1)
+
+            """,
+
+            (name,))
+
+        for name in categories or []:
+            cur.execute("""
+
+            INSERT OR IGNORE INTO knowledge_categories(
+
+                name,
+
+                active
+
+            )
+
+            VALUES(?,1)
+
+            """,
+
+            (name,))
+
+        conn.commit()
+        conn.close()
+
+    ############################################################
+
+    def save_graph_entity(self, entity):
+
+        conn = self.connection()
+        cur = conn.cursor()
+
+        aliases = entity.get("aliases") or []
+        name = entity.get("name", "")
+        entity_type = entity.get("type", "")
+
+        cur.execute("""
+
+        INSERT INTO entities(
+
+            name,
+
+            type,
+
+            description,
+
+            aliases,
+
+            confidence,
+
+            active,
+
+            source,
+
+            updated
+
+        )
+
+        VALUES(?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+
+        ON CONFLICT(name, type) DO UPDATE SET
+            description=excluded.description,
+            aliases=excluded.aliases,
+            confidence=excluded.confidence,
+            active=excluded.active,
+            source=excluded.source,
+            updated=CURRENT_TIMESTAMP
+
+        """,
+
+        (
+            name,
+            entity_type,
+            entity.get("description", ""),
+            self._to_json(aliases),
+            self._to_int(entity.get("confidence")),
+            1 if entity.get("active", True) else 0,
+            entity.get("source", "")
+        ))
+
+        cur.execute("""
+
+        SELECT id
+
+        FROM entities
+
+        WHERE name=?
+        AND type=?
+
+        """,
+
+        (
+            name,
+            entity_type
+        ))
+
+        entity_id = cur.fetchone()[0]
+
+        values = [name] + list(aliases)
+
+        for alias in values:
+            normalized = self._graph_token(alias)
+
+            if not normalized:
+                continue
+
+            cur.execute("""
+
+            INSERT INTO entity_aliases(
+
+                entity_id,
+
+                alias,
+
+                normalized_alias,
+
+                confidence,
+
+                active
+
+            )
+
+            VALUES(?,?,?,?,1)
+
+            ON CONFLICT(entity_id, normalized_alias) DO UPDATE SET
+                alias=excluded.alias,
+                confidence=excluded.confidence,
+                active=1
+
+            """,
+
+            (
+                entity_id,
+                alias,
+                normalized,
+                self._to_int(entity.get("confidence"))
+            ))
+
+        conn.commit()
+        conn.close()
+
+        return entity_id
+
+    ############################################################
+
+    def save_graph_relationship(self, relationship):
+
+        conn = self.connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        INSERT INTO entity_relationships(
+
+            source_entity_id,
+
+            target_entity_id,
+
+            relationship_type,
+
+            description,
+
+            confidence,
+
+            active,
+
+            source,
+
+            updated
+
+        )
+
+        VALUES(?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+
+        ON CONFLICT(source_entity_id, target_entity_id, relationship_type)
+        DO UPDATE SET
+            description=excluded.description,
+            confidence=excluded.confidence,
+            active=excluded.active,
+            source=excluded.source,
+            updated=CURRENT_TIMESTAMP
+
+        """,
+
+        (
+            self._to_int(relationship.get("source_entity_id")),
+            self._to_int(relationship.get("target_entity_id")),
+            relationship.get("relationship_type", ""),
+            relationship.get("description", ""),
+            self._to_int(relationship.get("confidence")),
+            1 if relationship.get("active", True) else 0,
+            relationship.get("source", "")
+        ))
+
+        relationship_id = cur.lastrowid
+
+        if not relationship_id:
+            cur.execute("""
+
+            SELECT id
+
+            FROM entity_relationships
+
+            WHERE source_entity_id=?
+            AND target_entity_id=?
+            AND relationship_type=?
+
+            """,
+
+            (
+                self._to_int(relationship.get("source_entity_id")),
+                self._to_int(relationship.get("target_entity_id")),
+                relationship.get("relationship_type", "")
+            ))
+
+            row = cur.fetchone()
+            relationship_id = row[0] if row else None
+
+        conn.commit()
+        conn.close()
+
+        return relationship_id
+
+    ############################################################
+
+    def graph_entity_by_name_or_alias(self, value):
+
+        token = self._graph_token(value)
+
+        if not token:
+            return None
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        SELECT entities.*
+
+        FROM entities
+
+        LEFT JOIN entity_aliases
+        ON entity_aliases.entity_id = entities.id
+
+        WHERE entities.active=1
+        AND (
+            lower(entities.name)=?
+            OR replace(lower(entities.name), ' ', '_')=?
+            OR entity_aliases.normalized_alias=?
+        )
+
+        ORDER BY entities.confidence DESC, entities.name
+
+        LIMIT 1
+
+        """,
+
+        (
+            str(value or "").strip().lower(),
+            token,
+            token
+        ))
+
+        row = cur.fetchone()
+        conn.close()
+
+        if row is None:
+            return None
+
+        return self._graph_entity_from_row(row)
+
+    ############################################################
+
+    def search_graph_entities(self, query="", limit=25):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+
+        pattern = f"%{str(query or '').strip()}%"
+        token_pattern = f"%{self._graph_token(query)}%"
+
+        cur.execute("""
+
+        SELECT DISTINCT entities.*
+
+        FROM entities
+
+        LEFT JOIN entity_aliases
+        ON entity_aliases.entity_id = entities.id
+
+        WHERE entities.active=1
+        AND (
+            ?=''
+            OR entities.name LIKE ?
+            OR entities.type LIKE ?
+            OR entities.description LIKE ?
+            OR entity_aliases.alias LIKE ?
+            OR entity_aliases.normalized_alias LIKE ?
+        )
+
+        ORDER BY entities.type, entities.name
+
+        LIMIT ?
+
+        """,
+
+        (
+            str(query or "").strip(),
+            pattern,
+            pattern,
+            pattern,
+            pattern,
+            token_pattern,
+            self._to_int(limit)
+        ))
+
+        rows = cur.fetchall()
+        conn.close()
+
+        return [
+            self._graph_entity_from_row(row)
+            for row in rows
+        ]
+
+    ############################################################
+
+    def graph_related_entities(self, entity_id, depth=1, limit=50):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+
+        rows = []
+        frontier = {self._to_int(entity_id)}
+        visited = set(frontier)
+        max_depth = max(
+            1,
+            min(3, self._to_int(depth))
+        )
+
+        for current_depth in range(max_depth):
+
+            if not frontier:
+                break
+
+            placeholders = ",".join("?" for _ in frontier)
+            cur.execute(f"""
+
+            SELECT
+                entity_relationships.*,
+                source.name AS source_name,
+                source.type AS source_type,
+                target.name AS target_name,
+                target.type AS target_type
+
+            FROM entity_relationships
+
+            JOIN entities AS source
+            ON source.id = entity_relationships.source_entity_id
+
+            JOIN entities AS target
+            ON target.id = entity_relationships.target_entity_id
+
+            WHERE entity_relationships.active=1
+            AND (
+                entity_relationships.source_entity_id IN ({placeholders})
+                OR entity_relationships.target_entity_id IN ({placeholders})
+            )
+
+            ORDER BY entity_relationships.confidence DESC, target.name
+
+            """,
+
+            tuple(frontier) + tuple(frontier))
+
+            next_frontier = set()
+
+            for row in cur.fetchall():
+                source_id = row["source_entity_id"]
+                target_id = row["target_entity_id"]
+
+                if source_id in frontier:
+                    related_id = target_id
+                    name = row["target_name"]
+                    entity_type = row["target_type"]
+                else:
+                    related_id = source_id
+                    name = row["source_name"]
+                    entity_type = row["source_type"]
+
+                rows.append(
+                    {
+                        "id": related_id,
+                        "name": name,
+                        "type": entity_type,
+                        "relationship": row["relationship_type"],
+                        "confidence": row["confidence"] or 0,
+                        "reason": row["description"] or "",
+                        "depth": current_depth + 1
+                    }
+                )
+
+                if related_id not in visited:
+                    visited.add(related_id)
+                    next_frontier.add(related_id)
+
+                if len(rows) >= self._to_int(limit):
+                    break
+
+            if len(rows) >= self._to_int(limit):
+                break
+
+            frontier = next_frontier
+
+        conn.close()
+
+        unique = []
+        seen = set()
+
+        for row in rows:
+            key = (
+                row["id"],
+                row["relationship"]
+            )
+
+            if key in seen:
+                continue
+
+            seen.add(key)
+            unique.append(row)
+
+        return unique[:self._to_int(limit)]
+
+    ############################################################
+
+    def graph_relationships(self, limit=50):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        SELECT
+            entity_relationships.*,
+            source.name AS source_name,
+            source.type AS source_type,
+            target.name AS target_name,
+            target.type AS target_type
+
+        FROM entity_relationships
+
+        JOIN entities AS source
+        ON source.id = entity_relationships.source_entity_id
+
+        JOIN entities AS target
+        ON target.id = entity_relationships.target_entity_id
+
+        WHERE entity_relationships.active=1
+
+        ORDER BY entity_relationships.updated DESC, entity_relationships.id DESC
+
+        LIMIT ?
+
+        """,
+
+        (self._to_int(limit),))
+
+        rows = [
+            self._graph_relationship_from_row(row)
+            for row in cur.fetchall()
+        ]
+
+        conn.close()
+
+        return rows
+
+    ############################################################
+
+    def graph_top_entity_types(self, limit=8):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        SELECT type AS name, COUNT(*) AS count
+
+        FROM entities
+
+        WHERE active=1
+
+        GROUP BY type
+
+        ORDER BY count DESC, type
+
+        LIMIT ?
+
+        """,
+
+        (self._to_int(limit),))
+
+        rows = [
+            {
+                "name": row["name"],
+                "count": row["count"] or 0
+            }
+            for row in cur.fetchall()
+        ]
+
+        conn.close()
+
+        return rows
+
+    ############################################################
+
+    def graph_recent_entities(self, limit=8):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        SELECT *
+
+        FROM entities
+
+        WHERE active=1
+
+        ORDER BY updated DESC, id DESC
+
+        LIMIT ?
+
+        """,
+
+        (self._to_int(limit),))
+
+        rows = [
+            self._graph_entity_from_row(row)
+            for row in cur.fetchall()
+        ]
+
+        conn.close()
+
+        return rows
+
+    ############################################################
+
+    def knowledge_graph_health(self):
+
+        conn = self.connection()
+        cur = conn.cursor()
+
+        cur.execute("SELECT COUNT(*) FROM entities WHERE active=1")
+        entities = cur.fetchone()[0] or 0
+
+        cur.execute("SELECT COUNT(*) FROM entity_relationships WHERE active=1")
+        relationships = cur.fetchone()[0] or 0
+
+        cur.execute("""
+
+        SELECT COUNT(*)
+
+        FROM entities
+
+        WHERE active=1
+        AND (
+            confidence < 50
+            OR type IS NULL
+            OR type=''
+        )
+
+        """)
+        unknown = cur.fetchone()[0] or 0
+
+        cur.execute("""
+
+        SELECT COUNT(*)
+
+        FROM entities
+
+        WHERE active=1
+        AND id NOT IN (
+            SELECT source_entity_id FROM entity_relationships WHERE active=1
+            UNION
+            SELECT target_entity_id FROM entity_relationships WHERE active=1
+        )
+
+        """)
+        unused = cur.fetchone()[0] or 0
+
+        conn.close()
+
+        completeness = 0
+
+        if entities:
+            linked = max(
+                0,
+                entities - unused
+            )
+            completeness = int(
+                (linked / entities) * 100
+            )
+
+        return {
+            "entities": entities,
+            "relationships": relationships,
+            "unknown_entities": unknown,
+            "unused_entities": unused,
+            "graph_completeness": completeness
+        }
+
+    ############################################################
+
     def knowledge_items(self, table):
 
         table = self._knowledge_table(table)
@@ -4559,6 +5334,44 @@ class DatabaseManager:
 
     ############################################################
 
+    def _graph_entity_from_row(self, row):
+
+        return {
+            "id": row["id"],
+            "name": row["name"] or "",
+            "type": row["type"] or "",
+            "description": row["description"] or "",
+            "aliases": self._from_json(row["aliases"]),
+            "confidence": row["confidence"] or 0,
+            "active": bool(row["active"]),
+            "source": row["source"] or "",
+            "created": row["created"] or "",
+            "updated": row["updated"] or ""
+        }
+
+    ############################################################
+
+    def _graph_relationship_from_row(self, row):
+
+        return {
+            "id": row["id"],
+            "source_entity_id": row["source_entity_id"],
+            "source_name": row["source_name"] or "",
+            "source_type": row["source_type"] or "",
+            "target_entity_id": row["target_entity_id"],
+            "target_name": row["target_name"] or "",
+            "target_type": row["target_type"] or "",
+            "relationship_type": row["relationship_type"] or "",
+            "description": row["description"] or "",
+            "confidence": row["confidence"] or 0,
+            "active": bool(row["active"]),
+            "source": row["source"] or "",
+            "created": row["created"] or "",
+            "updated": row["updated"] or ""
+        }
+
+    ############################################################
+
     def _recommendation_feedback_from_row(self, row):
 
         return {
@@ -4663,6 +5476,15 @@ class DatabaseManager:
             return float(value)
         except Exception:
             return 0.0
+
+    ############################################################
+
+    def _graph_token(self, value):
+
+        value = str(value or "").strip().lower()
+        value = re.sub(r"[^a-z0-9]+", "_", value)
+
+        return value.strip("_")
 
     ############################################################
 
@@ -4890,6 +5712,17 @@ class DatabaseManager:
             "CREATE INDEX IF NOT EXISTS idx_response_area_name ON response_area(name)",
             "CREATE INDEX IF NOT EXISTS idx_community_partners_name ON community_partners(name)",
             "CREATE INDEX IF NOT EXISTS idx_knowledge_documents_sha ON knowledge_documents(sha256)",
+            "CREATE INDEX IF NOT EXISTS idx_entity_types_name ON entity_types(name)",
+            "CREATE INDEX IF NOT EXISTS idx_knowledge_categories_name ON knowledge_categories(name)",
+            "CREATE INDEX IF NOT EXISTS idx_knowledge_sources_name ON knowledge_sources(name)",
+            "CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(name)",
+            "CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(type)",
+            "CREATE INDEX IF NOT EXISTS idx_entities_active ON entities(active)",
+            "CREATE INDEX IF NOT EXISTS idx_entity_aliases_alias ON entity_aliases(normalized_alias)",
+            "CREATE INDEX IF NOT EXISTS idx_entity_aliases_entity ON entity_aliases(entity_id)",
+            "CREATE INDEX IF NOT EXISTS idx_entity_relationships_source ON entity_relationships(source_entity_id)",
+            "CREATE INDEX IF NOT EXISTS idx_entity_relationships_target ON entity_relationships(target_entity_id)",
+            "CREATE INDEX IF NOT EXISTS idx_entity_relationships_type ON entity_relationships(relationship_type)",
             "CREATE INDEX IF NOT EXISTS idx_content_templates_style ON content_templates(writing_style)",
             "CREATE INDEX IF NOT EXISTS idx_content_templates_platform ON content_templates(platform)",
             "CREATE INDEX IF NOT EXISTS idx_content_templates_active ON content_templates(active)",

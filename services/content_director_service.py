@@ -209,6 +209,7 @@ class ContentDirectorService:
         self.knowledge = KnowledgeService(
             database=self.db
         )
+        self.graph = None
 
     ############################################################
 
@@ -515,11 +516,14 @@ class ContentDirectorService:
             ):
                 terms.extend(fire_service.get(key) or [])
 
-        return {
+        terms = {
             self._normalize_token(term)
             for term in terms
             if term
         }
+        terms |= self._graph_terms(terms)
+
+        return terms
 
     ############################################################
 
@@ -533,6 +537,50 @@ class ContentDirectorService:
 
         except Exception:
             return None
+
+    ############################################################
+
+    def _graph_terms(self, terms):
+
+        if not terms:
+            return set()
+
+        try:
+            if self.graph is None:
+                from services.knowledge_graph_service import KnowledgeGraphService
+
+                self.graph = KnowledgeGraphService(
+                    database=self.db,
+                    knowledge_service=self.knowledge
+                )
+
+            context = self.graph.reasoning_context(list(terms))
+            values = set()
+
+            for key in (
+                "operational_skills",
+                "communications_intent",
+                "campaigns"
+            ):
+                values.update(
+                    self._normalize_token(value)
+                    for value in context.get(key, [])
+                )
+
+            for rows in context.get("expanded_terms", {}).values():
+                values.update(
+                    self._normalize_token(row.get("name", ""))
+                    for row in rows
+                )
+
+            return {
+                value
+                for value in values
+                if value
+            }
+
+        except Exception:
+            return set()
 
     ############################################################
 

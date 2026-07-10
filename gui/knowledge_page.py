@@ -3,6 +3,7 @@ from tkinter import filedialog
 import threading
 
 from services.knowledge_ingestion_service import KnowledgeIngestionService
+from services.knowledge_graph_service import KnowledgeGraphService
 from services.knowledge_service import KnowledgeService
 from services.logging_service import LoggingService
 
@@ -29,6 +30,9 @@ class KnowledgePage(ctk.CTkFrame):
         self.ingestion_service = KnowledgeIngestionService(
             knowledge_service=self.service
         )
+        self.graph_service = KnowledgeGraphService(
+            knowledge_service=self.service
+        )
         self.current_table = "programs"
         self.current_item_id = None
         self.pending_import = None
@@ -37,6 +41,7 @@ class KnowledgePage(ctk.CTkFrame):
         self.load_profile()
         self.load_items()
         self.refresh_statistics()
+        self.refresh_graph()
 
     ##########################################################
 
@@ -206,17 +211,35 @@ class KnowledgePage(ctk.CTkFrame):
             pady=(0, 12)
         )
 
-        body = ctk.CTkFrame(
-            self,
-            fg_color="transparent"
-        )
+        self.tabs = ctk.CTkTabview(self)
 
-        body.grid(
+        self.tabs.grid(
             row=2,
             column=0,
             sticky="nsew",
             padx=20,
             pady=(0, 20)
+        )
+
+        knowledge_tab = self.tabs.add("Knowledge Items")
+        graph_tab = self.tabs.add("Knowledge Graph")
+
+        knowledge_tab.grid_columnconfigure(0, weight=1)
+        knowledge_tab.grid_rowconfigure(0, weight=1)
+        graph_tab.grid_columnconfigure(0, weight=1)
+        graph_tab.grid_rowconfigure(2, weight=1)
+
+        body = ctk.CTkFrame(
+            knowledge_tab,
+            fg_color="transparent"
+        )
+
+        body.grid(
+            row=0,
+            column=0,
+            sticky="nsew",
+            padx=10,
+            pady=10
         )
         body.grid_columnconfigure(1, weight=1)
         body.grid_rowconfigure(1, weight=1)
@@ -366,6 +389,8 @@ class KnowledgePage(ctk.CTkFrame):
             pady=(0, 12)
         )
 
+        self.build_graph_tab(graph_tab)
+
     ##########################################################
 
     def add_entry(self, parent, row, label):
@@ -392,6 +417,209 @@ class KnowledgePage(ctk.CTkFrame):
         )
 
         return entry
+
+    ##########################################################
+
+    def build_graph_tab(self, parent):
+
+        parent.grid_columnconfigure(0, weight=1)
+        parent.grid_rowconfigure(2, weight=1)
+
+        self.graph_stats_label = ctk.CTkLabel(
+            parent,
+            text="Knowledge Graph loading...",
+            justify="left"
+        )
+        self.graph_stats_label.grid(
+            row=0,
+            column=0,
+            sticky="ew",
+            padx=10,
+            pady=(10, 8)
+        )
+
+        search_frame = ctk.CTkFrame(
+            parent,
+            fg_color="transparent"
+        )
+        search_frame.grid(
+            row=1,
+            column=0,
+            sticky="ew",
+            padx=10,
+            pady=(0, 8)
+        )
+        search_frame.grid_columnconfigure(0, weight=1)
+
+        self.graph_search_entry = ctk.CTkEntry(
+            search_frame,
+            placeholder_text="Search entities, aliases, or descriptions"
+        )
+        self.graph_search_entry.grid(
+            row=0,
+            column=0,
+            sticky="ew",
+            padx=(0, 8)
+        )
+
+        search_button = ctk.CTkButton(
+            search_frame,
+            text="Search",
+            command=self.search_graph
+        )
+        search_button.grid(
+            row=0,
+            column=1,
+            sticky="e"
+        )
+
+        self.graph_results = ctk.CTkScrollableFrame(parent)
+        self.graph_results.grid(
+            row=2,
+            column=0,
+            sticky="nsew",
+            padx=10,
+            pady=(0, 10)
+        )
+
+    ##########################################################
+
+    def refresh_graph(self):
+
+        if not hasattr(self, "graph_stats_label"):
+            return
+
+        health = self.graph_service.health()
+        top_types = self.graph_service.top_entity_types()
+        recent = self.graph_service.recent_entities()
+        relationships = self.graph_service.relationships(limit=8)
+
+        self.graph_stats_label.configure(
+            text=(
+                "Knowledge Graph\n"
+                f"Entities: {health['entities']} | "
+                f"Relationships: {health['relationships']} | "
+                f"Unknown: {health['unknown_entities']} | "
+                f"Unused: {health['unused_entities']} | "
+                f"Completeness: {health['graph_completeness']}%\n"
+                "Top Types: " + self.count_rows_text(top_types)
+            )
+        )
+
+        self.render_graph_rows(
+            recent,
+            relationships
+        )
+
+    ##########################################################
+
+    def search_graph(self):
+
+        query = self.graph_search_entry.get().strip()
+        rows = self.graph_service.search(
+            query,
+            limit=30
+        )
+        self.render_graph_rows(
+            rows,
+            self.graph_service.relationships(limit=8)
+        )
+        logger.info(
+            "Knowledge graph search query=%s results=%s",
+            query,
+            len(rows)
+        )
+
+    ##########################################################
+
+    def render_graph_rows(self, entities, relationships):
+
+        for child in self.graph_results.winfo_children():
+            child.destroy()
+
+        entity_title = ctk.CTkLabel(
+            self.graph_results,
+            text="Entities",
+            font=("Segoe UI", 16, "bold")
+        )
+        entity_title.pack(
+            anchor="w",
+            padx=8,
+            pady=(8, 4)
+        )
+
+        if not entities:
+            ctk.CTkLabel(
+                self.graph_results,
+                text="No entities found."
+            ).pack(
+                anchor="w",
+                padx=8,
+                pady=4
+            )
+
+        for entity in entities:
+            aliases = ", ".join(entity.get("aliases", [])[:4])
+            text = (
+                f"{entity['name']} | {entity['type']} | "
+                f"Confidence {entity['confidence']}"
+            )
+
+            if aliases:
+                text += f" | Aliases: {aliases}"
+
+            ctk.CTkLabel(
+                self.graph_results,
+                text=text,
+                justify="left",
+                wraplength=1000
+            ).pack(
+                anchor="w",
+                padx=8,
+                pady=3
+            )
+
+        relationship_title = ctk.CTkLabel(
+            self.graph_results,
+            text="Relationship Browser",
+            font=("Segoe UI", 16, "bold")
+        )
+        relationship_title.pack(
+            anchor="w",
+            padx=8,
+            pady=(14, 4)
+        )
+
+        for relationship in relationships:
+            ctk.CTkLabel(
+                self.graph_results,
+                text=(
+                    f"{relationship['source_name']} "
+                    f"{relationship['relationship_type']} "
+                    f"{relationship['target_name']} "
+                    f"({relationship['confidence']})"
+                ),
+                justify="left",
+                wraplength=1000
+            ).pack(
+                anchor="w",
+                padx=8,
+                pady=3
+            )
+
+    ##########################################################
+
+    def count_rows_text(self, rows):
+
+        rows = rows or []
+
+        if not rows:
+            return "None"
+
+        return ", ".join(
+            f"{row['name']} ({row['count']})"
+            for row in rows[:8]
+        )
 
     ##########################################################
 
@@ -593,6 +821,8 @@ class KnowledgePage(ctk.CTkFrame):
         self.load_profile()
         self.load_items()
         self.refresh_statistics()
+        self.graph_service.ensure_defaults()
+        self.refresh_graph()
         self.render_import_summary(
             {
                 "imported": result["applied"],
@@ -803,6 +1033,8 @@ class KnowledgePage(ctk.CTkFrame):
         )
         self.load_items()
         self.refresh_statistics()
+        self.graph_service.ensure_defaults()
+        self.refresh_graph()
         self.status.configure(
             text="Item saved."
         )
@@ -831,6 +1063,7 @@ class KnowledgePage(ctk.CTkFrame):
         self.new_item()
         self.load_items()
         self.refresh_statistics()
+        self.refresh_graph()
         self.status.configure(
             text="Item deleted."
         )

@@ -3,6 +3,7 @@ from core.app_context import context
 from services.ai_settings_service import AISettingsService
 from services.communications_director import CommunicationsDirector
 from services.communications_reasoning_service import CommunicationsReasoningService
+from services.knowledge_graph_service import KnowledgeGraphService
 from services.knowledge_service import KnowledgeService
 from services.logging_service import LoggingService
 
@@ -33,6 +34,10 @@ class OperationsService:
         self.reasoning = reasoning_service or CommunicationsReasoningService(
             database=self.db,
             director=self.director,
+            knowledge_service=self.knowledge
+        )
+        self.graph = KnowledgeGraphService(
+            database=self.db,
             knowledge_service=self.knowledge
         )
         self.ai_settings = AISettingsService(
@@ -191,6 +196,7 @@ class OperationsService:
     def knowledge_health(self):
 
         stats = self.knowledge.statistics()
+        graph = self.graph.health()
         profile = self.knowledge.profile()
         required = (
             "department_name",
@@ -220,7 +226,12 @@ class OperationsService:
                 "knowledge_completeness_score",
                 0
             ),
-            "program_timing_gaps": self._program_timing_gaps()
+            "program_timing_gaps": self._program_timing_gaps(),
+            "knowledge_graph_entities": graph.get("entities", 0),
+            "knowledge_graph_relationships": graph.get("relationships", 0),
+            "knowledge_graph_unknown_entities": graph.get("unknown_entities", 0),
+            "knowledge_graph_unused_entities": graph.get("unused_entities", 0),
+            "knowledge_graph_completeness": graph.get("graph_completeness", 0)
         }
 
     ############################################################
@@ -303,6 +314,12 @@ class OperationsService:
 
         if provider.get("last_provider_failure"):
             items.append("Provider failures detected")
+
+        if knowledge.get("knowledge_graph_completeness", 0) < 50:
+            items.append("Knowledge Graph relationships are incomplete")
+
+        if knowledge.get("knowledge_graph_unknown_entities", 0):
+            items.append("Knowledge Graph has unknown entities")
 
         for gap in knowledge.get("program_timing_gaps", []):
             items.append(

@@ -331,7 +331,12 @@ class OperationsPage(ctk.CTkFrame):
             f"Locations: {data['locations_count']}",
             f"Partners: {data['partners_count']}",
             f"Imported documents: {data['imported_documents_count']}",
-            f"Knowledge completeness score: {data['knowledge_completeness_score']}%"
+            f"Knowledge completeness score: {data['knowledge_completeness_score']}%",
+            f"Knowledge Graph entities: {data.get('knowledge_graph_entities', 0)}",
+            f"Knowledge Graph relationships: {data.get('knowledge_graph_relationships', 0)}",
+            f"Knowledge Graph unknown entities: {data.get('knowledge_graph_unknown_entities', 0)}",
+            f"Knowledge Graph unused entities: {data.get('knowledge_graph_unused_entities', 0)}",
+            f"Knowledge Graph completeness: {data.get('knowledge_graph_completeness', 0)}%"
         ]
 
     ##########################################################
