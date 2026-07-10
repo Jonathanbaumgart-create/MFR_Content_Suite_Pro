@@ -1,6 +1,8 @@
 import customtkinter as ctk
+import threading
 
 from media.image_loader import ImageLoader
+from media.image_dimensions import ImageDimensions
 from services.brain_service import BrainService
 from services.editorial_comparison_service import EditorialComparisonService
 from services.human_feedback_service import HumanFeedbackService
@@ -36,8 +38,14 @@ class PhotoViewer(ctk.CTkToplevel):
         self.intelligence = None
         self.fire_service_intelligence = None
         self.effective_intelligence = None
+        self.source_image = None
+        self.display_image = None
+        self.image_load_token = 0
+        self.resize_after_id = None
+        self.image_panel_size = (1, 1)
 
         self.build_ui()
+        self.load_source_image_async()
         self.load_analysis()
 
     ##########################################################
@@ -53,9 +61,9 @@ class PhotoViewer(ctk.CTkToplevel):
         # IMAGE PANEL
         #######################################################
 
-        image_frame = ctk.CTkFrame(self)
+        self.image_frame = ctk.CTkFrame(self)
 
-        image_frame.grid(
+        self.image_frame.grid(
             row=0,
             column=0,
             sticky="nsew",
@@ -64,7 +72,7 @@ class PhotoViewer(ctk.CTkToplevel):
         )
 
         title = ctk.CTkLabel(
-            image_frame,
+            self.image_frame,
             text=self.filename,
             font=("Segoe UI", 22, "bold")
         )
@@ -75,21 +83,21 @@ class PhotoViewer(ctk.CTkToplevel):
             pady=(20, 10)
         )
 
-        self.image = ImageLoader.load_image(
-            self.filepath,
-            size=(1200, 800)
+        self.preview = ctk.CTkLabel(
+            self.image_frame,
+            text="Loading image..."
         )
 
-        preview = ctk.CTkLabel(
-            image_frame,
-            image=self.image,
-            text=""
-        )
-
-        preview.pack(
+        self.preview.pack(
             expand=True,
+            fill="both",
             padx=20,
             pady=20
+        )
+
+        self.image_frame.bind(
+            "<Configure>",
+            self.image_panel_configured
         )
 
         #######################################################
@@ -228,6 +236,112 @@ class PhotoViewer(ctk.CTkToplevel):
 
         self.analysis_text.configure(state="disabled")
         self.update_mock_notice()
+
+    ##########################################################
+
+    def load_source_image_async(self):
+
+        self.image_load_token += 1
+        token = self.image_load_token
+
+        thread = threading.Thread(
+            target=self.load_source_image_worker,
+            args=(token,),
+            daemon=True
+        )
+        thread.start()
+
+    ##########################################################
+
+    def load_source_image_worker(self, token):
+
+        try:
+            image = ImageLoader.load_pil_image(
+                self.filepath
+            )
+            error = None
+
+        except Exception as ex:
+            image = None
+            error = ex
+
+        try:
+            self.after(
+                0,
+                lambda: self.source_image_ready(
+                    token,
+                    image,
+                    error
+                )
+            )
+        except Exception:
+            pass
+
+    ##########################################################
+
+    def source_image_ready(self, token, image, error):
+
+        if token != self.image_load_token:
+            return
+
+        if error is not None:
+            self.preview.configure(
+                image=None,
+                text=f"Unable to open image:\n{error}"
+            )
+            self.source_image = None
+            self.display_image = None
+            return
+
+        self.source_image = image
+        self.redraw_image()
+
+    ##########################################################
+
+    def image_panel_configured(self, event=None):
+
+        if event is not None:
+            self.image_panel_size = (
+                max(1, event.width - 40),
+                max(1, event.height - 95)
+            )
+
+        if self.resize_after_id is not None:
+            try:
+                self.after_cancel(
+                    self.resize_after_id
+                )
+            except Exception:
+                pass
+
+        self.resize_after_id = self.after(
+            120,
+            self.redraw_image
+        )
+
+    ##########################################################
+
+    def redraw_image(self):
+
+        self.resize_after_id = None
+
+        if self.source_image is None:
+            return
+
+        size = ImageDimensions.fit_size(
+            self.source_image.size,
+            self.image_panel_size
+        )
+
+        self.display_image = ImageLoader.ctk_image_from_pil(
+            self.source_image,
+            size
+        )
+
+        self.preview.configure(
+            image=self.display_image,
+            text=""
+        )
 
     ##########################################################
 
@@ -840,6 +954,25 @@ class PhotoViewer(ctk.CTkToplevel):
             return self.format_list(value)
 
         return str(value or "")
+
+    ##########################################################
+
+    def destroy(self):
+
+        if self.resize_after_id is not None:
+            try:
+                self.after_cancel(
+                    self.resize_after_id
+                )
+            except Exception:
+                pass
+            self.resize_after_id = None
+
+        self.image_load_token += 1
+        self.source_image = None
+        self.display_image = None
+
+        super().destroy()
 
 
 class CorrectionDialog(ctk.CTkToplevel):

@@ -1,9 +1,14 @@
 from pathlib import Path
-from PIL import Image
+from PIL import Image, ImageOps
 import hashlib
+
+from media.image_loader import ImageLoader
 
 
 class ThumbnailCache:
+
+    CACHE_VERSION = 2
+    DEFAULT_SIZE = 420
 
     IMAGE_EXTENSIONS = {
         ".jpg",
@@ -17,14 +22,16 @@ class ThumbnailCache:
         ".heic"
     }
 
-    def __init__(self):
+    def __init__(self, cache_dir=None):
 
-        self.cache = Path.cwd() / "thumbnails"
+        self.cache = Path(cache_dir) if cache_dir else Path.cwd() / "thumbnails"
         self.cache.mkdir(parents=True, exist_ok=True)
 
     ########################################################
 
-    def get_thumbnail(self, media_path, size=250):
+    def get_thumbnail(self, media_path, size=None):
+
+        size = int(size or self.DEFAULT_SIZE)
 
         media_path = Path(media_path)
 
@@ -32,10 +39,10 @@ class ThumbnailCache:
         if media_path.suffix.lower() not in self.IMAGE_EXTENSIONS:
             return None
 
-        # Create a unique thumbnail filename from the FULL PATH
-        thumb_name = hashlib.sha1(
-            str(media_path).encode("utf-8")
-        ).hexdigest() + ".jpg"
+        thumb_name = self.cache_identity(
+            media_path,
+            size
+        ) + ".jpg"
 
         thumbnail = self.cache / thumb_name
 
@@ -44,17 +51,24 @@ class ThumbnailCache:
 
         try:
 
-            image = Image.open(media_path)
+            with Image.open(media_path) as loaded:
+                image = ImageOps.exif_transpose(loaded)
+                image = ImageLoader._convert_mode(image).copy()
 
-            if image.mode not in ("RGB", "L"):
+            if image.mode != "RGB":
                 image = image.convert("RGB")
 
-            image.thumbnail((250, 250))
+            image.thumbnail(
+                (size, size),
+                Image.Resampling.LANCZOS
+            )
 
             image.save(
                 thumbnail,
                 format="JPEG",
-                quality=90
+                quality=92,
+                optimize=True,
+                subsampling=0
             )
 
             return thumbnail
@@ -65,3 +79,27 @@ class ThumbnailCache:
             print(ex)
 
             return None
+
+    ########################################################
+
+    def cache_identity(self, media_path, size=None):
+
+        media_path = Path(media_path)
+        size = int(size or self.DEFAULT_SIZE)
+
+        try:
+            resolved = str(media_path.resolve())
+        except Exception:
+            resolved = str(media_path.absolute())
+
+        identity = "|".join(
+            (
+                f"v{self.CACHE_VERSION}",
+                str(size),
+                resolved
+            )
+        )
+
+        return hashlib.sha1(
+            identity.encode("utf-8")
+        ).hexdigest()

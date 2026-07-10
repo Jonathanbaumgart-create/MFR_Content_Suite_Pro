@@ -2,9 +2,12 @@ import customtkinter as ctk
 import threading
 
 from gui.photo_viewer import PhotoViewer
+from media.image_dimensions import ImageDimensions
 
 
 class PhotoCard(ctk.CTkFrame):
+
+    IMAGE_AREA_SIZE = (170, 170)
 
     _thumbnail_update_lock = threading.Lock()
     _thumbnail_update_counter = 0
@@ -52,8 +55,8 @@ class PhotoCard(ctk.CTkFrame):
             self.preview = ctk.CTkLabel(
                 self,
                 text="Loading...",
-                width=170,
-                height=170
+                width=self.IMAGE_AREA_SIZE[0],
+                height=self.IMAGE_AREA_SIZE[1]
             )
 
         else:
@@ -61,8 +64,8 @@ class PhotoCard(ctk.CTkFrame):
             self.preview = ctk.CTkLabel(
                 self,
                 text="VIDEO",
-                width=170,
-                height=170
+                width=self.IMAGE_AREA_SIZE[0],
+                height=self.IMAGE_AREA_SIZE[1]
             )
 
         self.preview.pack(
@@ -159,7 +162,10 @@ class PhotoCard(ctk.CTkFrame):
             self.image = ctk.CTkImage(
                 light_image=thumbnail_image,
                 dark_image=thumbnail_image,
-                size=(170, 170)
+                size=ImageDimensions.fit_size(
+                    thumbnail_image.size,
+                    self.IMAGE_AREA_SIZE
+                )
             )
 
             self.preview.configure(
