@@ -3,7 +3,7 @@ from datetime import datetime
 
 class RecommendationScoringService:
 
-    SCORING_VERSION = "1.0"
+    SCORING_VERSION = "1.1"
 
     WEIGHTS = {
         "base": 35.0,
@@ -15,6 +15,9 @@ class RecommendationScoringService:
         "stale_gap": 10.0,
         "seasonal_alignment": 12.0,
         "knowledge_alignment": 7.0,
+        "topic_evidence": 16.0,
+        "story_strength": 14.0,
+        "topic_agreement": 8.0,
         "unused_media": 10.0,
         "human_correction": 4.0,
         "recent_repetition": -16.0,
@@ -44,7 +47,7 @@ class RecommendationScoringService:
             self._factor(
                 "base",
                 "Baseline editorial planning value",
-                self.WEIGHTS["base"],
+                self.WEIGHTS["base"] if not candidate.get("is_topic_candidate") else 22.0,
                 "positive"
             )
         ]
@@ -55,6 +58,9 @@ class RecommendationScoringService:
             assets,
             profile
         )
+        story = self.story_strength(candidate)
+        topic_count = len(candidate.get("supporting_topics") or [])
+        topic_agreement = self._topic_agreement(candidate)
 
         if photo_count:
             factors.append(
@@ -92,6 +98,48 @@ class RecommendationScoringService:
                 "positive"
             )
         )
+
+        if candidate.get("is_topic_candidate"):
+            factors.append(
+                self._factor(
+                    "topic_evidence",
+                    (
+                        "Evidence supports " +
+                        ", ".join(candidate.get("supporting_topics") or [profile["category"]])
+                    ),
+                    min(
+                        self.WEIGHTS["topic_evidence"],
+                        max(6, topic_count * 8)
+                    ),
+                    "positive"
+                )
+            )
+
+        if story["overall"] >= 55:
+            factors.append(
+                self._factor(
+                    "story_strength",
+                    f"Story strength {story['overall']}",
+                    min(
+                        self.WEIGHTS["story_strength"],
+                        story["overall"] * 0.14
+                    ),
+                    "positive"
+                )
+            )
+
+        if topic_agreement >= 2:
+            factors.append(
+                self._factor(
+                    "topic_agreement",
+                    f"{topic_agreement} best asset(s) agree on the topic",
+                    min(
+                        self.WEIGHTS["topic_agreement"],
+                        topic_agreement * 2
+                    ),
+                    "positive"
+                )
+            )
 
         if not memory["memory_available"]:
             factors.append(
@@ -257,7 +305,14 @@ class RecommendationScoringService:
             "reasoning_factors": factors,
             "communications_gap": self._communications_gap(memory),
             "repetition_risk": self._repetition_risk(memory),
-            "primary_reason": self._primary_reason(factors)
+            "primary_reason": self._primary_reason(factors),
+            "story_strength": story,
+            "confidence_limitations": self._confidence_limitations(
+                candidate,
+                memory,
+                story
+            ),
+            "topic_agreement": topic_agreement
         }
 
     ############################################################
@@ -284,7 +339,17 @@ class RecommendationScoringService:
         )
         support = min(100, len(assets) * 12)
         corrections = 75 if any(asset.get("is_human_corrected") for asset in assets) else 55
-        memory_score = 65 if memory["memory_available"] else 35
+        memory_score = 50
+
+        if not memory["memory_available"]:
+            memory_score = 22
+        elif memory.get("matching_posts"):
+            memory_score = 78
+        elif memory.get("history_post_count"):
+            memory_score = 58
+
+        story = self.story_strength(candidate)["overall"]
+        topic_agreement = min(100, self._topic_agreement(candidate) * 20)
 
         score = (
             intelligence * self.CONFIDENCE_WEIGHTS["intelligence"] +
@@ -294,14 +359,100 @@ class RecommendationScoringService:
             corrections * self.CONFIDENCE_WEIGHTS["corrections"] +
             memory_score * self.CONFIDENCE_WEIGHTS["memory"]
         )
+        score = (
+            score * 0.78 +
+            story * 0.12 +
+            topic_agreement * 0.10
+        )
 
         if self._mock_source(assets):
-            score -= 18
+            score -= 24
 
         if self._low_confidence(assets):
-            score -= 10
+            score -= 14
+
+        if not memory["memory_available"]:
+            score -= 8
+
+        if candidate.get("is_topic_candidate") and self._topic_agreement(candidate) < 2:
+            score -= 6
 
         return self._clamp(score)
+
+    ############################################################
+
+    def story_strength(self, candidate):
+
+        assets = candidate["assets"]
+        profile = candidate["profile"]
+
+        dimensions = {
+            "educational": self._average(
+                asset.get("educational_value_score", 0)
+                or asset.get("public_education_value_score", 0)
+                for asset in assets
+            ),
+            "emotional": self._average(
+                asset.get("emotional_impact_score", 0)
+                for asset in assets
+            ),
+            "operational": self._average(
+                (asset.get("fire_service_intelligence") or {}).get(
+                    "operational_confidence",
+                    0
+                )
+                for asset in assets
+            ),
+            "community": self._average(
+                asset.get("community_engagement_score", 0)
+                or asset.get("trust_building_score", 0)
+                for asset in assets
+            ),
+            "recruitment": self._average(
+                asset.get("recruitment_value_score", 0)
+                for asset in assets
+            ),
+            "leadership": self._field_bonus(assets, ("officer", "leadership", "command")),
+            "preparedness": self._field_bonus(assets, ("preparedness", "safety", "prevention")),
+            "historical": self._average(
+                asset.get("historical_importance_score", 0)
+                for asset in assets
+            ),
+            "human_interest": self._field_bonus(assets, ("firefighter", "children", "families", "crew", "people"))
+        }
+        fields = profile.get("score_fields") or ()
+        focus = self._average(
+            max(
+                float(asset.get(field) or 0)
+                for field in fields
+            )
+            if fields else 0
+            for asset in assets
+        )
+        best_dimensions = sorted(
+            dimensions.items(),
+            key=lambda item: item[1],
+            reverse=True
+        )[:3]
+        overall = self._clamp(
+            (
+                self._average(value for _key, value in best_dimensions) * 0.7
+                + focus * 0.3
+            )
+        )
+
+        return {
+            "overall": overall,
+            "dimensions": {
+                key: self._clamp(value)
+                for key, value in dimensions.items()
+            },
+            "strongest": [
+                key
+                for key, value in best_dimensions
+                if value > 0
+            ]
+        }
 
     ############################################################
 
@@ -313,6 +464,55 @@ class RecommendationScoringService:
             "score": round(float(score), 1),
             "direction": direction
         }
+
+    def _topic_agreement(self, candidate):
+
+        topic = candidate["profile"].get("topic", "")
+
+        return sum(
+            1
+            for asset in candidate["assets"][:5]
+            if any(
+                item.get("topic") == topic
+                for item in asset.get("topics", [])
+            )
+        )
+
+    def _confidence_limitations(self, candidate, memory, story):
+
+        limitations = []
+        assets = candidate["assets"]
+
+        if not memory["memory_available"]:
+            limitations.append(
+                "Communications Memory has no historical posts to compare."
+            )
+        elif not memory.get("matching_posts"):
+            limitations.append(
+                "Communications Memory exists, but no matching post history was found for this topic."
+            )
+
+        if len(assets) < 3:
+            limitations.append(
+                "Fewer than three supporting media assets were found."
+            )
+
+        if self._mock_source(assets):
+            limitations.append(
+                "Some supporting media came from mock/test analysis."
+            )
+
+        if self._low_confidence(assets):
+            limitations.append(
+                "Some supporting media has low intelligence confidence."
+            )
+
+        if story.get("overall", 0) < 55:
+            limitations.append(
+                "Story strength is limited by weak stored evidence."
+            )
+
+        return limitations
 
     def _media_count(self, assets, media_type):
 
@@ -395,11 +595,35 @@ class RecommendationScoringService:
 
     def _primary_reason(self, factors):
 
+        preferred = {
+            "topic_evidence",
+            "story_strength",
+            "topic_agreement",
+            "seasonal_alignment",
+            "communication_gap",
+            "department_knowledge_alignment",
+            "human_correction",
+            "strong_video_availability",
+            "strong_photo_availability"
+        }
         positives = [
             factor
             for factor in factors
-            if factor["direction"] == "positive"
+            if (
+                factor["direction"] == "positive" and
+                factor["factor"] in preferred
+            )
         ]
+
+        if not positives:
+            positives = [
+                factor
+                for factor in factors
+                if (
+                    factor["direction"] == "positive" and
+                    factor["factor"] != "base"
+                )
+            ]
 
         if not positives:
             return "Limited supporting evidence."
@@ -434,6 +658,29 @@ class RecommendationScoringService:
             and int(asset.get("intelligence_score") or 0) < 60
             for asset in assets
         )
+
+    def _field_bonus(self, assets, terms):
+
+        target = {
+            self._token(term)
+            for term in terms
+        }
+        scores = []
+
+        for asset in assets:
+            asset_terms = {
+                self._token(term)
+                for term in asset.get("all_terms", [])
+            }
+
+            if asset_terms & target:
+                scores.append(
+                    asset.get("communications_score", 0)
+                    or asset.get("intelligence_score", 0)
+                    or 55
+                )
+
+        return self._average(scores)
 
     def _days_since(self, value):
 

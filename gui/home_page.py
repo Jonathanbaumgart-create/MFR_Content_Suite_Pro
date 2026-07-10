@@ -431,14 +431,25 @@ class HomePage(ctk.CTkFrame):
         lines = [
             recommendation.get("summary", ""),
             "",
+            f"Headline: {recommendation.get('headline', recommendation.get('title', ''))}",
             f"Category: {recommendation.get('category', '')}",
             f"Topic: {recommendation.get('topic', '')}",
             f"Priority score: {recommendation.get('priority_score', 0)}",
             f"Confidence score: {recommendation.get('confidence_score', 0)}",
             f"Scoring version: {recommendation.get('scoring_version', '')}",
             f"Primary reason: {recommendation.get('primary_reason', '')}",
+            f"Editorial angle: {recommendation.get('editorial_angle', '')}",
+            "Supporting topics: " + self.format_list(
+                recommendation.get("supporting_topics", [])
+            ),
+            "Supporting programs: " + self.format_list(
+                recommendation.get("supporting_programs", [])
+            ),
             f"Communications gap: {recommendation.get('communications_gap', '')}",
             f"Repetition risk: {recommendation.get('repetition_risk', '')}",
+            "Story strength: " + self.story_strength_text(
+                recommendation.get("story_strength", {})
+            ),
             "",
             "Positive Factors:"
         ]
@@ -464,6 +475,16 @@ class HomePage(ctk.CTkFrame):
                 "Formats: " + self.format_list(recommendation.get("recommended_content_formats", [])),
                 "Posting Window: " + recommendation.get("recommended_posting_window", ""),
                 "",
+                "Known Confidence Limitations:"
+            ]
+        )
+        limitations = recommendation.get("confidence_limitations", [])
+        lines.extend(
+            limitations if limitations else ["None"]
+        )
+        lines.extend(
+            [
+                "",
                 "Source Signals:"
             ]
         )
@@ -484,6 +505,20 @@ class HomePage(ctk.CTkFrame):
             f"{factor.get('score', 0):+}: {factor.get('label', '')}"
             for factor in factors
         ]
+
+    ##########################################################
+
+    def story_strength_text(self, story):
+
+        if not story:
+            return "Unknown"
+
+        strongest = self.format_list(story.get("strongest", []))
+
+        return (
+            f"{story.get('overall', 0)} overall; "
+            f"strongest dimensions: {strongest}"
+        )
 
     ##########################################################
 

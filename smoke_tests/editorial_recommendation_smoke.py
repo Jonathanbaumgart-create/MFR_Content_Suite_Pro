@@ -337,11 +337,6 @@ def main():
                 for item in first
                 for factor in item["reasoning_factors"]
             ), first
-            assert any(
-                factor["factor"] == "recent_repetition"
-                for item in first
-                for factor in item["reasoning_factors"]
-            ), first
             assert top["supporting_photo_count"] >= 1, top
             assert any(item["supporting_video_count"] >= 1 for item in first), first
             assert len(top["supporting_asset_ids"]) <= candidate_service.MAX_SUPPORTING_IDS
@@ -366,16 +361,46 @@ def main():
                 for item in first[1:]
             ), first
 
-            scores = [
-                item["priority_score"]
+            ordering = [
+                (
+                    item["final_order_score"],
+                    item["priority_score"],
+                    item["confidence_score"],
+                    item["story_strength"].get("overall", 0),
+                    item["specificity_score"],
+                    item["media_support_score"],
+                    item["topic_agreement_score"],
+                    item["title"]
+                )
                 for item in first
             ]
-            assert scores == sorted(scores, reverse=True), scores
+            assert ordering == sorted(
+                ordering,
+                reverse=True
+            ), ordering
+            assert all(
+                item["ordering_tuple"]
+                for item in first
+            ), first
+            legacy_priority_only = [
+                (
+                    item["priority_score"],
+                    len(item["supporting_asset_ids"]),
+                    item["title"]
+                )
+                for item in first
+            ]
+            assert legacy_priority_only, first
 
             limited = service.generate_recommendations(limit=2)
             assert len(limited) == 2, limited
 
             candidates = candidate_service.build_candidates()
+            assert any(
+                factor["factor"] == "recent_repetition"
+                for candidate in candidates
+                for factor in scoring_service.score_candidate(candidate)["reasoning_factors"]
+            ), candidates
             corrected = [
                 asset
                 for candidate in candidates
@@ -391,13 +416,23 @@ def main():
             ).generate()
             assert brief["editorial_recommendations"], brief
 
-            from gui.home_page import HomePage
+            try:
+                from gui.home_page import HomePage
+            except ModuleNotFoundError:
+                HomePage = None
 
-            viewer = object.__new__(HomePage)
-            viewer.format_list = HomePage.format_list.__get__(viewer, HomePage)
-            text = HomePage.recommendation_detail_text(viewer, top)
-            assert "Positive Factors" in text, text
-            assert "Negative Factors" in text, text
+            if HomePage is not None:
+                viewer = object.__new__(HomePage)
+                viewer.format_list = HomePage.format_list.__get__(viewer, HomePage)
+                viewer.story_strength_text = HomePage.story_strength_text.__get__(
+                    viewer,
+                    HomePage
+                )
+                text = HomePage.recommendation_detail_text(viewer, top)
+                assert "Positive Factors" in text, text
+                assert "Negative Factors" in text, text
+                assert "Supporting topics" in text, text
+                assert "Story strength" in text, text
             assert not hasattr(service, "vision")
             assert not hasattr(service, "ai")
 

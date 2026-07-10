@@ -1,3 +1,4 @@
+from collections import Counter
 import time
 
 from core.app_context import context
@@ -16,6 +17,210 @@ class RecommendationCandidateService:
     MAX_CANDIDATES = 500
     MAX_SUPPORTING_IDS = 25
     MAX_BEST_IDS = 5
+    MAX_TOPIC_CANDIDATES = 18
+
+    TOPIC_DEFINITIONS = (
+        {
+            "topic": "water_safety",
+            "label": "Water Safety",
+            "terms": ("water_safety", "ice_rescue", "rescue_boat"),
+            "category": "Public Education",
+            "editorial_angle": "Seasonal Safety",
+            "audience": "Families and outdoor users",
+            "posting_window": "Before weekend recreation periods",
+            "platforms": ("Facebook", "Instagram")
+        },
+        {
+            "topic": "recruitment",
+            "label": "Recruit Volunteer Firefighters",
+            "terms": ("recruitment", "recruit", "volunteer"),
+            "category": "Recruitment",
+            "editorial_angle": "Recruitment",
+            "audience": "Prospective firefighters",
+            "posting_window": "This evening",
+            "platforms": ("Facebook", "Instagram", "LinkedIn")
+        },
+        {
+            "topic": "firefighter_training",
+            "label": "Firefighter Training",
+            "terms": ("training", "drill", "training_tuesday", "training_evolution"),
+            "category": "Training",
+            "editorial_angle": "Training Tuesday",
+            "audience": "Morden residents and prospective firefighters",
+            "posting_window": "Next appropriate weekday",
+            "platforms": ("Facebook", "Instagram", "LinkedIn")
+        },
+        {
+            "topic": "scba",
+            "label": "SCBA Training",
+            "terms": ("scba", "self_contained_breathing_apparatus", "breathing_apparatus"),
+            "category": "Training",
+            "editorial_angle": "Technical Education",
+            "audience": "Residents and prospective firefighters",
+            "posting_window": "Training Tuesday",
+            "platforms": ("Facebook", "Instagram")
+        },
+        {
+            "topic": "vehicle_extrication",
+            "label": "Vehicle Extrication",
+            "terms": ("vehicle_extrication", "extrication", "mvc", "rescue_tools", "spreaders", "cutters"),
+            "category": "Technical Education",
+            "editorial_angle": "Training Highlight",
+            "audience": "Morden residents",
+            "posting_window": "Next appropriate weekday",
+            "platforms": ("Facebook", "Instagram", "Website")
+        },
+        {
+            "topic": "smoke_alarms",
+            "label": "Smoke Alarm Reminder",
+            "terms": ("smoke_alarm", "smoke_alarms", "alarm", "carbon_monoxide"),
+            "category": "Public Education",
+            "editorial_angle": "Public Education",
+            "audience": "Residents and families",
+            "posting_window": "This morning",
+            "platforms": ("Facebook", "Instagram")
+        },
+        {
+            "topic": "fire_prevention",
+            "label": "Fire Prevention Reminder",
+            "terms": ("fire_prevention", "prevention", "public_education"),
+            "category": "Public Education",
+            "editorial_angle": "Fire Prevention",
+            "audience": "Morden residents",
+            "posting_window": "During prevention campaign windows",
+            "platforms": ("Facebook", "Instagram", "Website")
+        },
+        {
+            "topic": "community_event",
+            "label": "Community Event",
+            "terms": ("community_event", "open_house", "parade", "families", "children"),
+            "category": "Community Events",
+            "editorial_angle": "Community Trust",
+            "audience": "Families and community partners",
+            "posting_window": "Before the weekend",
+            "platforms": ("Facebook", "Instagram")
+        },
+        {
+            "topic": "sparky",
+            "label": "Travelling Sparky Follow-up",
+            "terms": ("sparky", "travelling_sparky"),
+            "category": "Department Programs",
+            "editorial_angle": "Public Education",
+            "audience": "Students and families",
+            "posting_window": "During the school year",
+            "platforms": ("Facebook", "Instagram", "Website")
+        },
+        {
+            "topic": "hydrant_heroes",
+            "label": "Hydrant Heroes Follow-up",
+            "terms": ("hydrant_heroes",),
+            "category": "Department Programs",
+            "editorial_angle": "Community Education",
+            "audience": "Neighbourhood residents",
+            "posting_window": "Winter safety season",
+            "platforms": ("Facebook", "Instagram")
+        },
+        {
+            "topic": "wildland_fire",
+            "label": "Wildland Fire Awareness",
+            "terms": ("wildland", "wildfire", "grass_fire", "brush_truck", "open_burning"),
+            "category": "Seasonal Safety",
+            "editorial_angle": "Seasonal Safety",
+            "audience": "Rural and city residents",
+            "posting_window": "Wildfire and grass fire season",
+            "platforms": ("Facebook", "Instagram")
+        },
+        {
+            "topic": "grass_fires",
+            "label": "Grass Fire Prevention",
+            "terms": ("grass_fire", "grass_fires", "open_burning", "wildland"),
+            "category": "Seasonal Safety",
+            "editorial_angle": "Preparedness",
+            "audience": "Residents and property owners",
+            "posting_window": "Spring and dry weather periods",
+            "platforms": ("Facebook", "Instagram")
+        },
+        {
+            "topic": "ice_safety",
+            "label": "Ice Safety Reminder",
+            "terms": ("ice_safety",),
+            "category": "Seasonal Safety",
+            "editorial_angle": "Seasonal Safety",
+            "audience": "Families and outdoor users",
+            "posting_window": "Winter safety season",
+            "platforms": ("Facebook", "Instagram")
+        },
+        {
+            "topic": "apparatus",
+            "label": "Apparatus Spotlight",
+            "terms": ("apparatus", "engine", "pumper", "ladder", "tanker", "rescue", "brush_truck"),
+            "category": "Apparatus and Equipment",
+            "editorial_angle": "Apparatus Feature",
+            "audience": "Residents and community partners",
+            "posting_window": "This afternoon",
+            "platforms": ("Facebook", "Instagram", "Website")
+        },
+        {
+            "topic": "ladder_operations",
+            "label": "Ladder Operations Training",
+            "terms": ("ladder_operations", "ground_ladder", "aerial_ladder", "ladder"),
+            "category": "Training",
+            "editorial_angle": "Training Highlight",
+            "audience": "Residents and prospective firefighters",
+            "posting_window": "Training Tuesday",
+            "platforms": ("Facebook", "Instagram", "LinkedIn")
+        },
+        {
+            "topic": "rope_rescue",
+            "label": "Rope Rescue Training",
+            "terms": ("rope_rescue", "life_safety_rope", "rope", "rescue_equipment"),
+            "category": "Technical Education",
+            "editorial_angle": "Technical Education",
+            "audience": "Residents and fire service followers",
+            "posting_window": "Next appropriate weekday",
+            "platforms": ("Facebook", "Instagram", "Website")
+        },
+        {
+            "topic": "medical_response",
+            "label": "Medical Response Readiness",
+            "terms": ("medical", "medical_response", "medical_bag", "ambulance"),
+            "category": "Emergency Response",
+            "editorial_angle": "Community Trust",
+            "audience": "Morden residents",
+            "posting_window": "This afternoon",
+            "platforms": ("Facebook", "Website")
+        },
+        {
+            "topic": "public_education",
+            "label": "Public Education",
+            "terms": ("public_education", "community_education", "education", "children", "school"),
+            "category": "Public Education",
+            "editorial_angle": "Community Education",
+            "audience": "Families and students",
+            "posting_window": "This morning",
+            "platforms": ("Facebook", "Instagram", "Website")
+        },
+        {
+            "topic": "firefighter_spotlight",
+            "label": "Firefighter Spotlight",
+            "terms": ("firefighter", "crew", "people", "recognition", "volunteer_spotlight"),
+            "category": "Firefighter Spotlight",
+            "editorial_angle": "Volunteer Spotlight",
+            "audience": "Residents and prospective firefighters",
+            "posting_window": "This evening",
+            "platforms": ("Facebook", "Instagram", "LinkedIn")
+        },
+        {
+            "topic": "mutual_aid",
+            "label": "Mutual Aid Partnership",
+            "terms": ("mutual_aid", "partner", "community_partner", "police", "ambulance", "public_works"),
+            "category": "Community Trust",
+            "editorial_angle": "Community Trust",
+            "audience": "Residents and partners",
+            "posting_window": "Next appropriate weekday",
+            "platforms": ("Facebook", "LinkedIn", "Website")
+        }
+    )
 
     CATEGORY_PROFILES = (
         {
@@ -636,6 +841,7 @@ class RecommendationCandidateService:
         )
         step = time.perf_counter()
         effective_assets = []
+        topic_seconds = 0
 
         for row in media_rows:
             asset = self._effective_asset(
@@ -644,12 +850,16 @@ class RecommendationCandidateService:
                 correction_rows.get(row.get("media_id"), [])
             )
             asset["all_terms"] = sorted(self._asset_terms(asset))
+            topic_started = time.perf_counter()
+            asset["topics"] = self.extract_topics(asset)
+            topic_seconds += time.perf_counter() - topic_started
             effective_assets.append(asset)
 
         timings["effective_asset_seconds"] = round(
             time.perf_counter() - step,
             3
         )
+        timings["topic_extraction_seconds"] = round(topic_seconds, 3)
         profiles = []
         step = time.perf_counter()
 
@@ -698,8 +908,17 @@ class RecommendationCandidateService:
                     "recent_recommended": recent_recommended,
                     "recent_social": recent_social,
                     "knowledge_signals": self._knowledge_signals(profile)
-                    }
-                )
+                }
+            )
+
+        topic_profiles = self._topic_profiles(
+            effective_assets,
+            memory_rows,
+            snapshot,
+            recent_recommended,
+            recent_social
+        )
+        profiles.extend(topic_profiles)
 
         timings["category_seconds"] = round(time.perf_counter() - step, 3)
         timings["total_seconds"] = round(time.perf_counter() - started, 3)
@@ -707,14 +926,16 @@ class RecommendationCandidateService:
             **timings,
             "media_sample_count": len(media_rows),
             "candidate_count": len(profiles),
+            "topic_candidate_count": len(topic_profiles),
             "limit": limit
         }
         logger.info(
             (
                 "Built editorial recommendation candidates categories=%s "
-                "media_sample=%s elapsed=%s timings=%s"
+                "topic_candidates=%s media_sample=%s elapsed=%s timings=%s"
             ),
             len(profiles),
+            len(topic_profiles),
             len(media_rows),
             self.last_metrics["total_seconds"],
             timings
@@ -723,6 +944,245 @@ class RecommendationCandidateService:
         return profiles
 
     ############################################################
+
+    def extract_topics(self, asset):
+
+        terms = set(asset.get("all_terms", []))
+        topics = []
+
+        for definition in self.TOPIC_DEFINITIONS:
+            definition_terms = {
+                self._token(value)
+                for value in definition["terms"]
+            }
+            matches = sorted(terms & definition_terms)
+
+            if not matches:
+                continue
+
+            topics.append(
+                {
+                    "topic": definition["topic"],
+                    "label": definition["label"],
+                    "matches": matches,
+                    "evidence_count": len(matches)
+                }
+            )
+
+        return sorted(
+            topics,
+            key=lambda item: (
+                item["evidence_count"],
+                item["label"]
+            ),
+            reverse=True
+        )
+
+    ############################################################
+
+    def _topic_profiles(
+        self,
+        assets,
+        memory_rows,
+        snapshot,
+        recent_recommended,
+        recent_social
+    ):
+
+        topic_assets = {}
+
+        for asset in assets:
+            for topic in asset.get("topics", []):
+                topic_assets.setdefault(
+                    topic["topic"],
+                    []
+                ).append(
+                    {
+                        **asset,
+                        "matched_terms": topic["matches"],
+                        "topic_label": topic["label"],
+                        "topic_evidence_count": topic["evidence_count"]
+                    }
+                )
+
+        profiles = []
+
+        for definition in self.TOPIC_DEFINITIONS:
+            assets_for_topic = topic_assets.get(
+                definition["topic"],
+                []
+            )
+
+            if not assets_for_topic:
+                continue
+
+            ranked_assets = sorted(
+                assets_for_topic,
+                key=self._asset_rank_key,
+                reverse=True
+            )
+            profile = self._topic_profile(
+                definition,
+                ranked_assets
+            )
+            memory_profile = self._topic_memory_profile(
+                definition,
+                memory_rows
+            )
+            knowledge_signals = self._topic_knowledge_signals(definition)
+
+            profiles.append(
+                {
+                    "profile": profile,
+                    "assets": ranked_assets[:self.MAX_SUPPORTING_IDS],
+                    "snapshot": snapshot,
+                    "memory_profile": memory_profile,
+                    "recent_recommended": recent_recommended,
+                    "recent_social": recent_social,
+                    "knowledge_signals": knowledge_signals,
+                    "supporting_topics": [definition["label"]],
+                    "supporting_programs": self._supporting_programs(
+                        ranked_assets
+                    ),
+                    "topic_evidence": self._topic_evidence(
+                        ranked_assets
+                    ),
+                    "is_topic_candidate": True
+                }
+            )
+
+        profiles.sort(
+            key=lambda item: (
+                len(item["assets"]),
+                self._average_asset_score(item["assets"]),
+                item["profile"]["title"]
+            ),
+            reverse=True
+        )
+
+        return profiles[:self.MAX_TOPIC_CANDIDATES]
+
+    ############################################################
+
+    def _topic_profile(self, definition, assets):
+
+        best = assets[0] if assets else {}
+        label = definition["label"]
+        title = self._topic_title(
+            label,
+            best
+        )
+
+        return {
+            "category": definition["category"],
+            "topic": definition["topic"],
+            "title": title,
+            "terms": definition["terms"],
+            "score_fields": self._score_fields_for_topic(definition["topic"]),
+            "editorial_angles": (
+                definition["editorial_angle"],
+                definition["category"]
+            ),
+            "platforms": definition["platforms"],
+            "audiences": (definition["audience"],),
+            "formats": ("single photo", "photo carousel", "short-form video"),
+            "posting_window": definition["posting_window"],
+            "evidence_label": label
+        }
+
+    def _topic_title(self, label, asset):
+
+        terms = set(asset.get("all_terms", []))
+
+        if label == "Firefighter Training":
+            if "scba" in terms:
+                return "Training Tuesday SCBA"
+            if "ladder_operations" in terms or "ladder" in terms:
+                return "Training Tuesday Ladder Operations"
+            if "hose" in terms or "hose_operations" in terms:
+                return "Training Tuesday Hose Operations"
+
+        if label == "Apparatus Spotlight":
+            for term, title in (
+                ("ladder", "Ladder Truck Spotlight"),
+                ("engine", "Engine Spotlight"),
+                ("pumper", "Pumper Spotlight"),
+                ("rescue", "Rescue Unit Spotlight"),
+                ("tanker", "Tanker Spotlight"),
+                ("brush_truck", "Brush Truck Spotlight")
+            ):
+                if term in terms:
+                    return title
+
+        return label
+
+    def _score_fields_for_topic(self, topic):
+
+        if topic in ("recruitment", "firefighter_spotlight"):
+            return (
+                "recruitment_value_score",
+                "storytelling_score",
+                "emotional_impact_score"
+            )
+
+        if topic in ("firefighter_training", "scba", "ladder_operations", "rope_rescue", "vehicle_extrication"):
+            return (
+                "educational_value_score",
+                "recruitment_value_score",
+                "storytelling_score",
+                "visual_impact_score"
+            )
+
+        if topic in ("water_safety", "ice_safety", "fire_prevention", "smoke_alarms", "grass_fires", "wildland_fire"):
+            return (
+                "public_education_value_score",
+                "educational_value_score",
+                "seasonal_relevance_score",
+                "time_sensitive_score"
+            )
+
+        return (
+            "community_engagement_score",
+            "trust_building_score",
+            "storytelling_score",
+            "visual_impact_score"
+        )
+
+    ############################################################
+
+    def _topic_memory_profile(self, definition, posts):
+
+        terms = {
+            self._token(value)
+            for value in definition["terms"]
+        }
+        terms.add(
+            self._token(definition["label"])
+        )
+        matches = []
+
+        for post in posts or []:
+            text = self._post_text(post)
+
+            if any(term and term in text for term in terms):
+                matches.append(post)
+
+        last_posted = ""
+
+        if matches:
+            last_posted = max(
+                post.get("post_date", "")
+                for post in matches
+            )
+
+        return {
+            "matching_posts": len(matches),
+            "last_posted": last_posted,
+            "memory_available": bool(posts),
+            "history_post_count": len(posts or []),
+            "topic": definition["topic"],
+            "topic_label": definition["label"]
+        }
 
     def _effective_asset(self, row, fire, corrections):
 
@@ -900,16 +1360,7 @@ class RecommendationCandidateService:
         matches = []
 
         for post in posts or []:
-            text = " ".join(
-                str(post.get(key, ""))
-                for key in (
-                    "caption",
-                    "campaign",
-                    "opportunity_type",
-                    "writing_style",
-                    "context"
-                )
-            ).lower().replace(" ", "_")
+            text = self._post_text(post)
 
             if any(term and term in text for term in terms):
                 matches.append(post)
@@ -925,8 +1376,36 @@ class RecommendationCandidateService:
         return {
             "matching_posts": len(matches),
             "last_posted": last_posted,
-            "memory_available": bool(posts)
+            "memory_available": bool(posts),
+            "history_post_count": len(posts or []),
+            "topic": profile["topic"],
+            "topic_label": profile["category"]
         }
+
+    ############################################################
+
+    def _post_text(self, post):
+
+        values = []
+
+        for key in (
+            "caption",
+            "headline",
+            "campaign",
+            "opportunity_type",
+            "writing_style",
+            "context",
+            "platform"
+        ):
+            values.extend(self._split(post.get(key, "")))
+
+        values.extend(post.get("hashtags") or [])
+
+        return " ".join(
+            self._token(value)
+            for value in values
+            if self._token(value)
+        )
 
     ############################################################
 
@@ -966,6 +1445,73 @@ class RecommendationCandidateService:
             for value in self._unique(matches)
             if value
         ][:5]
+
+    ############################################################
+
+    def _topic_knowledge_signals(self, definition):
+
+        profile = {
+            "terms": definition["terms"]
+        }
+
+        return self._knowledge_signals(profile)
+
+    def _supporting_programs(self, assets):
+
+        programs = []
+
+        for asset in assets:
+            for value in (
+                list(asset.get("recommended_uses") or []) +
+                list(asset.get("suggested_campaigns") or []) +
+                list((asset.get("fire_service_intelligence") or {}).get("communications_uses") or [])
+            ):
+                token = self._token(value)
+
+                if token in ("hydrant_heroes", "travelling_sparky", "sparky", "fire_prevention_week"):
+                    programs.append(
+                        str(value).replace("_", " ").title()
+                    )
+
+        return self._unique(programs)[:5]
+
+    def _topic_evidence(self, assets):
+
+        counts = Counter()
+
+        for asset in assets:
+            for topic in asset.get("topics", []):
+                counts[topic["label"]] += topic["evidence_count"]
+
+        return [
+            {
+                "topic": topic,
+                "evidence_count": count
+            }
+            for topic, count in counts.most_common(8)
+        ]
+
+    def _asset_rank_key(self, asset):
+
+        return (
+            int(asset.get("communications_score") or 0),
+            int(asset.get("storytelling_score") or 0),
+            int(asset.get("intelligence_score") or 0),
+            int((asset.get("fire_service_intelligence") or {}).get("operational_confidence") or 0),
+            1 if asset.get("is_human_corrected") else 0,
+            -1 if asset.get("media_type") == "video" else 0,
+            asset.get("filename", "")
+        )
+
+    def _average_asset_score(self, assets):
+
+        if not assets:
+            return 0
+
+        return sum(
+            int(asset.get("communications_score") or 0)
+            for asset in assets
+        ) / len(assets)
 
     ############################################################
 

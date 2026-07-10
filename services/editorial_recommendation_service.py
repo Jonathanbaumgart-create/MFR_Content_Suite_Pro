@@ -88,15 +88,18 @@ class EditorialRecommendationService:
             return []
 
         recommendations = []
+        filtered_count = 0
         scoring_started = time.perf_counter()
 
         for candidate in candidates:
             scored = self.scoring.score_candidate(candidate)
 
             if not candidate["assets"]:
+                filtered_count += 1
                 continue
 
             if scored["priority_score"] <= 0:
+                filtered_count += 1
                 continue
 
             recommendations.append(
@@ -107,16 +110,25 @@ class EditorialRecommendationService:
             )
 
         scoring_seconds = round(time.perf_counter() - scoring_started, 3)
+        for recommendation in recommendations:
+            self._attach_ordering_inputs(recommendation)
+
         recommendations.sort(
             key=lambda item: (
-                item.priority_score,
-                item.confidence_score,
+                item.final_order_score,
                 item.title
             ),
             reverse=True
         )
-        recommendations = recommendations[:limit]
+        recommendations, diversity_pruned = self._diverse_recommendations(
+            recommendations,
+            limit
+        )
         elapsed = round(time.perf_counter() - started, 3)
+        confidence_values = [
+            item.confidence_score
+            for item in recommendations
+        ]
         self.last_metrics = {
             "total_seconds": elapsed,
             "candidate_seconds": candidate_seconds,
@@ -128,6 +140,10 @@ class EditorialRecommendationService:
             "scoring_seconds": scoring_seconds,
             "candidate_count": len(candidates),
             "returned_count": len(recommendations),
+            "filtered_count": filtered_count,
+            "diversity_pruned_count": diversity_pruned,
+            "confidence_min": min(confidence_values) if confidence_values else 0,
+            "confidence_max": max(confidence_values) if confidence_values else 0,
             "ran_on_main_thread": ran_on_main_thread,
             "scoring_version": self.scoring.SCORING_VERSION
         }
@@ -135,15 +151,19 @@ class EditorialRecommendationService:
         logger.info(
             (
                 "Editorial recommendation generation completed "
-                "candidates=%s returned=%s elapsed=%s "
+                "candidates=%s filtered=%s diversity_pruned=%s returned=%s elapsed=%s "
                 "candidate_seconds=%s scoring_seconds=%s "
-                "main_thread=%s scoring_version=%s"
+                "confidence_range=%s-%s main_thread=%s scoring_version=%s"
             ),
             len(candidates),
+            filtered_count,
+            diversity_pruned,
             len(recommendations),
             elapsed,
             candidate_seconds,
             scoring_seconds,
+            self.last_metrics["confidence_min"],
+            self.last_metrics["confidence_max"],
             ran_on_main_thread,
             self.scoring.SCORING_VERSION
         )
@@ -159,7 +179,11 @@ class EditorialRecommendationService:
 
         profile = candidate["profile"]
         assets = candidate["assets"]
-        best_assets = assets[:self.candidates.MAX_BEST_IDS]
+        best_assets = sorted(
+            assets,
+            key=self._asset_rank_key,
+            reverse=True
+        )[:self.candidates.MAX_BEST_IDS]
         supporting_ids = [
             asset.get("media_id")
             for asset in assets[:self.candidates.MAX_SUPPORTING_IDS]
@@ -192,10 +216,18 @@ class EditorialRecommendationService:
                 profile,
                 photo_count,
                 video_count,
-                scored
+                scored,
+                candidate
             ),
             primary_reason=scored["primary_reason"],
+            headline=title,
             reasoning_factors=scored["reasoning_factors"],
+            supporting_topics=self._supporting_topics(candidate),
+            supporting_programs=candidate.get("supporting_programs", []),
+            story_strength=scored.get("story_strength", {}),
+            confidence_limitations=scored.get("confidence_limitations", []),
+            editorial_angle=(profile.get("editorial_angles") or ("",))[0],
+            topic_agreement_score=scored.get("topic_agreement", 0),
             supporting_photo_count=photo_count,
             supporting_video_count=video_count,
             supporting_asset_ids=supporting_ids,
@@ -220,11 +252,14 @@ class EditorialRecommendationService:
 
     ############################################################
 
-    def _summary(self, profile, photos, videos, scored):
+    def _summary(self, profile, photos, videos, scored, candidate):
+
+        topics = self._supporting_topics(candidate)
+        topic_text = ", ".join(topics[:3]) if topics else profile["category"]
 
         return (
-            f"{profile['category']} ranks at {scored['priority_score']} "
-            f"priority with {photos} photo(s) and {videos} video(s) supporting it. "
+            f"{topic_text} ranks at {scored['priority_score']} priority "
+            f"with {photos} photo(s) and {videos} video(s) supporting it. "
             f"{scored['primary_reason']}."
         )
 
@@ -241,7 +276,11 @@ class EditorialRecommendationService:
 
         if memory["memory_available"]:
             signals.append(
-                f"Communications Memory matching posts: {memory['matching_posts']}"
+                (
+                    "Communications Memory matching posts: "
+                    f"{memory['matching_posts']} of "
+                    f"{memory.get('history_post_count', 0)} stored post(s)"
+                )
             )
         else:
             signals.append(
@@ -266,6 +305,21 @@ class EditorialRecommendationService:
             )
 
         return signals
+
+    def _supporting_topics(self, candidate):
+
+        topics = list(candidate.get("supporting_topics") or [])
+
+        if not topics:
+            for asset in candidate.get("assets", [])[:5]:
+                for topic in asset.get("topics", [])[:2]:
+                    topics.append(topic.get("label", ""))
+
+        return [
+            value
+            for value in self._unique(topics)
+            if value
+        ][:6]
 
     def _platforms(self, profile, assets):
 
@@ -326,6 +380,144 @@ class EditorialRecommendationService:
 
         return hashlib.sha1(source.encode("utf-8")).hexdigest()[:16]
 
+    def _diverse_recommendations(self, recommendations, limit):
+
+        selected = []
+        deferred = []
+        seen = set()
+
+        for recommendation in recommendations:
+            key = (
+                recommendation.topic,
+                recommendation.editorial_angle,
+                tuple(recommendation.recommended_audiences[:1])
+            )
+
+            if key in seen:
+                deferred.append(recommendation)
+                continue
+
+            seen.add(key)
+            selected.append(recommendation)
+
+            if len(selected) >= limit:
+                break
+
+        if len(selected) < limit:
+            for recommendation in deferred:
+                if recommendation in selected:
+                    continue
+
+                selected.append(recommendation)
+
+                if len(selected) >= limit:
+                    break
+
+        return selected[:limit], max(0, len(recommendations) - len(selected))
+
+    def _attach_ordering_inputs(self, recommendation):
+
+        recommendation.specificity_score = self._specificity_score(
+            recommendation
+        )
+        recommendation.media_support_score = min(
+            10,
+            recommendation.supporting_photo_count +
+            recommendation.supporting_video_count * 2
+        )
+        recommendation.communications_gap_score = self._gap_score(
+            recommendation.communications_gap
+        )
+        recommendation.repetition_penalty = self._repetition_penalty(
+            recommendation.repetition_risk
+        )
+        recommendation.diversity_adjustment = 0
+        recommendation.final_order_score = round(
+            (
+                recommendation.priority_score * 1.0 +
+                recommendation.confidence_score * 0.35 +
+                recommendation.story_strength.get("overall", 0) * 0.25 +
+                recommendation.specificity_score * 4.0 +
+                recommendation.media_support_score * 1.5 +
+                recommendation.topic_agreement_score * 2.0 +
+                recommendation.communications_gap_score +
+                recommendation.repetition_penalty +
+                self._generic_penalty(recommendation)
+            ),
+            2
+        )
+        recommendation.ordering_tuple = (
+            recommendation.final_order_score,
+            recommendation.priority_score,
+            recommendation.confidence_score,
+            recommendation.story_strength.get("overall", 0),
+            recommendation.specificity_score,
+            recommendation.media_support_score,
+            recommendation.topic_agreement_score,
+            recommendation.title
+        )
+
+    def _specificity_score(self, recommendation):
+
+        score = 0
+
+        if recommendation.supporting_topics:
+            score += 2
+
+        if not recommendation.title.endswith("Opportunity"):
+            score += 3
+
+        if recommendation.editorial_angle:
+            score += 1
+
+        return score
+
+    def _gap_score(self, gap):
+
+        text = str(gap or "").lower()
+
+        if "no matching" in text:
+            return 8
+
+        if "no similar content" in text:
+            return 6
+
+        if "last similar post" in text:
+            return 2
+
+        return 0
+
+    def _repetition_penalty(self, risk):
+
+        text = str(risk or "").lower()
+
+        if text == "high":
+            return -20
+
+        if text == "medium":
+            return -8
+
+        return 0
+
+    def _generic_penalty(self, recommendation):
+
+        if recommendation.title.endswith("Opportunity"):
+            return -10
+
+        return 0
+
+    def _asset_rank_key(self, asset):
+
+        return (
+            int(asset.get("communications_score") or 0),
+            int(asset.get("storytelling_score") or 0),
+            int(asset.get("intelligence_score") or 0),
+            int((asset.get("fire_service_intelligence") or {}).get("operational_confidence") or 0),
+            1 if asset.get("is_human_corrected") else 0,
+            1 if asset.get("media_type") == "video" else 0,
+            asset.get("filename", "")
+        )
+
     def _media_count(self, assets, media_type):
 
         return sum(
@@ -333,3 +525,17 @@ class EditorialRecommendationService:
             for asset in assets
             if str(asset.get("media_type", "")).lower() == media_type
         )
+
+    def _unique(self, values):
+
+        unique = []
+        seen = set()
+
+        for value in values:
+            if not value or value in seen:
+                continue
+
+            seen.add(value)
+            unique.append(value)
+
+        return unique
