@@ -1,11 +1,10 @@
-from datetime import datetime
-
 from core.app_context import context
 from services.communications_director import CommunicationsDirector
 from services.communications_memory_service import CommunicationsMemoryService
 from services.knowledge_service import KnowledgeService
 from services.logging_service import LoggingService
 from services.recommendation_learning_service import RecommendationLearningService
+from services.time_service import TimeService
 
 
 logger = LoggingService.get_logger("content")
@@ -117,7 +116,7 @@ class CommunicationsReasoningService:
 
         brief = {
             "title": "Today's Communications Brief",
-            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "generated_at": TimeService.utc_now_iso(),
             "top_recommendation": top,
             "additional_opportunities": additional,
             "recommendations": recommendations,

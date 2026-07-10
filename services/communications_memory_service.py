@@ -5,6 +5,7 @@ from datetime import datetime
 
 from core.app_context import context
 from services.logging_service import LoggingService
+from services.time_service import TimeService
 
 
 logger = LoggingService.get_logger("content")
@@ -114,6 +115,46 @@ class CommunicationsMemoryService:
             "post": normalized,
             "pattern": pattern
         }
+
+    ############################################################
+
+    def remember_strategy_package(self, package, strategy, recommendation):
+
+        if not package or not strategy:
+            return {
+                "post_id": None,
+                "status": "no_strategy_package"
+            }
+
+        post = {
+            "platform": "draft",
+            "post_date": TimeService.local_date(TimeService.utc_now_iso()),
+            "headline": package.get("headline", ""),
+            "caption": package.get("facebook_caption", ""),
+            "cta": package.get("call_to_action", ""),
+            "hashtags": package.get("facebook_hashtags") or package.get("hashtags") or [],
+            "emojis": package.get("emoji_suggestions") or [],
+            "media_ids": [],
+            "campaign": strategy.get("title", ""),
+            "writing_style": package.get("writing_style", ""),
+            "opportunity_type": strategy.get("strategy_type", ""),
+            "season": "",
+            "context": recommendation.get("title", ""),
+            "source": "accepted_editorial_strategy",
+            "imported": False,
+            "generated": True,
+            "manually_created": False
+        }
+
+        result = self.remember_post(post)
+
+        logger.info(
+            "Remembered accepted editorial strategy draft post_id=%s strategy=%s",
+            result.get("post_id"),
+            strategy.get("strategy_type", "")
+        )
+
+        return result
 
     ############################################################
 

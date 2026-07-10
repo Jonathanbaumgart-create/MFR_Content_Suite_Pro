@@ -5,6 +5,7 @@ from core.app_context import context
 from services.communications_memory_service import CommunicationsMemoryService
 from services.logging_service import LoggingService
 from services.social_import_service import SocialImportService
+from services.time_service import TimeService
 
 
 logger = LoggingService.get_logger("content")
@@ -287,13 +288,31 @@ class CommunicationsMemoryPage(ctk.CTkFrame):
             "Import History",
             [
                 (
-                    f"{post['post_date']} | {post['platform']} | "
+                    f"{self.format_post_time(post)} | {post['platform']} | "
                     f"{post['campaign'] or 'No campaign'} | "
                     f"{post['caption'][:140]}"
                 )
                 for post in posts
             ] or ["No posts imported yet."]
         )
+
+    ##########################################################
+
+    def format_post_time(self, post):
+
+        value = " ".join(
+            item
+            for item in (
+                post.get("post_date", ""),
+                post.get("post_time", "")
+            )
+            if item
+        )
+
+        if post.get("post_time"):
+            return TimeService.format_local(value) or value
+
+        return value
 
     ##########################################################
 

@@ -251,6 +251,7 @@ class OperationsService:
             []
         )
         score_summary = self.db.communications_score_summary()
+        editorial = self.db.editorial_metrics()
         intelligence_count = insights.get(
             "media_with_intelligence",
             0
@@ -283,7 +284,8 @@ class OperationsService:
                 if score_coverage >= 80
                 else f"Scoring {score_coverage}% complete"
             ),
-            "human_feedback": self.feedback.metrics()
+            "human_feedback": self.feedback.metrics(),
+            "editorial_strategies": editorial
         }
 
     ############################################################
@@ -353,6 +355,7 @@ class OperationsService:
             )
 
         feedback = communications.get("human_feedback") or {}
+        editorial = communications.get("editorial_strategies") or {}
 
         if feedback.get("correction_patterns_found", 0):
             items.append("Human correction patterns found")
@@ -360,6 +363,11 @@ class OperationsService:
         if feedback.get("media_suggested_for_review", 0):
             items.append(
                 f"{feedback['media_suggested_for_review']} media items may need correction review"
+            )
+
+        if editorial.get("media_missing_editorial_strategy", 0):
+            items.append(
+                f"{editorial['media_missing_editorial_strategy']} media intelligence rows need editorial strategies"
             )
 
         if queue.get("failed_jobs", 0):

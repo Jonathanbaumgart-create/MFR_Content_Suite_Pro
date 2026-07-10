@@ -2,7 +2,9 @@ import customtkinter as ctk
 
 from media.image_loader import ImageLoader
 from services.brain_service import BrainService
+from services.editorial_comparison_service import EditorialComparisonService
 from services.human_feedback_service import HumanFeedbackService
+from services.time_service import TimeService
 
 
 class PhotoViewer(ctk.CTkToplevel):
@@ -26,8 +28,10 @@ class PhotoViewer(ctk.CTkToplevel):
         self.filename = filename
         self.filepath = filepath
         self.media_id = media_id
+        self.parent_window = parent
         self.brain = BrainService()
         self.feedback = HumanFeedbackService()
+        self.editorial = EditorialComparisonService()
         self.analysis = None
         self.intelligence = None
         self.fire_service_intelligence = None
@@ -157,6 +161,18 @@ class PhotoViewer(ctk.CTkToplevel):
         )
 
         self.improve_button.pack(
+            fill="x",
+            padx=20,
+            pady=5
+        )
+
+        self.content_director_button = ctk.CTkButton(
+            ai,
+            text="Open in Content Director",
+            command=self.open_content_director
+        )
+
+        self.content_director_button.pack(
             fill="x",
             padx=20,
             pady=5
@@ -330,12 +346,18 @@ class PhotoViewer(ctk.CTkToplevel):
             f"Technical Score: {analysis.get('technical_score', 0)}",
             f"Overall Score: {analysis.get('overall_score', 0)}",
             "",
+            self.analysis_provider_label(analysis),
             f"Model: {analysis.get('model', '')}",
-            f"Provider: {analysis.get('provider', '')}",
             f"Duration: {analysis.get('analysis_duration', 0):.2f}s",
             f"Retries: {analysis.get('retry_count', 0)}",
             f"Failure: {analysis.get('failure_reason', '')}",
-            f"Analyzed: {analysis.get('last_analyzed') or analysis.get('analyzed_at', '')}"
+            (
+                "Analyzed: " +
+                self.local_time(
+                    analysis.get("last_analyzed") or
+                    analysis.get("analyzed_at", "")
+                )
+            )
         ]
 
         intelligence_lines = self.intelligence_lines()
@@ -378,6 +400,16 @@ class PhotoViewer(ctk.CTkToplevel):
                 ] + correction_lines
             )
 
+        editorial_lines = self.editorial_strategy_lines()
+
+        if editorial_lines:
+            lines.extend(
+                [
+                    "",
+                    "Editorial Strategies"
+                ] + editorial_lines
+            )
+
         self.analysis_text.configure(state="normal")
         self.analysis_text.delete("1.0", "end")
         self.analysis_text.insert("1.0", "\n".join(lines))
@@ -406,6 +438,21 @@ class PhotoViewer(ctk.CTkToplevel):
             item["filename"],
             item["path"]
         )
+
+    ##########################################################
+
+    def open_content_director(self):
+
+        root = self.parent_window.winfo_toplevel()
+
+        if hasattr(root, "show_content_director"):
+            root.show_content_director()
+            self.destroy()
+            return
+
+        if hasattr(root, "show_page"):
+            root.show_page("content_director")
+            self.destroy()
 
     ##########################################################
 
@@ -449,11 +496,17 @@ class PhotoViewer(ctk.CTkToplevel):
             "",
             analysis.get("failure_reason", ""),
             "",
+            self.analysis_provider_label(analysis),
             f"Model: {analysis.get('model', '')}",
-            f"Provider: {analysis.get('provider', '')}",
             f"Duration: {analysis.get('analysis_duration', 0):.2f}s",
             f"Retries: {analysis.get('retry_count', 0)}",
-            f"Last Attempt: {analysis.get('last_analyzed') or analysis.get('analyzed_at', '')}"
+            (
+                "Last Attempt: " +
+                self.local_time(
+                    analysis.get("last_analyzed") or
+                    analysis.get("analyzed_at", "")
+                )
+            )
         ]
 
         self.analysis_text.configure(state="normal")
@@ -487,13 +540,17 @@ class PhotoViewer(ctk.CTkToplevel):
         model = ""
         description = ""
 
-        if analysis:
-            provider = analysis.get("provider", "")
-            model = analysis.get("model", "")
-            description = analysis.get("description", "")
+        if not analysis:
+            self.mock_notice.configure(
+                text=""
+            )
+            return
+
+        provider = analysis.get("provider", "")
+        model = analysis.get("model", "")
+        description = analysis.get("description", "")
 
         if (
-            self.brain.is_mock_provider() or
             provider == "mock" or
             model.startswith("mock") or
             description.startswith("MOCK TEST ANALYSIS")
@@ -505,6 +562,32 @@ class PhotoViewer(ctk.CTkToplevel):
             self.mock_notice.configure(
                 text=""
             )
+
+    ##########################################################
+
+    def analysis_provider_label(self, analysis):
+
+        provider = analysis.get("provider", "")
+        model = analysis.get("model", "")
+        description = analysis.get("description", "")
+
+        if (
+            provider == "mock" or
+            model.startswith("mock") or
+            description.startswith("MOCK TEST ANALYSIS")
+        ):
+            return "Analysis provider: mock - test data"
+
+        if provider:
+            return f"Analysis provider: {provider}"
+
+        return "Analysis provider: unknown"
+
+    ##########################################################
+
+    def local_time(self, value):
+
+        return TimeService.format_local(value) or str(value or "")
 
     ##########################################################
 
@@ -694,13 +777,58 @@ class PhotoViewer(ctk.CTkToplevel):
         for row in history[:8]:
             lines.append(
                 (
-                    f"{row.get('created_at', '')} | "
+                    f"{self.local_time(row.get('created_at', ''))} | "
                     f"{row.get('correction_source', '')} | "
                     f"{row.get('field_name', '')} | "
                     f"{self.format_value(row.get('previous_value'))} -> "
                     f"{self.format_value(row.get('new_value'))}"
                 )
             )
+
+        return lines
+
+    ##########################################################
+
+    def editorial_strategy_lines(self):
+
+        try:
+            comparison = self.editorial.latest(
+                self.media_id
+            )
+
+        except Exception:
+            return []
+
+        if not comparison:
+            return []
+
+        best = comparison.get("recommended_strategy") or {}
+        alternatives = comparison.get("alternative_strategies") or []
+
+        if not best:
+            return []
+
+        lines = [
+            (
+                "Top Strategy: " +
+                f"{best.get('title', '')} "
+                f"({best.get('confidence', 0)}%)"
+            ),
+            (
+                "Alternatives: " +
+                self.format_list(
+                    [
+                        item.get("title", "")
+                        for item in alternatives[:2]
+                    ]
+                )
+            ),
+            f"Confidence: {comparison.get('confidence', 0)}",
+            "Why: " + (
+                comparison.get("debate_summary") or
+                comparison.get("comparison_summary", "")
+            )
+        ]
 
         return lines
 

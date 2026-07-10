@@ -1,7 +1,8 @@
 import json
 import logging
-from datetime import datetime
 from pathlib import Path
+
+from services.time_service import TimeService
 
 
 class JsonFormatter(logging.Formatter):
@@ -9,7 +10,7 @@ class JsonFormatter(logging.Formatter):
     def format(self, record):
 
         data = {
-            "time": datetime.utcnow().isoformat(timespec="seconds"),
+            "time": TimeService.utc_now_iso(),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage()

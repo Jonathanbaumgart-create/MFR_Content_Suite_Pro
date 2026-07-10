@@ -3,6 +3,7 @@ import customtkinter as ctk
 from core.app_context import context
 from services.logging_service import LoggingService
 from services.operations_service import OperationsService
+from services.time_service import TimeService
 
 
 logger = LoggingService.get_logger("application")
@@ -299,12 +300,16 @@ class OperationsPage(ctk.CTkFrame):
             f"Provider status: {data['provider_status']}",
             data.get("mock_warning", ""),
             "Last provider failure: " + (
-                failure.get("failure_reason", "None")
+                (
+                    failure.get("failure_reason", "None") +
+                    " at " +
+                    TimeService.format_local(failure.get("last_analyzed", ""))
+                )
                 if failure
                 else "None"
             ),
             "Last successful analysis: " + (
-                success.get("last_analyzed", "None")
+                TimeService.format_local(success.get("last_analyzed", "")) or "None"
                 if success
                 else "None"
             ),
@@ -345,6 +350,7 @@ class OperationsPage(ctk.CTkFrame):
 
         weak = data.get("weak_areas") or []
         feedback = data.get("human_feedback") or {}
+        editorial = data.get("editorial_strategies") or {}
 
         return [
             f"Today's brief status: {data['todays_brief_status']}",
@@ -364,7 +370,19 @@ class OperationsPage(ctk.CTkFrame):
                 self.count_rows_text(feedback.get("most_corrected_fields"))
             ),
             f"Correction patterns found: {feedback.get('correction_patterns_found', 0)}",
-            f"Media suggested for review: {feedback.get('media_suggested_for_review', 0)}"
+            f"Media suggested for review: {feedback.get('media_suggested_for_review', 0)}",
+            f"Media with Editorial Strategies: {editorial.get('media_with_editorial_strategies', 0)}",
+            (
+                "Most selected strategies: " +
+                self.count_rows_text(editorial.get("most_selected_strategy_types"))
+            ),
+            (
+                "Most dismissed strategies: " +
+                self.count_rows_text(editorial.get("most_dismissed_strategy_types"))
+            ),
+            f"Strategy acceptance rate: {editorial.get('strategy_acceptance_rate', 0)}%",
+            f"Media missing editorial strategy: {editorial.get('media_missing_editorial_strategy', 0)}",
+            f"Editorial readiness: {editorial.get('editorial_readiness', '')}"
         ]
 
     ##########################################################

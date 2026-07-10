@@ -3,6 +3,7 @@ import customtkinter as ctk
 from core.app_context import context
 from services.daily_brief_service import DailyBriefService
 from services.logging_service import LoggingService
+from services.time_service import TimeService
 
 
 logger = LoggingService.get_logger("application")
@@ -151,7 +152,15 @@ class HomePage(ctk.CTkFrame):
             return
 
         self.status.configure(
-            text=f"Brief ready: {self.brief.get('generated_at', '')}"
+            text=(
+                "Brief ready: " +
+                (
+                    TimeService.format_local(
+                        self.brief.get("generated_at", "")
+                    ) or
+                    self.brief.get("generated_at", "")
+                )
+            )
         )
         self.render_brief()
 

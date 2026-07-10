@@ -3,6 +3,7 @@ from tkinter import messagebox
 
 from services.brain_service import BrainService
 from services.provider_diagnostics_service import ProviderDiagnosticsService
+from services.time_service import TimeService
 from services.writing_service import WritingService
 
 
@@ -94,7 +95,8 @@ class AIDashboardPage(ctk.CTkFrame):
             ("provider", "Provider"),
             ("average_analysis_time", "Avg Time"),
             ("total_analyzed", "Analyzed"),
-            ("last_analyzed", "Last Analyzed")
+            ("last_analyzed", "Last Analyzed"),
+            ("legacy_mock_analysis", "Legacy Mock")
         )
 
         for index, (key, label) in enumerate(metrics):
@@ -157,7 +159,7 @@ class AIDashboardPage(ctk.CTkFrame):
             ("Resume Queue", self.resume_queue),
             ("Cancel Queued Jobs", self.cancel_jobs),
             ("Clear Completed Jobs", self.clear_completed),
-            ("Clear Mock Analysis", self.clear_mock_analysis)
+            ("Clear Legacy Mock Analysis", self.clear_mock_analysis)
         )
 
         for text, command in controls:
@@ -732,11 +734,27 @@ class AIDashboardPage(ctk.CTkFrame):
 
     def clear_mock_analysis(self):
 
+        summary = self.brain.legacy_mock_analysis_summary()
+
+        if not summary.get("media_count"):
+            messagebox.showinfo(
+                "Clear Legacy Mock Analysis",
+                "No successful legacy mock analysis rows were found."
+            )
+            return
+
         if not messagebox.askyesno(
-            "Clear Mock Analysis",
+            "Clear Legacy Mock Analysis",
             (
-                "Clear all mock provider analysis and related "
-                "Media Intelligence rows?"
+                "This will remove legacy mock test analysis only.\n\n"
+                f"Media returned to unanalyzed: {summary.get('media_count', 0):,}\n"
+                f"AI analysis rows: {summary.get('analysis_rows', 0):,}\n"
+                f"Media Intelligence rows: {summary.get('media_intelligence_rows', 0):,}\n"
+                f"Fire Service Intelligence rows: {summary.get('fire_service_rows', 0):,}\n"
+                f"Editorial Strategy rows: {summary.get('editorial_strategy_rows', 0):,}\n"
+                f"Editorial Comparison rows: {summary.get('editorial_comparison_rows', 0):,}\n\n"
+                "Real Ollama analysis and human correction audit history will be preserved.\n\n"
+                "Continue?"
             )
         ):
             return
@@ -747,7 +765,8 @@ class AIDashboardPage(ctk.CTkFrame):
             text=(
                 f"Cleared {result.get('analysis_deleted', 0):,} mock "
                 f"analysis rows and "
-                f"{result.get('intelligence_deleted', 0):,} intelligence rows"
+                f"{result.get('intelligence_deleted', 0):,} intelligence rows. "
+                "Media is eligible for real analysis."
             )
         )
 
@@ -847,6 +866,9 @@ class AIDashboardPage(ctk.CTkFrame):
 
             if key == "average_analysis_time":
                 value = f"{value:.2f}s"
+
+            if key == "last_analyzed":
+                value = TimeService.format_local(value) or "None"
 
             label.configure(
                 text=str(value)

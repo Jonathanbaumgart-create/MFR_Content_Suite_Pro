@@ -24,6 +24,7 @@ class IntelligenceExplorerPage(ctk.CTkFrame):
         ("recommended_uses", "RECOMMENDED USES"),
         ("content_themes", "THEMES"),
         ("content_tags", "CONTENT TAGS"),
+        ("editorial_strategy", "EDITORIAL STRATEGY"),
         ("review_status", "REVIEW")
     )
 
@@ -38,6 +39,9 @@ class IntelligenceExplorerPage(ctk.CTkFrame):
         "Community Engagement": "community_engagement",
         "Trust Building": "trust_building",
         "Correction Count": "correction_count",
+        "Top Editorial Strategy": "top_editorial_strategy",
+        "Editorial Confidence": "editorial_confidence",
+        "Strategy Count": "strategy_count",
         "Newest": "newest",
         "Oldest": "oldest"
     }

@@ -4,6 +4,7 @@ import json
 import re
 
 from services.logging_service import LoggingService
+from services.time_service import TimeService
 
 
 logger = LoggingService.get_logger("database")
@@ -872,6 +873,92 @@ class DatabaseManager:
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+
+        )
+
+        """)
+
+        ########################################################
+        # Editorial Strategies
+        ########################################################
+
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS editorial_strategies(
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            media_id INTEGER,
+
+            strategy_id TEXT,
+
+            strategy_type TEXT,
+
+            title TEXT,
+
+            objective TEXT,
+
+            audience TEXT,
+
+            core_message TEXT,
+
+            reasoning TEXT,
+
+            confidence INTEGER DEFAULT 0,
+
+            communications_score INTEGER DEFAULT 0,
+
+            recommended_platforms TEXT,
+
+            posting_window TEXT,
+
+            recommended_media TEXT,
+
+            caption_direction TEXT,
+
+            CTA TEXT,
+
+            risks TEXT,
+
+            limitations TEXT,
+
+            supporting_evidence TEXT,
+
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+            selected INTEGER DEFAULT 0,
+
+            dismissed INTEGER DEFAULT 0,
+
+            UNIQUE(media_id, strategy_id)
+
+        )
+
+        """)
+
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS editorial_comparisons(
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            media_id INTEGER,
+
+            recommended_strategy_id TEXT,
+
+            runner_up_strategy_id TEXT,
+
+            comparison_summary TEXT,
+
+            tradeoffs TEXT,
+
+            why_not_others TEXT,
+
+            debate_summary TEXT,
+
+            confidence INTEGER DEFAULT 0,
+
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 
         )
 
@@ -1756,6 +1843,8 @@ class DatabaseManager:
 
         cur = conn.cursor()
 
+        now = TimeService.utc_now_iso()
+
         cur.execute("""
 
         INSERT OR REPLACE INTO ai_analysis(
@@ -1806,7 +1895,7 @@ class DatabaseManager:
 
         )
 
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,?,?,?,?,?,CURRENT_TIMESTAMP)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 
         """,
 
@@ -1842,6 +1931,8 @@ class DatabaseManager:
 
             analysis.get("instagram_caption"),
 
+            now,
+
             analysis.get("model"),
 
             self._to_float(analysis.get("analysis_duration")),
@@ -1850,7 +1941,9 @@ class DatabaseManager:
 
             self._to_int(analysis.get("retry_count")),
 
-            analysis.get("failure_reason")
+            analysis.get("failure_reason"),
+
+            now
 
         ))
 
@@ -1904,23 +1997,121 @@ class DatabaseManager:
 
     ############################################################
 
+    def legacy_mock_analysis_summary(self):
+
+        conn = self.connection()
+        cur = conn.cursor()
+
+        mock_where = self._mock_analysis_where()
+
+        cur.execute(f"""
+
+        SELECT COUNT(*)
+
+        FROM ai_analysis
+
+        WHERE {mock_where}
+
+        """)
+
+        analysis_count = cur.fetchone()[0] or 0
+
+        counts = {
+            "media_count": analysis_count,
+            "analysis_rows": analysis_count
+        }
+
+        for key, table in (
+            ("media_intelligence_rows", "media_intelligence"),
+            ("fire_service_rows", "fire_service_intelligence"),
+            ("editorial_strategy_rows", "editorial_strategies"),
+            ("editorial_comparison_rows", "editorial_comparisons")
+        ):
+            cur.execute(f"""
+
+            SELECT COUNT(*)
+
+            FROM {table}
+
+            WHERE media_id IN (
+                SELECT media_id
+                FROM ai_analysis
+                WHERE {mock_where}
+            )
+
+            """)
+
+            counts[key] = cur.fetchone()[0] or 0
+
+        conn.close()
+
+        return counts
+
+    ############################################################
+
     def clear_mock_analysis(self):
 
         conn = self.connection()
 
         cur = conn.cursor()
+        mock_where = self._mock_analysis_where()
+        summary = self.legacy_mock_analysis_summary()
+
+        cur.execute("""
+
+        CREATE TEMP TABLE IF NOT EXISTS mock_cleanup_media(
+            media_id INTEGER PRIMARY KEY
+        )
+
+        """)
+
+        cur.execute("DELETE FROM mock_cleanup_media")
+
+        cur.execute(f"""
+
+        INSERT OR IGNORE INTO mock_cleanup_media(media_id)
+
+        SELECT media_id
+
+        FROM ai_analysis
+
+        WHERE {mock_where}
+
+        """)
+
+        cur.execute("""
+
+        DELETE FROM editorial_comparisons
+
+        WHERE media_id IN (
+            SELECT media_id
+            FROM mock_cleanup_media
+        )
+
+        """)
+
+        editorial_comparisons_deleted = cur.rowcount
+
+        cur.execute("""
+
+        DELETE FROM editorial_strategies
+
+        WHERE media_id IN (
+            SELECT media_id
+            FROM mock_cleanup_media
+        )
+
+        """)
+
+        editorial_strategies_deleted = cur.rowcount
 
         cur.execute("""
 
         DELETE FROM fire_service_intelligence
 
-        WHERE source_model LIKE 'mock%'
-        OR media_id IN (
+        WHERE media_id IN (
             SELECT media_id
-            FROM ai_analysis
-            WHERE provider='mock'
-            OR model LIKE 'mock%'
-            OR description LIKE 'MOCK TEST ANALYSIS%'
+            FROM mock_cleanup_media
         )
 
         """)
@@ -1931,13 +2122,9 @@ class DatabaseManager:
 
         DELETE FROM media_intelligence
 
-        WHERE source_model LIKE 'mock%'
-        OR media_id IN (
+        WHERE media_id IN (
             SELECT media_id
-            FROM ai_analysis
-            WHERE provider='mock'
-            OR model LIKE 'mock%'
-            OR description LIKE 'MOCK TEST ANALYSIS%'
+            FROM mock_cleanup_media
         )
 
         """)
@@ -1948,9 +2135,10 @@ class DatabaseManager:
 
         DELETE FROM ai_analysis
 
-        WHERE provider='mock'
-        OR model LIKE 'mock%'
-        OR description LIKE 'MOCK TEST ANALYSIS%'
+        WHERE media_id IN (
+            SELECT media_id
+            FROM mock_cleanup_media
+        )
 
         """)
 
@@ -1961,16 +2149,24 @@ class DatabaseManager:
         conn.close()
 
         logger.info(
-            "Cleared mock analysis rows analysis=%s intelligence=%s fire_service=%s",
+            (
+                "Cleared mock analysis rows analysis=%s intelligence=%s "
+                "fire_service=%s editorial_strategies=%s editorial_comparisons=%s"
+            ),
             analysis_deleted,
             intelligence_deleted,
-            fire_service_deleted
+            fire_service_deleted,
+            editorial_strategies_deleted,
+            editorial_comparisons_deleted
         )
 
         return {
+            **summary,
             "analysis_deleted": analysis_deleted,
             "intelligence_deleted": intelligence_deleted,
-            "fire_service_deleted": fire_service_deleted
+            "fire_service_deleted": fire_service_deleted,
+            "editorial_strategies_deleted": editorial_strategies_deleted,
+            "editorial_comparisons_deleted": editorial_comparisons_deleted
         }
 
     ############################################################
@@ -2866,6 +3062,7 @@ class DatabaseManager:
                 "content_tags",
                 filters
             ),
+            "editorial_strategy": self._editorial_strategy_counts(filters),
             "review_status": self._intelligence_review_counts(filters)
         }
 
@@ -3255,6 +3452,397 @@ class DatabaseManager:
             self._recommendation_feedback_from_row(row)
             for row in rows
         ]
+
+    ############################################################
+
+    def save_editorial_strategy(self, media_id, strategy):
+
+        conn = self.connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        INSERT INTO editorial_strategies(
+
+            media_id,
+            strategy_id,
+            strategy_type,
+            title,
+            objective,
+            audience,
+            core_message,
+            reasoning,
+            confidence,
+            communications_score,
+            recommended_platforms,
+            posting_window,
+            recommended_media,
+            caption_direction,
+            CTA,
+            risks,
+            limitations,
+            supporting_evidence,
+            selected,
+            dismissed
+
+        )
+
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+
+        ON CONFLICT(media_id, strategy_id) DO UPDATE SET
+            strategy_type=excluded.strategy_type,
+            title=excluded.title,
+            objective=excluded.objective,
+            audience=excluded.audience,
+            core_message=excluded.core_message,
+            reasoning=excluded.reasoning,
+            confidence=excluded.confidence,
+            communications_score=excluded.communications_score,
+            recommended_platforms=excluded.recommended_platforms,
+            posting_window=excluded.posting_window,
+            recommended_media=excluded.recommended_media,
+            caption_direction=excluded.caption_direction,
+            CTA=excluded.CTA,
+            risks=excluded.risks,
+            limitations=excluded.limitations,
+            supporting_evidence=excluded.supporting_evidence,
+            created_at=CURRENT_TIMESTAMP
+
+        """,
+
+        (
+            self._to_int(media_id),
+            strategy.get("strategy_id", ""),
+            strategy.get("strategy_type", ""),
+            strategy.get("title", ""),
+            strategy.get("objective", ""),
+            strategy.get("target_audience", strategy.get("audience", "")),
+            strategy.get("core_message", ""),
+            self._to_json(strategy.get("reasoning")),
+            self._to_int(strategy.get("confidence")),
+            self._to_int(strategy.get("communications_score")),
+            self._to_json(strategy.get("recommended_platforms")),
+            strategy.get("recommended_posting_window", strategy.get("posting_window", "")),
+            self._to_json(strategy.get("recommended_media")),
+            strategy.get("caption_direction", ""),
+            strategy.get("call_to_action", strategy.get("CTA", "")),
+            self._to_json(strategy.get("risks")),
+            self._to_json(strategy.get("limitations")),
+            self._to_json(strategy.get("supporting_evidence")),
+            self._to_int(strategy.get("selected")),
+            self._to_int(strategy.get("dismissed"))
+        ))
+
+        strategy_id = cur.lastrowid
+        conn.commit()
+        conn.close()
+
+        return strategy_id
+
+    ############################################################
+
+    def save_editorial_strategies(self, media_id, strategies):
+
+        ids = []
+
+        for strategy in strategies or []:
+            ids.append(
+                self.save_editorial_strategy(
+                    media_id,
+                    strategy
+                )
+            )
+
+        return ids
+
+    ############################################################
+
+    def editorial_strategies_for_media(self, media_id, limit=10):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        SELECT *
+
+        FROM editorial_strategies
+
+        WHERE media_id=?
+
+        ORDER BY confidence DESC,
+                 communications_score DESC,
+                 created_at DESC
+
+        LIMIT ?
+
+        """,
+
+        (
+            self._to_int(media_id),
+            self._to_int(limit)
+        ))
+
+        rows = cur.fetchall()
+        conn.close()
+
+        return [
+            self._editorial_strategy_from_row(row)
+            for row in rows
+        ]
+
+    ############################################################
+
+    def latest_editorial_comparison(self, media_id):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        SELECT *
+
+        FROM editorial_comparisons
+
+        WHERE media_id=?
+
+        ORDER BY created_at DESC, id DESC
+
+        LIMIT 1
+
+        """,
+
+        (
+            self._to_int(media_id),
+        ))
+
+        row = cur.fetchone()
+        conn.close()
+
+        if row is None:
+            return None
+
+        return self._editorial_comparison_from_row(row)
+
+    ############################################################
+
+    def save_editorial_comparison(self, media_id, comparison):
+
+        conn = self.connection()
+        cur = conn.cursor()
+
+        recommended = comparison.get("recommended_strategy") or {}
+        runner_up = comparison.get("runner_up") or {}
+
+        cur.execute("""
+
+        INSERT INTO editorial_comparisons(
+
+            media_id,
+            recommended_strategy_id,
+            runner_up_strategy_id,
+            comparison_summary,
+            tradeoffs,
+            why_not_others,
+            debate_summary,
+            confidence
+
+        )
+
+        VALUES(?,?,?,?,?,?,?,?)
+
+        """,
+
+        (
+            self._to_int(media_id),
+            recommended.get("strategy_id", ""),
+            runner_up.get("strategy_id", ""),
+            comparison.get("comparison_summary", ""),
+            self._to_json(comparison.get("tradeoffs")),
+            self._to_json(comparison.get("why_not_others")),
+            comparison.get("debate_summary", ""),
+            self._to_int(comparison.get("confidence"))
+        ))
+
+        comparison_id = cur.lastrowid
+        conn.commit()
+        conn.close()
+
+        return comparison_id
+
+    ############################################################
+
+    def mark_editorial_strategy(
+        self,
+        media_id,
+        strategy_id,
+        selected=None,
+        dismissed=None
+    ):
+
+        updates = []
+        params = []
+
+        if selected is not None:
+            updates.append("selected=?")
+            params.append(self._to_int(selected))
+
+        if dismissed is not None:
+            updates.append("dismissed=?")
+            params.append(self._to_int(dismissed))
+
+        if not updates:
+            return
+
+        params.extend(
+            [
+                self._to_int(media_id),
+                strategy_id
+            ]
+        )
+
+        conn = self.connection()
+        cur = conn.cursor()
+
+        cur.execute(f"""
+
+        UPDATE editorial_strategies
+
+        SET {", ".join(updates)}
+
+        WHERE media_id=?
+        AND strategy_id=?
+
+        """,
+
+        params)
+
+        conn.commit()
+        conn.close()
+
+    ############################################################
+
+    def editorial_metrics(self):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        SELECT COUNT(DISTINCT media_id) AS count
+
+        FROM editorial_strategies
+
+        """)
+
+        media_with = cur.fetchone()["count"] or 0
+
+        cur.execute("""
+
+        SELECT COUNT(*) AS count
+
+        FROM editorial_strategies
+
+        WHERE selected=1
+
+        """)
+
+        selected = cur.fetchone()["count"] or 0
+
+        cur.execute("""
+
+        SELECT COUNT(*) AS count
+
+        FROM editorial_strategies
+
+        WHERE dismissed=1
+
+        """)
+
+        dismissed = cur.fetchone()["count"] or 0
+
+        cur.execute("""
+
+        SELECT strategy_type AS name, COUNT(*) AS count
+
+        FROM editorial_strategies
+
+        WHERE selected=1
+
+        GROUP BY strategy_type
+
+        ORDER BY COUNT(*) DESC, strategy_type
+
+        LIMIT 5
+
+        """)
+
+        selected_types = [
+            {
+                "name": row["name"] or "",
+                "count": row["count"] or 0
+            }
+            for row in cur.fetchall()
+        ]
+
+        cur.execute("""
+
+        SELECT strategy_type AS name, COUNT(*) AS count
+
+        FROM editorial_strategies
+
+        WHERE dismissed=1
+
+        GROUP BY strategy_type
+
+        ORDER BY COUNT(*) DESC, strategy_type
+
+        LIMIT 5
+
+        """)
+
+        dismissed_types = [
+            {
+                "name": row["name"] or "",
+                "count": row["count"] or 0
+            }
+            for row in cur.fetchall()
+        ]
+
+        cur.execute("""
+
+        SELECT COUNT(*)
+
+        FROM media_intelligence
+
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM editorial_strategies
+            WHERE editorial_strategies.media_id=media_intelligence.media_id
+        )
+
+        """)
+
+        missing = cur.fetchone()[0] or 0
+        total_actions = selected + dismissed
+
+        conn.close()
+
+        return {
+            "media_with_editorial_strategies": media_with,
+            "most_selected_strategy_types": selected_types,
+            "most_dismissed_strategy_types": dismissed_types,
+            "strategy_acceptance_rate": self._rate(selected, total_actions),
+            "media_missing_editorial_strategy": missing,
+            "editorial_readiness": (
+                "Ready"
+                if missing == 0 and media_with
+                else f"{media_with} media prepared"
+            )
+        }
 
     ############################################################
 
@@ -5813,6 +6401,50 @@ class DatabaseManager:
 
     ############################################################
 
+    def _editorial_strategy_counts(self, filters):
+
+        section_filters = dict(filters or {})
+        section_filters.pop("editorial_strategy", None)
+        where, params = self._intelligence_where(section_filters)
+
+        conn = self.connection()
+        cur = conn.cursor()
+
+        cur.execute(f"""
+
+        SELECT
+            editorial_strategies.strategy_type,
+            COUNT(DISTINCT media.id)
+
+        FROM media
+
+        JOIN media_intelligence
+        ON media.id = media_intelligence.media_id
+
+        JOIN editorial_strategies
+        ON editorial_strategies.media_id = media.id
+
+        {where}
+
+        GROUP BY editorial_strategies.strategy_type
+
+        HAVING editorial_strategies.strategy_type IS NOT NULL
+        AND editorial_strategies.strategy_type != ''
+
+        ORDER BY COUNT(DISTINCT media.id) DESC,
+                 editorial_strategies.strategy_type
+
+        """,
+
+        params)
+
+        rows = cur.fetchall()
+        conn.close()
+
+        return rows
+
+    ############################################################
+
     def _intelligence_where(self, filters):
 
         clauses = []
@@ -5907,6 +6539,17 @@ class DatabaseManager:
                         "(" + " OR ".join(review_clauses) + ")"
                     )
 
+            elif field == "editorial_strategy":
+                clauses.append(f"""
+                EXISTS (
+                    SELECT 1
+                    FROM editorial_strategies
+                    WHERE editorial_strategies.media_id=media.id
+                    AND editorial_strategies.strategy_type IN ({placeholders})
+                )
+                """)
+                params.extend(values)
+
         if not clauses:
             return "", []
 
@@ -5954,6 +6597,22 @@ class DatabaseManager:
                 "(SELECT COUNT(*) FROM media_corrections "
                 "WHERE media_corrections.media_id=media.id "
                 "AND media_corrections.active=1) DESC, "
+                "media.filename ASC"
+            ),
+            "editorial_confidence": (
+                "(SELECT MAX(confidence) FROM editorial_strategies "
+                "WHERE editorial_strategies.media_id=media.id) DESC, "
+                "media.filename ASC"
+            ),
+            "strategy_count": (
+                "(SELECT COUNT(*) FROM editorial_strategies "
+                "WHERE editorial_strategies.media_id=media.id) DESC, "
+                "media.filename ASC"
+            ),
+            "top_editorial_strategy": (
+                "(SELECT strategy_type FROM editorial_strategies "
+                "WHERE editorial_strategies.media_id=media.id "
+                "ORDER BY confidence DESC LIMIT 1) ASC, "
                 "media.filename ASC"
             ),
             "newest": "media.date_added DESC",
@@ -6279,6 +6938,52 @@ class DatabaseManager:
 
     ############################################################
 
+    def _editorial_strategy_from_row(self, row):
+
+        return {
+            "id": row["id"],
+            "media_id": row["media_id"],
+            "strategy_id": row["strategy_id"] or "",
+            "strategy_type": row["strategy_type"] or "",
+            "title": row["title"] or "",
+            "objective": row["objective"] or "",
+            "target_audience": row["audience"] or "",
+            "core_message": row["core_message"] or "",
+            "reasoning": self._from_json(row["reasoning"]),
+            "confidence": row["confidence"] or 0,
+            "communications_score": row["communications_score"] or 0,
+            "recommended_platforms": self._from_json(row["recommended_platforms"]),
+            "recommended_posting_window": row["posting_window"] or "",
+            "recommended_media": self._from_json(row["recommended_media"]),
+            "caption_direction": row["caption_direction"] or "",
+            "call_to_action": row["CTA"] or "",
+            "risks": self._from_json(row["risks"]),
+            "limitations": self._from_json(row["limitations"]),
+            "supporting_evidence": self._from_json(row["supporting_evidence"]),
+            "created_at": row["created_at"] or "",
+            "selected": bool(row["selected"]),
+            "dismissed": bool(row["dismissed"])
+        }
+
+    ############################################################
+
+    def _editorial_comparison_from_row(self, row):
+
+        return {
+            "id": row["id"],
+            "media_id": row["media_id"],
+            "recommended_strategy_id": row["recommended_strategy_id"] or "",
+            "runner_up_strategy_id": row["runner_up_strategy_id"] or "",
+            "comparison_summary": row["comparison_summary"] or "",
+            "tradeoffs": self._from_json(row["tradeoffs"]),
+            "why_not_others": self._from_json(row["why_not_others"]),
+            "debate_summary": row["debate_summary"] or "",
+            "confidence": row["confidence"] or 0,
+            "created_at": row["created_at"] or ""
+        }
+
+    ############################################################
+
     def _social_post_from_row(self, row):
 
         return {
@@ -6328,6 +7033,21 @@ class DatabaseManager:
 
     ############################################################
 
+    def _mock_analysis_where(self):
+
+        return """
+        (
+            failure_reason IS NULL OR failure_reason=''
+        )
+        AND (
+            provider='mock'
+            OR model LIKE 'mock%'
+            OR description LIKE 'MOCK TEST ANALYSIS%'
+        )
+        """
+
+    ############################################################
+
     def _to_int(self, value):
 
         if isinstance(value, str):
@@ -6349,6 +7069,15 @@ class DatabaseManager:
             return float(value)
         except Exception:
             return 0.0
+
+    ############################################################
+
+    def _rate(self, value, total):
+
+        if total <= 0:
+            return 0
+
+        return round((value / total) * 100, 1)
 
     ############################################################
 
@@ -6606,6 +7335,12 @@ class DatabaseManager:
             "CREATE INDEX IF NOT EXISTS idx_content_templates_style ON content_templates(writing_style)",
             "CREATE INDEX IF NOT EXISTS idx_content_templates_platform ON content_templates(platform)",
             "CREATE INDEX IF NOT EXISTS idx_content_templates_active ON content_templates(active)",
+            "CREATE INDEX IF NOT EXISTS idx_editorial_strategies_media ON editorial_strategies(media_id)",
+            "CREATE INDEX IF NOT EXISTS idx_editorial_strategies_type ON editorial_strategies(strategy_type)",
+            "CREATE INDEX IF NOT EXISTS idx_editorial_strategies_confidence ON editorial_strategies(confidence)",
+            "CREATE INDEX IF NOT EXISTS idx_editorial_strategies_selected ON editorial_strategies(selected)",
+            "CREATE INDEX IF NOT EXISTS idx_editorial_strategies_dismissed ON editorial_strategies(dismissed)",
+            "CREATE INDEX IF NOT EXISTS idx_editorial_comparisons_media ON editorial_comparisons(media_id)",
             "CREATE INDEX IF NOT EXISTS idx_social_posts_platform ON social_posts(platform)",
             "CREATE INDEX IF NOT EXISTS idx_social_posts_date ON social_posts(post_date)",
             "CREATE INDEX IF NOT EXISTS idx_social_posts_campaign ON social_posts(campaign)",

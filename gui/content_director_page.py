@@ -6,8 +6,10 @@ import customtkinter as ctk
 from gui.photo_card import PhotoCard
 from gui.photo_viewer import PhotoViewer
 from services.communications_director import CommunicationsDirector
+from services.communications_memory_service import CommunicationsMemoryService
 from services.communications_reasoning_service import CommunicationsReasoningService
 from services.content_generation_service import ContentGenerationService
+from services.editorial_comparison_service import EditorialComparisonService
 from services.logging_service import LoggingService
 from services.thumbnail_service import ThumbnailService
 
@@ -26,12 +28,17 @@ class ContentDirectorPage(ctk.CTkFrame):
             director=self.director
         )
         self.content_generation_service = ContentGenerationService()
+        self.editorial_comparison_service = EditorialComparisonService()
+        self.memory_service = CommunicationsMemoryService()
         self.thumbnail_service = ThumbnailService()
         self.current_results = []
         self.brief = None
         self.brief_cache = None
         self.package_cache = {}
         self.package_jobs = {}
+        self.strategy_cache = {}
+        self.strategy_jobs = {}
+        self.strategy_views = set()
         self.ui_queue = queue.Queue()
         self.executor = ThreadPoolExecutor(
             max_workers=2
@@ -704,43 +711,24 @@ class ContentDirectorPage(ctk.CTkFrame):
             " | ".join(opportunity["reasoning"])
         )
 
-        package_frame = ctk.CTkFrame(
+        strategy_frame = ctk.CTkFrame(
             frame,
             fg_color="transparent"
         )
-        package_frame.grid(
+        strategy_frame.grid(
             row=3,
             column=1,
             sticky="ew",
             padx=(0, 12),
             pady=3
         )
-        package_frame.grid_columnconfigure(0, weight=1)
-        package_frame.grid_columnconfigure(1, weight=1)
-        key = self.package_cache_key(
+        strategy_frame.grid_columnconfigure(0, weight=1)
+        strategy_frame.grid_columnconfigure(1, weight=1)
+        self.render_strategy_panel(
+            strategy_frame,
             opportunity
         )
-        package = self.package_cache.get(
-            key
-        )
-
-        if package:
-            self.render_package(
-                package_frame,
-                package,
-                start_row=0
-            )
-            next_row = 4
-        else:
-            self.render_package_placeholder(
-                package_frame,
-                opportunity
-            )
-            self.request_package(
-                opportunity,
-                package_frame
-            )
-            next_row = 4
+        next_row = 4
 
         footer = ctk.CTkFrame(
             frame,
@@ -837,23 +825,23 @@ class ContentDirectorPage(ctk.CTkFrame):
 
     ##########################################################
 
-    def render_package_placeholder(self, parent, opportunity):
+    def render_package_placeholder(self, parent, opportunity, start_row=0):
 
         self.add_caption_line(
             parent,
-            0,
+            start_row,
             "Complete Communication Package",
-            "Generating captions..."
+            "Select an editorial strategy, then generate the package."
         )
         self.add_caption_line(
             parent,
-            1,
+            start_row + 1,
             "Caption Theme",
             opportunity.get("caption_theme", "")
         )
         self.add_caption_line(
             parent,
-            2,
+            start_row + 2,
             "Best Time",
             opportunity.get("best_posting_time", "")
         )
@@ -942,7 +930,8 @@ class ContentDirectorPage(ctk.CTkFrame):
                 self.brief.get("context_snapshot", {})
                 if self.brief
                 else None
-            )
+            ),
+            editorial_strategy=opportunity.get("selected_editorial_strategy")
         )
 
     ##########################################################
@@ -957,7 +946,379 @@ class ContentDirectorPage(ctk.CTkFrame):
         return (
             opportunity.get("opportunity_type", ""),
             opportunity.get("title", ""),
-            media_ids
+            media_ids,
+            (
+                opportunity.get("selected_editorial_strategy") or {}
+            ).get("strategy_id", "")
+        )
+
+    ##########################################################
+
+    def render_strategy_panel(self, parent, opportunity):
+
+        media = opportunity.get("recommended_media") or []
+
+        if not media:
+            self.add_caption_line(
+                parent,
+                0,
+                "Editorial Strategies",
+                "No media is available for strategy planning."
+            )
+            return
+
+        media_id = media[0].get("media_id")
+        comparison = self.strategy_cache.get(media_id)
+
+        if comparison:
+            self.render_strategy_summary(
+                parent,
+                opportunity,
+                comparison
+            )
+            return
+
+        self.add_caption_line(
+            parent,
+            0,
+            "Editorial Strategies",
+            "Comparing strategy options..."
+        )
+        self.request_strategy_comparison(
+            media_id,
+            parent,
+            opportunity
+        )
+
+    ##########################################################
+
+    def request_strategy_comparison(self, media_id, parent, opportunity):
+
+        if media_id in self.strategy_jobs:
+            return
+
+        future = self.executor.submit(
+            self.editorial_comparison_service.compare,
+            media_id
+        )
+        self.strategy_jobs[media_id] = future
+        future.add_done_callback(
+            lambda item: self.enqueue_ui(
+                self.finish_strategy_comparison,
+                media_id,
+                item,
+                parent,
+                opportunity
+            )
+        )
+
+    ##########################################################
+
+    def finish_strategy_comparison(
+        self,
+        media_id,
+        future,
+        parent,
+        opportunity
+    ):
+
+        if self._destroyed:
+            return
+
+        self.strategy_jobs.pop(
+            media_id,
+            None
+        )
+
+        try:
+            comparison = future.result()
+
+        except Exception as ex:
+            logger.error(
+                "Editorial strategy comparison failed",
+                exc_info=(
+                    type(ex),
+                    ex,
+                    ex.__traceback__
+                )
+            )
+            self.status.configure(
+                text=f"Strategy comparison error: {ex}"
+            )
+            return
+
+        self.strategy_cache[media_id] = comparison
+
+        if not parent.winfo_exists():
+            return
+
+        for child in parent.winfo_children():
+            child.destroy()
+
+        self.render_strategy_summary(
+            parent,
+            opportunity,
+            comparison
+        )
+
+    ##########################################################
+
+    def render_strategy_summary(self, parent, opportunity, comparison):
+
+        best = comparison.get("recommended_strategy") or {}
+        alternatives = comparison.get("alternative_strategies") or []
+
+        if best:
+            self.record_strategy_viewed(opportunity, best)
+            self.add_caption_line(
+                parent,
+                0,
+                "Best Strategy",
+                (
+                    f"{best.get('title', '')} - "
+                    f"{best.get('confidence', 0)}% confidence"
+                )
+            )
+            self.add_caption_line(
+                parent,
+                1,
+                "Why This Strategy Won",
+                comparison.get("debate_summary") or comparison.get(
+                    "comparison_summary",
+                    ""
+                )
+            )
+            self.add_caption_line(
+                parent,
+                2,
+                "Tradeoffs",
+                " | ".join(comparison.get("tradeoffs", [])[:3])
+            )
+
+        for index, strategy in enumerate(alternatives[:2], start=3):
+            self.add_caption_line(
+                parent,
+                index,
+                "Alternative Strategy",
+                (
+                    f"{strategy.get('title', '')}: "
+                    f"{strategy.get('objective', '')}"
+                )
+            )
+
+        controls = ctk.CTkFrame(
+            parent,
+            fg_color="transparent"
+        )
+        controls.grid(
+            row=6,
+            column=1,
+            sticky="ew",
+            padx=(0, 12),
+            pady=3
+        )
+
+        selected = opportunity.get("selected_editorial_strategy") or best
+
+        buttons = (
+            (
+                "Use This Strategy",
+                lambda: self.use_strategy(opportunity, best)
+            ),
+            (
+                "Show Alternative",
+                lambda: self.show_alternative_strategy(opportunity, comparison)
+            ),
+            (
+                "Dismiss Strategy",
+                lambda: self.dismiss_strategy(opportunity, selected)
+            ),
+            (
+                "Generate Communication Package",
+                lambda: self.generate_strategy_package(parent, opportunity)
+            )
+        )
+
+        for label, command in buttons:
+            button = ctk.CTkButton(
+                controls,
+                text=label,
+                width=175,
+                command=command
+            )
+            button.pack(
+                side="left",
+                padx=(0, 8),
+                pady=(0, 6)
+            )
+
+        key = self.package_cache_key(
+            opportunity
+        )
+        package = self.package_cache.get(key)
+
+        if package:
+            self.render_package(
+                parent,
+                package,
+                start_row=7
+            )
+        else:
+            self.render_package_placeholder(
+                parent,
+                opportunity,
+                start_row=7
+            )
+
+    ##########################################################
+
+    def use_strategy(self, opportunity, strategy):
+
+        if not strategy:
+            return
+
+        opportunity["selected_editorial_strategy"] = strategy
+        media = opportunity.get("recommended_media") or []
+
+        if media:
+            self.editorial_comparison_service.select_strategy(
+                media[0].get("media_id"),
+                strategy
+            )
+
+        self.status.configure(
+            text=f"Strategy selected: {strategy.get('title', '')}"
+        )
+        self.render_results()
+
+    ##########################################################
+
+    def record_strategy_viewed(self, opportunity, strategy):
+
+        media = opportunity.get("recommended_media") or []
+
+        if not media or not strategy:
+            return
+
+        key = (
+            media[0].get("media_id"),
+            strategy.get("strategy_id")
+        )
+
+        if key in self.strategy_views:
+            return
+
+        self.strategy_views.add(key)
+
+        try:
+            self.editorial_comparison_service.record_viewed(
+                media[0].get("media_id"),
+                strategy
+            )
+
+        except Exception as ex:
+            logger.error(
+                "Strategy viewed feedback failed",
+                exc_info=(
+                    type(ex),
+                    ex,
+                    ex.__traceback__
+                )
+            )
+
+    ##########################################################
+
+    def show_alternative_strategy(self, opportunity, comparison):
+
+        alternatives = comparison.get("alternative_strategies") or []
+
+        if not alternatives:
+            self.status.configure(
+                text="No alternative strategy available."
+            )
+            return
+
+        current = opportunity.get("selected_editorial_strategy") or {}
+        current_id = current.get("strategy_id")
+        next_strategy = alternatives[0]
+
+        for strategy in alternatives:
+            if strategy.get("strategy_id") != current_id:
+                next_strategy = strategy
+                break
+
+        opportunity["selected_editorial_strategy"] = next_strategy
+        media = opportunity.get("recommended_media") or []
+
+        if media:
+            self.editorial_comparison_service.alternative_requested(
+                media[0].get("media_id"),
+                next_strategy
+            )
+
+        self.status.configure(
+            text=f"Alternative strategy shown: {next_strategy.get('title', '')}"
+        )
+        self.render_results()
+
+    ##########################################################
+
+    def dismiss_strategy(self, opportunity, strategy):
+
+        if not strategy:
+            return
+
+        media = opportunity.get("recommended_media") or []
+
+        if media:
+            self.editorial_comparison_service.dismiss_strategy(
+                media[0].get("media_id"),
+                strategy
+            )
+
+        self.status.configure(
+            text=f"Strategy dismissed: {strategy.get('title', '')}"
+        )
+
+    ##########################################################
+
+    def generate_strategy_package(self, parent, opportunity):
+
+        media = opportunity.get("recommended_media") or []
+
+        if media and not opportunity.get("selected_editorial_strategy"):
+            comparison = self.strategy_cache.get(
+                media[0].get("media_id")
+            ) or {}
+            best = comparison.get("recommended_strategy")
+
+            if best:
+                opportunity["selected_editorial_strategy"] = best
+
+        key = self.package_cache_key(
+            opportunity
+        )
+
+        if key in self.package_cache:
+            for child in parent.winfo_children():
+                child.destroy()
+
+            self.render_strategy_panel(
+                parent,
+                opportunity
+            )
+            return
+
+        for child in parent.winfo_children():
+            child.destroy()
+
+        self.render_package_placeholder(
+            parent,
+            opportunity
+        )
+        self.request_package(
+            opportunity,
+            parent
         )
 
     ##########################################################
@@ -1188,6 +1549,9 @@ class ContentDirectorPage(ctk.CTkFrame):
                 feedback_type
             )
 
+            if feedback_type in ("accepted", "saved"):
+                self.remember_accepted_strategy_package(opportunity)
+
             if feedback_type == "regenerated":
                 self.show_another_suggestion(opportunity)
                 return
@@ -1209,6 +1573,28 @@ class ContentDirectorPage(ctk.CTkFrame):
             self.status.configure(
                 text=f"Feedback error: {ex}"
             )
+
+    ##########################################################
+
+    def remember_accepted_strategy_package(self, opportunity):
+
+        strategy = opportunity.get("selected_editorial_strategy")
+
+        if not strategy:
+            return
+
+        package = self.package_cache.get(
+            self.package_cache_key(opportunity)
+        )
+
+        if not package:
+            return
+
+        self.memory_service.remember_strategy_package(
+            package,
+            strategy,
+            opportunity
+        )
 
     ##########################################################
 

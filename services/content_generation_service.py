@@ -135,13 +135,35 @@ class ContentGenerationService:
         recommendation,
         context_snapshot=None,
         opportunity_type=None,
-        writing_style=None
+        writing_style=None,
+        editorial_strategy=None
     ):
 
         opportunity_type = opportunity_type or recommendation.get(
             "opportunity_type",
             "general_engagement"
         )
+        editorial_strategy = editorial_strategy or recommendation.get(
+            "selected_editorial_strategy"
+        )
+        if editorial_strategy:
+            recommendation = dict(recommendation)
+            recommendation["caption_strategy"] = editorial_strategy.get(
+                "caption_direction",
+                recommendation.get("caption_strategy", "")
+            )
+            recommendation["call_to_action"] = editorial_strategy.get(
+                "call_to_action",
+                recommendation.get("call_to_action", "")
+            )
+            recommendation["recommended_platforms"] = editorial_strategy.get(
+                "recommended_platforms",
+                recommendation.get("recommended_platforms", [])
+            )
+            opportunity_type = self._opportunity_from_strategy(
+                editorial_strategy.get("strategy_type", ""),
+                opportunity_type
+            )
         writing_style = writing_style or self.style_for_opportunity(
             opportunity_type
         )
@@ -250,6 +272,7 @@ class ContentGenerationService:
             "reasoning": reasoning,
             "writing_style": profile["label"],
             "opportunity_type": opportunity_type,
+            "editorial_strategy": editorial_strategy or {},
             "source_note": (
                 "Generated from stored Department Knowledge, Context, "
                 "Recommendation data, and Media Intelligence only. "
@@ -309,6 +332,32 @@ class ContentGenerationService:
         return self.STYLE_BY_OPPORTUNITY.get(
             opportunity_type,
             "community"
+        )
+
+    ############################################################
+
+    def _opportunity_from_strategy(self, strategy_type, default):
+
+        mapping = {
+            "community_education": "smoke_alarm_reminder",
+            "recruitment": "recruitment",
+            "community_trust": "community_appreciation",
+            "training_highlight": "training_highlight",
+            "volunteer_recognition": "volunteer_recognition",
+            "technical_education": "training_highlight",
+            "incident_recap": "general_engagement",
+            "apparatus_feature": "apparatus_showcase",
+            "public_education": "fire_prevention_week",
+            "seasonal_safety": "holiday_safety",
+            "behind_the_scenes": "behind_the_scenes",
+            "historical_throwback": "throwback_thursday",
+            "annual_report": "general_engagement",
+            "website_feature": "general_engagement"
+        }
+
+        return mapping.get(
+            strategy_type,
+            default
         )
 
     ############################################################

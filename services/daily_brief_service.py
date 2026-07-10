@@ -4,6 +4,7 @@ from core.app_context import context
 from services.communications_reasoning_service import CommunicationsReasoningService
 from services.knowledge_service import KnowledgeService
 from services.logging_service import LoggingService
+from services.time_service import TimeService
 
 
 logger = LoggingService.get_logger("content")
@@ -31,6 +32,7 @@ class DailyBriefService:
     def generate(self, now=None):
 
         now = now or datetime.now()
+        generated_at = TimeService.utc_now_iso()
         reasoning_brief = self.reasoning.todays_communications_brief()
         top = reasoning_brief.get("top_recommendation")
         additional = reasoning_brief.get("additional_opportunities", [])[:3]
@@ -43,7 +45,7 @@ class DailyBriefService:
             "title": "Daily Communications Brief",
             "greeting": self._greeting(now),
             "current_date": now.strftime("%A, %B %d, %Y"),
-            "generated_at": now.isoformat(timespec="seconds"),
+            "generated_at": generated_at,
             "current_context": {
                 "season": context_snapshot.get("season", ""),
                 "active_themes": context_snapshot.get("active_themes", []),

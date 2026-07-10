@@ -144,14 +144,25 @@ class BrainService:
 
     ############################################################
 
+    def legacy_mock_analysis_summary(self):
+
+        return self.db.legacy_mock_analysis_summary()
+
+    ############################################################
+
     def dashboard_metrics(self):
 
         progress = self.queue_progress()
         metrics = self.db.ai_metrics()
+        mock_summary = self.legacy_mock_analysis_summary()
 
         metrics.update(progress)
         metrics["provider"] = self.vision.provider_key()
         metrics["provider_model"] = self.vision.model_name()
+        metrics["legacy_mock_analysis"] = mock_summary.get(
+            "media_count",
+            0
+        )
 
         return metrics
 
