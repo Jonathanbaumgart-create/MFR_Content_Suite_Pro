@@ -5,6 +5,7 @@ from services.communications_director import CommunicationsDirector
 from services.communications_reasoning_service import CommunicationsReasoningService
 from services.knowledge_graph_service import KnowledgeGraphService
 from services.knowledge_service import KnowledgeService
+from services.human_feedback_service import HumanFeedbackService
 from services.logging_service import LoggingService
 
 
@@ -39,6 +40,9 @@ class OperationsService:
         self.graph = KnowledgeGraphService(
             database=self.db,
             knowledge_service=self.knowledge
+        )
+        self.feedback = HumanFeedbackService(
+            database=self.db
         )
         self.ai_settings = AISettingsService(
             base_config=AI_CONFIG
@@ -278,7 +282,8 @@ class OperationsService:
                 "Ready"
                 if score_coverage >= 80
                 else f"Scoring {score_coverage}% complete"
-            )
+            ),
+            "human_feedback": self.feedback.metrics()
         }
 
     ############################################################
@@ -345,6 +350,16 @@ class OperationsService:
         if communications.get("media_missing_communications_scores", 0):
             items.append(
                 f"{communications['media_missing_communications_scores']} media intelligence rows need communications scoring"
+            )
+
+        feedback = communications.get("human_feedback") or {}
+
+        if feedback.get("correction_patterns_found", 0):
+            items.append("Human correction patterns found")
+
+        if feedback.get("media_suggested_for_review", 0):
+            items.append(
+                f"{feedback['media_suggested_for_review']} media items may need correction review"
             )
 
         if queue.get("failed_jobs", 0):

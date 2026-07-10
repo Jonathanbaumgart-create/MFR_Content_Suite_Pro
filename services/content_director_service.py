@@ -274,6 +274,7 @@ class ContentDirectorService:
         recommendations = []
 
         for candidate in candidates:
+            candidate = self._effective_candidate(candidate)
 
             scored = self._score_candidate(
                 candidate,
@@ -441,6 +442,35 @@ class ContentDirectorService:
             "suggested_caption_theme": profile["theme"],
             "opportunity_type": primary
         }
+
+    ############################################################
+
+    def _effective_candidate(self, candidate):
+
+        try:
+            from services.human_feedback_service import HumanFeedbackService
+
+            effective = HumanFeedbackService(
+                database=self.db
+            ).effective_media_intelligence_row(
+                candidate.get("media_id")
+            )
+            effective.update(
+                {
+                    "filename": candidate.get("filename"),
+                    "path": candidate.get("path"),
+                    "media_type": candidate.get("media_type"),
+                    "community_score": candidate.get("community_score", 0),
+                    "recruitment_score": candidate.get("recruitment_score", 0),
+                    "education_score": candidate.get("education_score", 0),
+                    "technical_score": candidate.get("technical_score", 0),
+                    "overall_score": candidate.get("overall_score", 0)
+                }
+            )
+            return effective
+
+        except Exception:
+            return candidate
 
     ############################################################
 

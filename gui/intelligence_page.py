@@ -23,7 +23,8 @@ class IntelligenceExplorerPage(ctk.CTkFrame):
         ("primary_activity", "ACTIVITIES"),
         ("recommended_uses", "RECOMMENDED USES"),
         ("content_themes", "THEMES"),
-        ("content_tags", "CONTENT TAGS")
+        ("content_tags", "CONTENT TAGS"),
+        ("review_status", "REVIEW")
     )
 
     SORT_OPTIONS = {
@@ -36,6 +37,7 @@ class IntelligenceExplorerPage(ctk.CTkFrame):
         "Recruitment": "recruitment",
         "Community Engagement": "community_engagement",
         "Trust Building": "trust_building",
+        "Correction Count": "correction_count",
         "Newest": "newest",
         "Oldest": "oldest"
     }

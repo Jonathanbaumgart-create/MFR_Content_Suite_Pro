@@ -9,6 +9,7 @@ from services.ai_service import AIService
 from services.logging_service import LoggingService
 from services.media_intelligence_service import MediaIntelligenceService
 from services.vision_service import VisionService
+from services.human_feedback_service import HumanFeedbackService
 
 
 logger = LoggingService.get_logger("ai")
@@ -52,6 +53,9 @@ class BrainService:
             intelligence_service or
             MediaIntelligenceService(self.db)
         )
+        self.feedback = HumanFeedbackService(
+            database=self.db
+        )
         self.config = config or AI_CONFIG
 
     ############################################################
@@ -64,13 +68,21 @@ class BrainService:
 
     def get_intelligence(self, media_id):
 
-        return self.db.get_media_intelligence(media_id)
+        return self.feedback.effective_media_intelligence_row(media_id)
 
     ############################################################
 
     def get_fire_service_intelligence(self, media_id):
 
-        return self.db.get_fire_service_intelligence(media_id)
+        return self.feedback.effective_media_intelligence(
+            media_id
+        ).get("fire_service_intelligence")
+
+    ############################################################
+
+    def get_effective_intelligence(self, media_id):
+
+        return self.feedback.effective_media_intelligence(media_id)
 
     ############################################################
 

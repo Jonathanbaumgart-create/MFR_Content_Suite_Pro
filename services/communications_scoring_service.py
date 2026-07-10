@@ -199,6 +199,16 @@ class CommunicationsScoringService:
         if not intelligence:
             return None
 
+        try:
+            from services.human_feedback_service import HumanFeedbackService
+
+            intelligence = HumanFeedbackService(
+                database=self.db
+            ).effective_media_intelligence_row(media_id)
+
+        except Exception:
+            pass
+
         score = self.score_media(
             intelligence
         )

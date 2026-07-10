@@ -344,6 +344,7 @@ class OperationsPage(ctk.CTkFrame):
     def format_communications(self, data):
 
         weak = data.get("weak_areas") or []
+        feedback = data.get("human_feedback") or {}
 
         return [
             f"Today's brief status: {data['todays_brief_status']}",
@@ -355,7 +356,15 @@ class OperationsPage(ctk.CTkFrame):
             f"Content gaps: {len(data.get('content_gaps') or [])}",
             "Weak areas: " + (", ".join(weak[:5]) if weak else "None"),
             f"High-value unused media count: {data['high_value_unused_media_count']}",
-            f"Recommendation history count: {data['recommendation_history_count']}"
+            f"Recommendation history count: {data['recommendation_history_count']}",
+            f"Corrected media: {feedback.get('corrected_media_count', 0)}",
+            f"Active corrections: {feedback.get('active_corrections', 0)}",
+            (
+                "Most corrected fields: " +
+                self.count_rows_text(feedback.get("most_corrected_fields"))
+            ),
+            f"Correction patterns found: {feedback.get('correction_patterns_found', 0)}",
+            f"Media suggested for review: {feedback.get('media_suggested_for_review', 0)}"
         ]
 
     ##########################################################

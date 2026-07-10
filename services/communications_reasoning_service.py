@@ -352,6 +352,7 @@ class CommunicationsReasoningService:
         scored = []
 
         for candidate in candidates:
+            candidate = self._effective_candidate(candidate)
             item = self._score_candidate(
                 candidate,
                 profile,
@@ -514,15 +515,46 @@ class CommunicationsReasoningService:
 
     ############################################################
 
+    def _effective_candidate(self, candidate):
+
+        try:
+            from services.human_feedback_service import HumanFeedbackService
+
+            effective = HumanFeedbackService(
+                database=self.db
+            ).effective_media_intelligence_row(
+                candidate.get("media_id")
+            )
+            effective.update(
+                {
+                    "filename": candidate.get("filename"),
+                    "path": candidate.get("path"),
+                    "media_type": candidate.get("media_type"),
+                    "community_score": candidate.get("community_score", 0),
+                    "recruitment_score": candidate.get("recruitment_score", 0),
+                    "education_score": candidate.get("education_score", 0),
+                    "technical_score": candidate.get("technical_score", 0),
+                    "overall_score": candidate.get("overall_score", 0)
+                }
+            )
+            return effective
+
+        except Exception:
+            return candidate
+
+    ############################################################
+
     def _media_summary(self, scored):
 
         candidate = scored["candidate"]
         memory = self.memory.media_memory(
             candidate.get("media_id")
         )
-        fire_service = self._fire_service_intelligence(
-            candidate.get("media_id")
-        ) or {}
+        fire_service = candidate.get("fire_service_intelligence") or (
+            self._fire_service_intelligence(
+                candidate.get("media_id")
+            ) or {}
+        )
 
         return {
             "media_id": candidate.get("media_id"),

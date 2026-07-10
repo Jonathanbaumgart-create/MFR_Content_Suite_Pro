@@ -2,6 +2,7 @@ import customtkinter as ctk
 
 from media.image_loader import ImageLoader
 from services.brain_service import BrainService
+from services.human_feedback_service import HumanFeedbackService
 
 
 class PhotoViewer(ctk.CTkToplevel):
@@ -26,9 +27,11 @@ class PhotoViewer(ctk.CTkToplevel):
         self.filepath = filepath
         self.media_id = media_id
         self.brain = BrainService()
+        self.feedback = HumanFeedbackService()
         self.analysis = None
         self.intelligence = None
         self.fire_service_intelligence = None
+        self.effective_intelligence = None
 
         self.build_ui()
         self.load_analysis()
@@ -145,6 +148,18 @@ class PhotoViewer(ctk.CTkToplevel):
             fill="x",
             padx=20,
             pady=10
+        )
+
+        self.improve_button = ctk.CTkButton(
+            ai,
+            text="Improve Analysis",
+            command=self.open_correction_dialog
+        )
+
+        self.improve_button.pack(
+            fill="x",
+            padx=20,
+            pady=5
         )
 
         self.facebook_button = ctk.CTkButton(
@@ -268,9 +283,14 @@ class PhotoViewer(ctk.CTkToplevel):
     def show_analysis(self, analysis):
 
         self.analysis = analysis
-        self.intelligence = self.brain.get_intelligence(self.media_id)
+        self.effective_intelligence = self.brain.get_effective_intelligence(
+            self.media_id
+        )
+        self.intelligence = self.effective_intelligence.get(
+            "media_intelligence"
+        )
         self.fire_service_intelligence = (
-            self.brain.get_fire_service_intelligence(self.media_id)
+            self.effective_intelligence.get("fire_service_intelligence")
         )
         self.update_mock_notice(analysis)
 
@@ -348,10 +368,44 @@ class PhotoViewer(ctk.CTkToplevel):
                 ] + fire_service_lines
             )
 
+        correction_lines = self.correction_history_lines()
+
+        if correction_lines:
+            lines.extend(
+                [
+                    "",
+                    "Human Corrections"
+                ] + correction_lines
+            )
+
         self.analysis_text.configure(state="normal")
         self.analysis_text.delete("1.0", "end")
         self.analysis_text.insert("1.0", "\n".join(lines))
         self.analysis_text.configure(state="disabled")
+
+    ##########################################################
+
+    def open_correction_dialog(self):
+
+        CorrectionDialog(
+            self,
+            self.media_id,
+            self.filename,
+            self.feedback,
+            on_saved=self.load_analysis,
+            open_media_callback=self.open_suggested_media
+        )
+
+    ##########################################################
+
+    def open_suggested_media(self, item):
+
+        PhotoViewer(
+            self,
+            item["id"],
+            item["filename"],
+            item["path"]
+        )
 
     ##########################################################
 
@@ -620,3 +674,419 @@ class PhotoViewer(ctk.CTkToplevel):
                 lines.append(str(item))
 
         return lines
+
+    ##########################################################
+
+    def correction_history_lines(self):
+
+        if not self.effective_intelligence:
+            return []
+
+        lines = []
+        corrections = self.effective_intelligence.get("corrections") or []
+        history = self.effective_intelligence.get("correction_history") or []
+
+        if corrections:
+            lines.append(
+                f"Active corrections: {len(corrections)}"
+            )
+
+        for row in history[:8]:
+            lines.append(
+                (
+                    f"{row.get('created_at', '')} | "
+                    f"{row.get('correction_source', '')} | "
+                    f"{row.get('field_name', '')} | "
+                    f"{self.format_value(row.get('previous_value'))} -> "
+                    f"{self.format_value(row.get('new_value'))}"
+                )
+            )
+
+        return lines
+
+    ##########################################################
+
+    def format_value(self, value):
+
+        if isinstance(value, list):
+            return self.format_list(value)
+
+        return str(value or "")
+
+
+class CorrectionDialog(ctk.CTkToplevel):
+
+    FIELD_LABELS = {
+        "people_count": "People Count",
+        "incident_classification": "Incident",
+        "primary_activity": "Activity",
+        "operational_context": "Operational Context",
+        "ppe": "PPE",
+        "equipment": "Equipment",
+        "apparatus": "Apparatus",
+        "operational_skills": "Operational Skills",
+        "communications_uses": "Communications Uses",
+        "campaigns": "Campaigns",
+        "notes": "Notes"
+    }
+
+    def __init__(
+        self,
+        parent,
+        media_id,
+        filename,
+        feedback_service,
+        on_saved=None,
+        open_media_callback=None
+    ):
+
+        super().__init__(parent)
+
+        self.title(f"Improve Analysis - {filename}")
+        self.geometry("900x760")
+        self.transient(parent.winfo_toplevel())
+        self.lift()
+
+        self.media_id = media_id
+        self.feedback = feedback_service
+        self.on_saved = on_saved
+        self.open_media_callback = open_media_callback
+        self.effective = self.feedback.effective_media_intelligence(media_id)
+        self.entries = {}
+        self.original_values = {}
+
+        self.build_ui()
+
+    ##########################################################
+
+    def build_ui(self):
+
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+
+        header = ctk.CTkLabel(
+            self,
+            text="Improve Analysis",
+            font=("Segoe UI", 24, "bold")
+        )
+        header.grid(
+            row=0,
+            column=0,
+            sticky="w",
+            padx=20,
+            pady=(20, 8)
+        )
+
+        body = ctk.CTkScrollableFrame(self)
+        body.grid(
+            row=1,
+            column=0,
+            sticky="nsew",
+            padx=20,
+            pady=(0, 12)
+        )
+        body.grid_columnconfigure(1, weight=1)
+
+        row = 0
+
+        for field, label in self.FIELD_LABELS.items():
+            current = self.effective.get(field)
+            inferred = self.feedback.inferred_value(
+                self.media_id,
+                field
+            )
+            self.original_values[field] = current
+
+            ctk.CTkLabel(
+                body,
+                text=label
+            ).grid(
+                row=row,
+                column=0,
+                sticky="w",
+                padx=10,
+                pady=(8, 2)
+            )
+
+            entry = ctk.CTkEntry(body)
+            entry.insert(
+                0,
+                self.value_to_text(current)
+            )
+            entry.grid(
+                row=row,
+                column=1,
+                sticky="ew",
+                padx=10,
+                pady=(8, 2)
+            )
+            self.entries[field] = entry
+
+            ctk.CTkLabel(
+                body,
+                text="Inferred: " + self.value_to_text(inferred),
+                text_color="#a8b3c7",
+                wraplength=760,
+                justify="left"
+            ).grid(
+                row=row + 1,
+                column=1,
+                sticky="w",
+                padx=10,
+                pady=(0, 6)
+            )
+
+            row += 2
+
+        selector = ctk.CTkFrame(
+            self,
+            fg_color="transparent"
+        )
+        selector.grid(
+            row=2,
+            column=0,
+            sticky="ew",
+            padx=20,
+            pady=(0, 8)
+        )
+        selector.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(
+            selector,
+            text="Selected Field"
+        ).grid(
+            row=0,
+            column=0,
+            padx=(0, 8)
+        )
+
+        self.selected_field = ctk.StringVar(value="people_count")
+        field_menu = ctk.CTkOptionMenu(
+            selector,
+            values=list(self.FIELD_LABELS.keys()),
+            variable=self.selected_field
+        )
+        field_menu.grid(
+            row=0,
+            column=1,
+            sticky="w"
+        )
+
+        controls = ctk.CTkFrame(
+            self,
+            fg_color="transparent"
+        )
+        controls.grid(
+            row=3,
+            column=0,
+            sticky="ew",
+            padx=20,
+            pady=(0, 10)
+        )
+
+        ctk.CTkButton(
+            controls,
+            text="Save Corrections",
+            command=self.save
+        ).pack(
+            side="left",
+            padx=(0, 8)
+        )
+
+        ctk.CTkButton(
+            controls,
+            text="Reset Field",
+            command=self.reset_selected
+        ).pack(
+            side="left",
+            padx=(0, 8)
+        )
+
+        ctk.CTkButton(
+            controls,
+            text="Restore Previous",
+            command=self.restore_previous
+        ).pack(
+            side="left",
+            padx=(0, 8)
+        )
+
+        ctk.CTkButton(
+            controls,
+            text="Close",
+            command=self.destroy
+        ).pack(
+            side="right"
+        )
+
+        self.status = ctk.CTkLabel(
+            self,
+            text=""
+        )
+        self.status.grid(
+            row=4,
+            column=0,
+            sticky="w",
+            padx=20,
+            pady=(0, 8)
+        )
+
+        self.suggestions = ctk.CTkScrollableFrame(
+            self,
+            height=120
+        )
+        self.suggestions.grid(
+            row=5,
+            column=0,
+            sticky="ew",
+            padx=20,
+            pady=(0, 20)
+        )
+
+    ##########################################################
+
+    def save(self):
+
+        saved = 0
+
+        for field, entry in self.entries.items():
+            value = entry.get().strip()
+            original = self.value_to_text(
+                self.original_values.get(field)
+            )
+
+            if value == original:
+                continue
+
+            self.feedback.save_correction(
+                self.media_id,
+                field,
+                value,
+                correction_source="Jonathan",
+                notes=self.entries.get("notes").get().strip()
+                if self.entries.get("notes")
+                else ""
+            )
+            saved += 1
+
+        self.effective = self.feedback.effective_media_intelligence(
+            self.media_id
+        )
+        self.status.configure(
+            text=f"Saved {saved} correction(s). Similar media may need the same correction."
+        )
+        self.render_suggestions(
+            self.effective.get("similar_review_suggestions") or []
+        )
+
+        if self.on_saved:
+            self.on_saved()
+
+    ##########################################################
+
+    def reset_selected(self):
+
+        field = self.selected_field.get()
+        self.feedback.reset_field(
+            self.media_id,
+            field,
+            correction_source="Jonathan"
+        )
+        inferred = self.feedback.inferred_value(
+            self.media_id,
+            field
+        )
+        self.entries[field].delete(0, "end")
+        self.entries[field].insert(
+            0,
+            self.value_to_text(inferred)
+        )
+        self.status.configure(
+            text=f"{field} reset to inferred value."
+        )
+
+        if self.on_saved:
+            self.on_saved()
+
+    ##########################################################
+
+    def restore_previous(self):
+
+        field = self.selected_field.get()
+        history = [
+            row
+            for row in self.feedback.history_for_media(self.media_id)
+            if row.get("field_name") == field
+        ]
+
+        if not history:
+            self.status.configure(
+                text="No previous value found for selected field."
+            )
+            return
+
+        previous = history[0].get("previous_value")
+        self.entries[field].delete(0, "end")
+        self.entries[field].insert(
+            0,
+            self.value_to_text(previous)
+        )
+        self.status.configure(
+            text=f"Restored previous value for {field}. Save to apply."
+        )
+
+    ##########################################################
+
+    def render_suggestions(self, rows):
+
+        for child in self.suggestions.winfo_children():
+            child.destroy()
+
+        ctk.CTkLabel(
+            self.suggestions,
+            text="Similar Media Suggestions",
+            font=("Segoe UI", 14, "bold")
+        ).pack(
+            anchor="w",
+            padx=8,
+            pady=(8, 4)
+        )
+
+        if not rows:
+            ctk.CTkLabel(
+                self.suggestions,
+                text="No similar media found."
+            ).pack(
+                anchor="w",
+                padx=8,
+                pady=4
+            )
+            return
+
+        for item in rows[:8]:
+            button = ctk.CTkButton(
+                self.suggestions,
+                text=item["filename"],
+                command=lambda value=item: self.open_suggestion(value)
+            )
+            button.pack(
+                fill="x",
+                padx=8,
+                pady=3
+            )
+
+    ##########################################################
+
+    def open_suggestion(self, item):
+
+        if self.open_media_callback:
+            self.open_media_callback(item)
+
+    ##########################################################
+
+    def value_to_text(self, value):
+
+        if isinstance(value, list):
+            return ", ".join(str(item) for item in value)
+
+        return str(value or "")

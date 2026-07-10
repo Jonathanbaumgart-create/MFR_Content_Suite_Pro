@@ -344,6 +344,102 @@ class DatabaseManager:
         """)
 
         ########################################################
+        # Human Feedback Intelligence
+        ########################################################
+
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS media_corrections(
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            media_id INTEGER,
+
+            field_name TEXT,
+
+            original_value TEXT,
+
+            corrected_value TEXT,
+
+            correction_source TEXT,
+
+            confidence_before INTEGER DEFAULT 0,
+
+            confidence_after INTEGER DEFAULT 100,
+
+            notes TEXT,
+
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+            active INTEGER DEFAULT 1
+
+        )
+
+        """)
+
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS correction_history(
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            correction_id INTEGER,
+
+            media_id INTEGER,
+
+            field_name TEXT,
+
+            previous_value TEXT,
+
+            new_value TEXT,
+
+            correction_source TEXT,
+
+            action TEXT,
+
+            notes TEXT,
+
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+
+        )
+
+        """)
+
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS correction_patterns(
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            field_name TEXT,
+
+            original_value TEXT,
+
+            corrected_value TEXT,
+
+            occurrence_count INTEGER DEFAULT 1,
+
+            confidence INTEGER DEFAULT 50,
+
+            example_media_ids TEXT,
+
+            notes TEXT,
+
+            first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+            last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+            active INTEGER DEFAULT 1,
+
+            UNIQUE(field_name, original_value, corrected_value)
+
+        )
+
+        """)
+
+        ########################################################
         # Department Knowledge
         ########################################################
 
@@ -2769,7 +2865,8 @@ class DatabaseManager:
             "content_tags": self._intelligence_json_counts(
                 "content_tags",
                 filters
-            )
+            ),
+            "review_status": self._intelligence_review_counts(filters)
         }
 
     ############################################################
@@ -3195,6 +3292,610 @@ class DatabaseManager:
             self._recommendation_feedback_from_row(row)
             for row in rows
         ]
+
+    ############################################################
+
+    def save_media_correction(self, correction):
+
+        media_id = self._to_int(correction.get("media_id"))
+        field_name = correction.get("field_name", "")
+        original_value = self._to_json(correction.get("original_value"))
+        corrected_value = self._to_json(correction.get("corrected_value"))
+        source = correction.get("correction_source", "Jonathan")
+        notes = correction.get("notes", "")
+
+        conn = self.connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        SELECT id, corrected_value
+
+        FROM media_corrections
+
+        WHERE media_id=?
+        AND field_name=?
+        AND active=1
+
+        ORDER BY updated_at DESC, id DESC
+
+        LIMIT 1
+
+        """,
+
+        (
+            media_id,
+            field_name
+        ))
+
+        existing = cur.fetchone()
+        previous_value = existing[1] if existing else original_value
+
+        if existing:
+            correction_id = existing[0]
+            cur.execute("""
+
+            UPDATE media_corrections
+
+            SET
+                original_value=?,
+                corrected_value=?,
+                correction_source=?,
+                confidence_before=?,
+                confidence_after=?,
+                notes=?,
+                updated_at=CURRENT_TIMESTAMP,
+                active=1
+
+            WHERE id=?
+
+            """,
+
+            (
+                original_value,
+                corrected_value,
+                source,
+                self._to_int(correction.get("confidence_before")),
+                self._to_int(correction.get("confidence_after", 100)),
+                notes,
+                correction_id
+            ))
+            action = "updated"
+
+        else:
+            cur.execute("""
+
+            INSERT INTO media_corrections(
+
+                media_id,
+
+                field_name,
+
+                original_value,
+
+                corrected_value,
+
+                correction_source,
+
+                confidence_before,
+
+                confidence_after,
+
+                notes,
+
+                active
+
+            )
+
+            VALUES(?,?,?,?,?,?,?,?,1)
+
+            """,
+
+            (
+                media_id,
+                field_name,
+                original_value,
+                corrected_value,
+                source,
+                self._to_int(correction.get("confidence_before")),
+                self._to_int(correction.get("confidence_after", 100)),
+                notes
+            ))
+            correction_id = cur.lastrowid
+            action = "created"
+
+        cur.execute("""
+
+        INSERT INTO correction_history(
+
+            correction_id,
+
+            media_id,
+
+            field_name,
+
+            previous_value,
+
+            new_value,
+
+            correction_source,
+
+            action,
+
+            notes
+
+        )
+
+        VALUES(?,?,?,?,?,?,?,?)
+
+        """,
+
+        (
+            correction_id,
+            media_id,
+            field_name,
+            previous_value,
+            corrected_value,
+            source,
+            action,
+            notes
+        ))
+
+        conn.commit()
+        conn.close()
+
+        return correction_id
+
+    ############################################################
+
+    def deactivate_media_correction(
+        self,
+        media_id,
+        field_name,
+        source="Jonathan",
+        notes=""
+    ):
+
+        conn = self.connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        SELECT id, corrected_value
+
+        FROM media_corrections
+
+        WHERE media_id=?
+        AND field_name=?
+        AND active=1
+
+        ORDER BY updated_at DESC, id DESC
+
+        LIMIT 1
+
+        """,
+
+        (
+            self._to_int(media_id),
+            field_name
+        ))
+
+        row = cur.fetchone()
+
+        if not row:
+            conn.close()
+            return False
+
+        correction_id, previous = row
+
+        cur.execute("""
+
+        UPDATE media_corrections
+
+        SET active=0,
+            correction_source=?,
+            notes=?,
+            updated_at=CURRENT_TIMESTAMP
+
+        WHERE id=?
+
+        """,
+
+        (
+            source,
+            notes,
+            correction_id
+        ))
+
+        cur.execute("""
+
+        INSERT INTO correction_history(
+
+            correction_id,
+
+            media_id,
+
+            field_name,
+
+            previous_value,
+
+            new_value,
+
+            correction_source,
+
+            action,
+
+            notes
+
+        )
+
+        VALUES(?,?,?,?,?,?,?,?)
+
+        """,
+
+        (
+            correction_id,
+            self._to_int(media_id),
+            field_name,
+            previous,
+            "",
+            source,
+            "reset",
+            notes
+        ))
+
+        conn.commit()
+        conn.close()
+
+        return True
+
+    ############################################################
+
+    def active_media_corrections(self, media_id):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        SELECT *
+
+        FROM media_corrections
+
+        WHERE media_id=?
+        AND active=1
+
+        ORDER BY updated_at DESC, id DESC
+
+        """,
+
+        (self._to_int(media_id),))
+
+        rows = [
+            self._media_correction_from_row(row)
+            for row in cur.fetchall()
+        ]
+
+        conn.close()
+
+        return rows
+
+    ############################################################
+
+    def correction_history_for_media(self, media_id, limit=50):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        SELECT *
+
+        FROM correction_history
+
+        WHERE media_id=?
+
+        ORDER BY created_at DESC, id DESC
+
+        LIMIT ?
+
+        """,
+
+        (
+            self._to_int(media_id),
+            self._to_int(limit)
+        ))
+
+        rows = [
+            self._correction_history_from_row(row)
+            for row in cur.fetchall()
+        ]
+
+        conn.close()
+
+        return rows
+
+    ############################################################
+
+    def update_correction_pattern(self, pattern):
+
+        conn = self.connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        INSERT INTO correction_patterns(
+
+            field_name,
+
+            original_value,
+
+            corrected_value,
+
+            occurrence_count,
+
+            confidence,
+
+            example_media_ids,
+
+            notes,
+
+            active
+
+        )
+
+        VALUES(?,?,?,?,?,?,?,1)
+
+        ON CONFLICT(field_name, original_value, corrected_value)
+        DO UPDATE SET
+            occurrence_count=excluded.occurrence_count,
+            confidence=excluded.confidence,
+            example_media_ids=excluded.example_media_ids,
+            notes=excluded.notes,
+            last_seen=CURRENT_TIMESTAMP,
+            active=1
+
+        """,
+
+        (
+            pattern.get("field_name", ""),
+            self._to_json(pattern.get("original_value")),
+            self._to_json(pattern.get("corrected_value")),
+            self._to_int(pattern.get("occurrence_count")),
+            self._to_int(pattern.get("confidence")),
+            self._to_json(pattern.get("example_media_ids")),
+            pattern.get("notes", "")
+        ))
+
+        conn.commit()
+        conn.close()
+
+    ############################################################
+
+    def correction_patterns(self, limit=50):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        SELECT *
+
+        FROM correction_patterns
+
+        WHERE active=1
+
+        ORDER BY occurrence_count DESC, last_seen DESC
+
+        LIMIT ?
+
+        """,
+
+        (self._to_int(limit),))
+
+        rows = [
+            self._correction_pattern_from_row(row)
+            for row in cur.fetchall()
+        ]
+
+        conn.close()
+
+        return rows
+
+    ############################################################
+
+    def correction_pattern_candidates(self, field_name, original_value, corrected_value):
+
+        conn = self.connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        SELECT media_id
+
+        FROM media_corrections
+
+        WHERE field_name=?
+        AND original_value=?
+        AND corrected_value=?
+
+        ORDER BY updated_at DESC, id DESC
+
+        LIMIT 20
+
+        """,
+
+        (
+            field_name,
+            self._to_json(original_value),
+            self._to_json(corrected_value)
+        ))
+
+        rows = [
+            row[0]
+            for row in cur.fetchall()
+            if row[0]
+        ]
+
+        conn.close()
+
+        return rows
+
+    ############################################################
+
+    def human_feedback_metrics(self):
+
+        conn = self.connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        SELECT COUNT(DISTINCT media_id)
+
+        FROM media_corrections
+
+        WHERE active=1
+
+        """)
+        corrected_media = cur.fetchone()[0] or 0
+
+        cur.execute("""
+
+        SELECT COUNT(*)
+
+        FROM media_corrections
+
+        WHERE active=1
+
+        """)
+        active_corrections = cur.fetchone()[0] or 0
+
+        cur.execute("""
+
+        SELECT field_name, COUNT(*)
+
+        FROM media_corrections
+
+        WHERE active=1
+
+        GROUP BY field_name
+
+        ORDER BY COUNT(*) DESC, field_name
+
+        LIMIT 8
+
+        """)
+        fields = [
+            {
+                "name": row[0],
+                "count": row[1] or 0
+            }
+            for row in cur.fetchall()
+        ]
+
+        cur.execute("""
+
+        SELECT COUNT(*)
+
+        FROM correction_patterns
+
+        WHERE active=1
+
+        """)
+        patterns = cur.fetchone()[0] or 0
+
+        conn.close()
+
+        return {
+            "corrected_media_count": corrected_media,
+            "active_corrections": active_corrections,
+            "most_corrected_fields": fields,
+            "correction_patterns_found": patterns
+        }
+
+    ############################################################
+
+    def similar_media_for_correction(self, media_id, terms, limit=12):
+
+        terms = [
+            str(term or "").strip()
+            for term in terms or []
+            if str(term or "").strip()
+        ][:8]
+
+        if not terms:
+            return []
+
+        clauses = []
+        params = []
+
+        for term in terms:
+            pattern = f"%{term}%"
+            clauses.append("""
+            (
+                media_intelligence.search_text LIKE ?
+                OR media_intelligence.content_tags LIKE ?
+                OR media_intelligence.content_themes LIKE ?
+                OR media_intelligence.recommended_uses LIKE ?
+            )
+            """)
+            params.extend(
+                (
+                    pattern,
+                    pattern,
+                    pattern,
+                    pattern
+                )
+            )
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+
+        cur.execute(f"""
+
+        SELECT
+            media.id,
+            media.filename,
+            media.path,
+            media.media_type,
+            media_intelligence.intelligence_score
+
+        FROM media
+
+        JOIN media_intelligence
+        ON media_intelligence.media_id = media.id
+
+        WHERE media.id != ?
+        AND (
+            {" OR ".join(clauses)}
+        )
+
+        ORDER BY media_intelligence.intelligence_score DESC, media.filename ASC
+
+        LIMIT ?
+
+        """,
+
+        [self._to_int(media_id)] + params + [self._to_int(limit)])
+
+        rows = [
+            {
+                "id": row["id"],
+                "filename": row["filename"],
+                "path": row["path"],
+                "media_type": row["media_type"],
+                "intelligence_score": row["intelligence_score"] or 0
+            }
+            for row in cur.fetchall()
+        ]
+
+        conn.close()
+
+        return rows
 
     ############################################################
 
@@ -5044,6 +5745,74 @@ class DatabaseManager:
 
     ############################################################
 
+    def _intelligence_review_counts(self, filters):
+
+        section_filters = dict(filters or {})
+        section_filters.pop("review_status", None)
+        where, params = self._intelligence_where(section_filters)
+
+        conn = self.connection()
+        cur = conn.cursor()
+
+        statuses = (
+            (
+                "human_corrected",
+                "EXISTS (SELECT 1 FROM media_corrections WHERE media_corrections.media_id=media.id AND media_corrections.active=1)"
+            ),
+            (
+                "needs_review",
+                "media_intelligence.intelligence_score < 50 OR fire_service_intelligence.operational_confidence < 50"
+            ),
+            (
+                "low_confidence",
+                "media_intelligence.intelligence_score < 65 OR fire_service_intelligence.operational_confidence < 65"
+            )
+        )
+        rows = []
+
+        for status, clause in statuses:
+            extra_where = where
+            extra_params = list(params)
+
+            if extra_where:
+                extra_where += f" AND ({clause})"
+            else:
+                extra_where = f"WHERE ({clause})"
+
+            cur.execute(f"""
+
+            SELECT COUNT(DISTINCT media.id)
+
+            FROM media
+
+            JOIN media_intelligence
+            ON media.id = media_intelligence.media_id
+
+            LEFT JOIN fire_service_intelligence
+            ON fire_service_intelligence.media_id = media.id
+
+            {extra_where}
+
+            """,
+
+            extra_params)
+
+            count = cur.fetchone()[0] or 0
+
+            if count:
+                rows.append(
+                    (
+                        status,
+                        count
+                    )
+                )
+
+        conn.close()
+
+        return rows
+
+    ############################################################
+
     def _intelligence_where(self, filters):
 
         clauses = []
@@ -5094,6 +5863,50 @@ class DatabaseManager:
                 """)
                 params.extend(values)
 
+            elif field == "review_status":
+                review_clauses = []
+
+                if "human_corrected" in values:
+                    review_clauses.append("""
+                    EXISTS (
+                        SELECT 1
+                        FROM media_corrections
+                        WHERE media_corrections.media_id=media.id
+                        AND media_corrections.active=1
+                    )
+                    """)
+
+                if "needs_review" in values:
+                    review_clauses.append("""
+                    (
+                        media_intelligence.intelligence_score < 50
+                        OR EXISTS (
+                            SELECT 1
+                            FROM fire_service_intelligence
+                            WHERE fire_service_intelligence.media_id=media.id
+                            AND fire_service_intelligence.operational_confidence < 50
+                        )
+                    )
+                    """)
+
+                if "low_confidence" in values:
+                    review_clauses.append("""
+                    (
+                        media_intelligence.intelligence_score < 65
+                        OR EXISTS (
+                            SELECT 1
+                            FROM fire_service_intelligence
+                            WHERE fire_service_intelligence.media_id=media.id
+                            AND fire_service_intelligence.operational_confidence < 65
+                        )
+                    )
+                    """)
+
+                if review_clauses:
+                    clauses.append(
+                        "(" + " OR ".join(review_clauses) + ")"
+                    )
+
         if not clauses:
             return "", []
 
@@ -5135,6 +5948,12 @@ class DatabaseManager:
             ),
             "trust_building": (
                 "media_intelligence.trust_building_score DESC, "
+                "media.filename ASC"
+            ),
+            "correction_count": (
+                "(SELECT COUNT(*) FROM media_corrections "
+                "WHERE media_corrections.media_id=media.id "
+                "AND media_corrections.active=1) DESC, "
                 "media.filename ASC"
             ),
             "newest": "media.date_added DESC",
@@ -5387,6 +6206,60 @@ class DatabaseManager:
             "notes": row["notes"] or "",
             "confidence": row["confidence"] or 0,
             "opportunity_type": row["opportunity_type"] or ""
+        }
+
+    ############################################################
+
+    def _media_correction_from_row(self, row):
+
+        return {
+            "id": row["id"],
+            "media_id": row["media_id"],
+            "field_name": row["field_name"] or "",
+            "original_value": self._from_json(row["original_value"]),
+            "corrected_value": self._from_json(row["corrected_value"]),
+            "correction_source": row["correction_source"] or "",
+            "confidence_before": row["confidence_before"] or 0,
+            "confidence_after": row["confidence_after"] or 0,
+            "notes": row["notes"] or "",
+            "created_at": row["created_at"] or "",
+            "updated_at": row["updated_at"] or "",
+            "active": bool(row["active"])
+        }
+
+    ############################################################
+
+    def _correction_history_from_row(self, row):
+
+        return {
+            "id": row["id"],
+            "correction_id": row["correction_id"],
+            "media_id": row["media_id"],
+            "field_name": row["field_name"] or "",
+            "previous_value": self._from_json(row["previous_value"]),
+            "new_value": self._from_json(row["new_value"]),
+            "correction_source": row["correction_source"] or "",
+            "action": row["action"] or "",
+            "notes": row["notes"] or "",
+            "created_at": row["created_at"] or ""
+        }
+
+    ############################################################
+
+    def _correction_pattern_from_row(self, row):
+
+        return {
+            "id": row["id"],
+            "field_name": row["field_name"] or "",
+            "original_value": self._from_json(row["original_value"]),
+            "corrected_value": self._from_json(row["corrected_value"]),
+            "occurrence_count": row["occurrence_count"] or 0,
+            "confidence": row["confidence"] or 0,
+            "example_media_ids": self._from_json(row["example_media_ids"]),
+            "notes": row["notes"] or "",
+            "first_seen": row["first_seen"] or "",
+            "last_seen": row["last_seen"] or "",
+            "active": bool(row["active"])
         }
 
     ############################################################
@@ -5705,6 +6578,13 @@ class DatabaseManager:
             "CREATE INDEX IF NOT EXISTS idx_recommendation_feedback_type ON recommendation_feedback(feedback_type)",
             "CREATE INDEX IF NOT EXISTS idx_recommendation_feedback_opportunity ON recommendation_feedback(opportunity_type)",
             "CREATE INDEX IF NOT EXISTS idx_recommendation_feedback_created ON recommendation_feedback(created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_media_corrections_media ON media_corrections(media_id)",
+            "CREATE INDEX IF NOT EXISTS idx_media_corrections_field ON media_corrections(field_name)",
+            "CREATE INDEX IF NOT EXISTS idx_media_corrections_active ON media_corrections(active)",
+            "CREATE INDEX IF NOT EXISTS idx_correction_history_media ON correction_history(media_id)",
+            "CREATE INDEX IF NOT EXISTS idx_correction_history_field ON correction_history(field_name)",
+            "CREATE INDEX IF NOT EXISTS idx_correction_patterns_field ON correction_patterns(field_name)",
+            "CREATE INDEX IF NOT EXISTS idx_correction_patterns_active ON correction_patterns(active)",
             "CREATE INDEX IF NOT EXISTS idx_apparatus_name ON apparatus(name)",
             "CREATE INDEX IF NOT EXISTS idx_programs_name ON programs(name)",
             "CREATE INDEX IF NOT EXISTS idx_annual_events_name ON annual_events(name)",
