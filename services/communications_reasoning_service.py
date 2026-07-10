@@ -519,6 +519,9 @@ class CommunicationsReasoningService:
         memory = self.memory.media_memory(
             candidate.get("media_id")
         )
+        fire_service = self._fire_service_intelligence(
+            candidate.get("media_id")
+        ) or {}
 
         return {
             "media_id": candidate.get("media_id"),
@@ -538,6 +541,11 @@ class CommunicationsReasoningService:
             "suggested_platform": candidate.get("suggested_platform", ""),
             "suggested_time_of_year": candidate.get("suggested_time_of_year", ""),
             "communications_reasoning": candidate.get("communications_reasoning", []),
+            "operational_context": fire_service.get("operational_context", ""),
+            "operational_skills": fire_service.get("operational_skills", []),
+            "communications_intent": fire_service.get("communications_intent", []),
+            "operational_confidence": fire_service.get("operational_confidence", 0),
+            "operational_reasoning": fire_service.get("operational_reasoning", []),
             "community_score": candidate.get("community_score", 0),
             "recruitment_score": candidate.get("recruitment_score", 0),
             "education_score": candidate.get("education_score", 0),
@@ -632,6 +640,30 @@ class CommunicationsReasoningService:
 
             for item in top.get("communications_reasoning", [])[:2]:
                 reasoning.append(item)
+
+            if top.get("operational_context"):
+                reasoning.append(
+                    (
+                        "Operational reasoning: " +
+                        self._format_label(top["operational_context"]) +
+                        f" confidence {top.get('operational_confidence', 0)}."
+                    )
+                )
+
+            for item in top.get("operational_reasoning", [])[:2]:
+                reasoning.append(item)
+
+            if top.get("communications_intent"):
+                reasoning.append(
+                    (
+                        "Communications intent: " +
+                        ", ".join(
+                            self._format_label(value)
+                            for value in top["communications_intent"][:4]
+                        ) +
+                        "."
+                    )
+                )
 
             if top.get("community_score", 0) >= 70:
                 reasoning.append("Community interaction value is strong.")
@@ -919,6 +951,7 @@ class CommunicationsReasoningService:
             for key in (
                 "incident_classification",
                 "operational_activity",
+                "operational_context",
                 "group_size"
             ):
                 values.append(fire_service.get(key, ""))
@@ -927,7 +960,10 @@ class CommunicationsReasoningService:
                 "ppe",
                 "equipment",
                 "apparatus",
-                "communications_uses"
+                "communications_uses",
+                "operational_skills",
+                "communications_intent",
+                "operational_reasoning"
             ):
                 values.extend(fire_service.get(key) or [])
 

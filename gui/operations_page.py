@@ -257,6 +257,18 @@ class OperationsPage(ctk.CTkFrame):
                 "Top communications opportunities: " +
                 self.count_rows_text(data.get("top_fire_service_opportunities"))
             ),
+            (
+                "Top Operational Categories: " +
+                self.count_rows_text(data.get("top_operational_categories"))
+            ),
+            (
+                "Top Skills: " +
+                self.count_rows_text(data.get("top_operational_skills"))
+            ),
+            f"Training Media: {data.get('training_media_count', 0)}",
+            f"Emergency Media: {data.get('emergency_media_count', 0)}",
+            f"Public Education Media: {data.get('public_education_media_count', 0)}",
+            f"Recruitment Media: {data.get('recruitment_media_count', 0)}",
             f"Unanalyzed count: {data['unanalyzed_count']}",
             f"Intelligence missing count: {data['intelligence_missing_count']}",
             f"Analysis coverage: {data['analysis_coverage_percentage']}%",

@@ -161,6 +161,44 @@ class FireServiceIntelligenceService:
             "source_model": analysis.get("model", "")
         }
 
+        try:
+            from services.fire_reasoning_service import FireReasoningService
+
+            operational = FireReasoningService(
+                database=self.db,
+                knowledge_service=self.knowledge,
+                context_engine=self.context_engine,
+                memory_service=self.memory
+            ).evaluate(
+                media_intelligence=media_intelligence,
+                fire_service_intelligence=result,
+                department_knowledge=department_knowledge,
+                communications_memory=communications_memory,
+                communications_context=communications_context
+            )
+            result.update(operational)
+
+        except Exception as ex:
+            logger.error(
+                "Fire operational reasoning failed media_id=%s",
+                result["media_id"],
+                exc_info=(
+                    type(ex),
+                    ex,
+                    ex.__traceback__
+                )
+            )
+            result.update(
+                {
+                    "operational_context": incident if incident else "unknown",
+                    "operational_skills": [activity] if activity else ["unknown"],
+                    "communications_intent": communications_uses,
+                    "operational_confidence": 50,
+                    "reasoning_evidence": [],
+                    "operational_reasoning": reasoning
+                }
+            )
+
         logger.info(
             "Generated fire service intelligence media_id=%s incident=%s activity=%s",
             result["media_id"],

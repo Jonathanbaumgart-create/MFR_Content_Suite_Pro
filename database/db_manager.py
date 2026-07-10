@@ -261,6 +261,18 @@ class DatabaseManager:
 
             reasoning TEXT,
 
+            operational_context TEXT,
+
+            operational_skills TEXT,
+
+            communications_intent TEXT,
+
+            operational_confidence INTEGER,
+
+            reasoning_evidence TEXT,
+
+            operational_reasoning TEXT,
+
             generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
             source_model TEXT
@@ -631,6 +643,7 @@ class DatabaseManager:
 
         self._ensure_ai_analysis_columns(cur)
         self._ensure_media_intelligence_columns(cur)
+        self._ensure_fire_service_intelligence_columns(cur)
         self._ensure_knowledge_columns(cur)
         self._ensure_indexes(cur)
 
@@ -1882,13 +1895,25 @@ class DatabaseManager:
 
             reasoning,
 
+            operational_context,
+
+            operational_skills,
+
+            communications_intent,
+
+            operational_confidence,
+
+            reasoning_evidence,
+
+            operational_reasoning,
+
             generated_at,
 
             source_model
 
         )
 
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,?)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP,?)
 
         """,
 
@@ -1907,6 +1932,12 @@ class DatabaseManager:
             intelligence.get("operational_activity", ""),
             self._to_json(intelligence.get("communications_uses")),
             self._to_json(intelligence.get("reasoning")),
+            intelligence.get("operational_context", ""),
+            self._to_json(intelligence.get("operational_skills")),
+            self._to_json(intelligence.get("communications_intent")),
+            self._to_int(intelligence.get("operational_confidence")),
+            self._to_json(intelligence.get("reasoning_evidence")),
+            self._to_json(intelligence.get("operational_reasoning")),
             intelligence.get("source_model", "")
         ))
 
@@ -1987,7 +2018,8 @@ class DatabaseManager:
 
         allowed = {
             "incident_classification",
-            "operational_activity"
+            "operational_activity",
+            "operational_context"
         }
 
         if field not in allowed:
@@ -2043,6 +2075,125 @@ class DatabaseManager:
 
         FROM fire_service_intelligence,
              json_each(fire_service_intelligence.communications_uses)
+
+        WHERE json_each.value IS NOT NULL
+        AND json_each.value != ''
+
+        GROUP BY json_each.value
+
+        ORDER BY count DESC, json_each.value
+
+        LIMIT ?
+
+        """,
+
+        (self._to_int(limit),))
+
+        rows = [
+            {
+                "name": row["name"],
+                "count": row["count"] or 0
+            }
+            for row in cur.fetchall()
+        ]
+
+        conn.close()
+
+        return rows
+
+    ############################################################
+
+    def fire_service_top_operational_contexts(self, limit=5):
+
+        return self.fire_service_top_values(
+            "operational_context",
+            limit=limit
+        )
+
+    ############################################################
+
+    def fire_service_top_operational_skills(self, limit=5):
+
+        return self._fire_service_json_counts(
+            "operational_skills",
+            limit=limit
+        )
+
+    ############################################################
+
+    def fire_service_intent_count(self, intent):
+
+        conn = self.connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        SELECT COUNT(DISTINCT fire_service_intelligence.media_id)
+
+        FROM fire_service_intelligence,
+             json_each(fire_service_intelligence.communications_intent)
+
+        WHERE json_each.value=?
+
+        """,
+
+        (intent,))
+
+        count = cur.fetchone()[0]
+
+        conn.close()
+
+        return count or 0
+
+    ############################################################
+
+    def fire_service_context_count(self, context):
+
+        conn = self.connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        SELECT COUNT(*)
+
+        FROM fire_service_intelligence
+
+        WHERE operational_context=?
+
+        """,
+
+        (context,))
+
+        count = cur.fetchone()[0]
+
+        conn.close()
+
+        return count or 0
+
+    ############################################################
+
+    def _fire_service_json_counts(self, field, limit=5):
+
+        allowed = {
+            "communications_uses",
+            "communications_intent",
+            "operational_skills"
+        }
+
+        if field not in allowed:
+            return []
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+
+        cur.execute(f"""
+
+        SELECT json_each.value AS name,
+               COUNT(DISTINCT fire_service_intelligence.media_id) AS count
+
+        FROM fire_service_intelligence,
+             json_each(fire_service_intelligence.{field})
 
         WHERE json_each.value IS NOT NULL
         AND json_each.value != ''
@@ -4375,6 +4526,12 @@ class DatabaseManager:
             "operational_activity": row["operational_activity"] or "",
             "communications_uses": self._from_json(row["communications_uses"]),
             "reasoning": self._from_json(row["reasoning"]),
+            "operational_context": row["operational_context"] or "",
+            "operational_skills": self._from_json(row["operational_skills"]),
+            "communications_intent": self._from_json(row["communications_intent"]),
+            "operational_confidence": row["operational_confidence"] or 0,
+            "reasoning_evidence": self._from_json(row["reasoning_evidence"]),
+            "operational_reasoning": self._from_json(row["operational_reasoning"]),
             "generated_at": row["generated_at"] or "",
             "source_model": row["source_model"] or ""
         }
@@ -4614,6 +4771,40 @@ class DatabaseManager:
 
     ############################################################
 
+    def _ensure_fire_service_intelligence_columns(self, cur):
+
+        cur.execute("PRAGMA table_info(fire_service_intelligence)")
+
+        columns = {
+            row[1]
+            for row in cur.fetchall()
+        }
+
+        additions = {
+            "operational_context": "TEXT",
+            "operational_skills": "TEXT",
+            "communications_intent": "TEXT",
+            "operational_confidence": "INTEGER",
+            "reasoning_evidence": "TEXT",
+            "operational_reasoning": "TEXT"
+        }
+
+        for name, definition in additions.items():
+
+            if name in columns:
+                continue
+
+            cur.execute(
+                f"ALTER TABLE fire_service_intelligence ADD COLUMN {name} {definition}"
+            )
+
+            logger.info(
+                "Added fire_service_intelligence column %s",
+                name
+            )
+
+    ############################################################
+
     def _ensure_knowledge_columns(self, cur):
 
         additions = {
@@ -4682,6 +4873,8 @@ class DatabaseManager:
             "CREATE INDEX IF NOT EXISTS idx_fire_service_incident ON fire_service_intelligence(incident_classification)",
             "CREATE INDEX IF NOT EXISTS idx_fire_service_activity ON fire_service_intelligence(operational_activity)",
             "CREATE INDEX IF NOT EXISTS idx_fire_service_group ON fire_service_intelligence(group_size)",
+            "CREATE INDEX IF NOT EXISTS idx_fire_service_context ON fire_service_intelligence(operational_context)",
+            "CREATE INDEX IF NOT EXISTS idx_fire_service_confidence ON fire_service_intelligence(operational_confidence)",
             "CREATE INDEX IF NOT EXISTS idx_recommendation_history_media ON recommendation_history(media_id)",
             "CREATE INDEX IF NOT EXISTS idx_recommendation_history_date ON recommendation_history(recommendation_date)",
             "CREATE INDEX IF NOT EXISTS idx_recommendation_history_opportunity ON recommendation_history(opportunity)",

@@ -548,6 +548,16 @@ class PhotoViewer(ctk.CTkToplevel):
         return [
             f"Incident: {fire_service.get('incident_classification', '')}",
             f"Activity: {fire_service.get('operational_activity', '')}",
+            f"Operational Context: {fire_service.get('operational_context', '')}",
+            (
+                "Operational Skills: " +
+                self.format_list(fire_service.get("operational_skills"))
+            ),
+            (
+                "Communications Intent: " +
+                self.format_list(fire_service.get("communications_intent"))
+            ),
+            f"Confidence: {fire_service.get('operational_confidence', 0)}",
             (
                 "Personnel: " +
                 f"firefighters {fire_service.get('firefighter_count', 0)}, " +
@@ -565,6 +575,40 @@ class PhotoViewer(ctk.CTkToplevel):
             ),
             (
                 "Reasoning: " +
-                self.format_list(fire_service.get("reasoning"))
+                self.format_list(
+                    (
+                        fire_service.get("operational_reasoning") or
+                        fire_service.get("reasoning")
+                    )
+                )
+            ),
+            (
+                "Evidence: " +
+                self.format_list(
+                    self.fire_reasoning_evidence_lines(
+                        fire_service.get("reasoning_evidence")
+                    )
+                )
             )
         ]
+
+    ##########################################################
+
+    def fire_reasoning_evidence_lines(self, evidence):
+
+        lines = []
+
+        for item in evidence or []:
+
+            if isinstance(item, dict):
+                lines.append(
+                    (
+                        f"{item.get('confidence', 0)} - "
+                        f"{item.get('reason', '')}: "
+                        f"{item.get('evidence', '')}"
+                    )
+                )
+            else:
+                lines.append(str(item))
+
+        return lines

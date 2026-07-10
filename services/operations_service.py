@@ -98,6 +98,22 @@ class OperationsService:
             "top_fire_service_opportunities": (
                 self.db.fire_service_top_communications_uses(limit=5)
             ),
+            "top_operational_categories": (
+                self.db.fire_service_top_operational_contexts(limit=5)
+            ),
+            "top_operational_skills": (
+                self.db.fire_service_top_operational_skills(limit=5)
+            ),
+            "training_media_count": self.db.fire_service_context_count("training"),
+            "emergency_media_count": self.db.fire_service_context_count(
+                "emergency_response"
+            ),
+            "public_education_media_count": self.db.fire_service_context_count(
+                "public_education"
+            ),
+            "recruitment_media_count": self.db.fire_service_intent_count(
+                "recruitment"
+            ),
             "unanalyzed_count": unanalyzed,
             "intelligence_missing_count": missing_intelligence,
             "analysis_coverage_percentage": self._percentage(

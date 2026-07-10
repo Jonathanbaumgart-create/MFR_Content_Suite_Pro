@@ -499,6 +499,7 @@ class ContentDirectorService:
             for key in (
                 "incident_classification",
                 "operational_activity",
+                "operational_context",
                 "group_size"
             ):
                 terms.append(fire_service.get(key, ""))
@@ -507,7 +508,10 @@ class ContentDirectorService:
                 "ppe",
                 "equipment",
                 "apparatus",
-                "communications_uses"
+                "communications_uses",
+                "operational_skills",
+                "communications_intent",
+                "operational_reasoning"
             ):
                 terms.extend(fire_service.get(key) or [])
 

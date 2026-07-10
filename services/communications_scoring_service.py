@@ -83,7 +83,8 @@ class CommunicationsScoringService:
                     "firefighter",
                     "volunteer",
                     "training_tuesday",
-                    "volunteer_spotlight"
+                    "volunteer_spotlight",
+                    "officer_development"
                 ),
                 35
             ),
@@ -107,7 +108,8 @@ class CommunicationsScoringService:
                     "safety",
                     "community_education",
                     "hydrant_heroes",
-                    "travelling_sparky"
+                    "travelling_sparky",
+                    "technical_education"
                 ),
                 36
             ),
@@ -488,7 +490,7 @@ class CommunicationsScoringService:
         if terms & {"fire_prevention", "smoke_alarm", "public_education"}:
             campaigns.append("Fire Prevention")
 
-        if terms & {"recruitment", "training", "training_tuesday", "officer_development"}:
+        if terms & {"recruitment", "training", "training_tuesday", "officer_development", "technical_education"}:
             campaigns.append("Recruitment")
 
         if terms & {"training_tuesday", "technical_education", "officer_development"}:
@@ -615,6 +617,18 @@ class CommunicationsScoringService:
                 "Training and recruitment signals support staffing and behind-the-scenes storytelling."
             )
 
+        if terms & {
+            "ladder_operations",
+            "fire_attack",
+            "search",
+            "water_supply",
+            "technical_education",
+            "officer_development"
+        }:
+            reasons.append(
+                "Fire Service Intelligence adds operational reasoning for technical and communications value."
+            )
+
         if memory.get("posted_before"):
             reasons.append(
                 f"Communications Memory shows prior use {memory.get('post_count')} time(s)."
@@ -731,6 +745,7 @@ class CommunicationsScoringService:
         for key in (
             "incident_classification",
             "operational_activity",
+            "operational_context",
             "group_size"
         ):
             terms.add(self._token(fire_service.get(key)))
@@ -739,7 +754,10 @@ class CommunicationsScoringService:
             "ppe",
             "equipment",
             "apparatus",
-            "communications_uses"
+            "communications_uses",
+            "operational_skills",
+            "communications_intent",
+            "operational_reasoning"
         ):
             for value in fire_service.get(key) or []:
                 terms.add(self._token(value))
