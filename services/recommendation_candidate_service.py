@@ -827,7 +827,7 @@ class RecommendationCandidateService:
             3
         )
         step = time.perf_counter()
-        memory_rows = self.db.social_posts(limit=1000)
+        memory_rows = self.memory.search("", limit=1000)
         timings["memory_query_seconds"] = round(time.perf_counter() - step, 3)
         step = time.perf_counter()
         recent_recommended = self.db.recent_recommended_media_ids(
@@ -1400,6 +1400,9 @@ class RecommendationCandidateService:
             values.extend(self._split(post.get(key, "")))
 
         values.extend(post.get("hashtags") or [])
+        values.extend(post.get("topics") or [])
+        values.extend(post.get("programs") or [])
+        values.extend(post.get("campaigns") or [])
 
         return " ".join(
             self._token(value)

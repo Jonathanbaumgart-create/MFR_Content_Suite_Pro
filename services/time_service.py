@@ -109,3 +109,17 @@ class TimeService:
             return ""
 
         return local.date().isoformat()
+
+    ############################################################
+
+    @classmethod
+    def elapsed_seconds_since_utc(cls, value):
+
+        utc_value = cls.normalize_stored_timestamp(value)
+
+        if utc_value is None:
+            return 0
+
+        return (
+            cls.utc_now() - utc_value
+        ).total_seconds()

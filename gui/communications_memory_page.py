@@ -2,9 +2,9 @@ import customtkinter as ctk
 from tkinter import filedialog
 
 from core.app_context import context
+from services.communication_import_service import CommunicationImportService
 from services.communications_memory_service import CommunicationsMemoryService
 from services.logging_service import LoggingService
-from services.social_import_service import SocialImportService
 from services.time_service import TimeService
 
 
@@ -18,10 +18,11 @@ class CommunicationsMemoryPage(ctk.CTkFrame):
         super().__init__(parent)
 
         self.memory = CommunicationsMemoryService()
-        self.importer = SocialImportService(
-            self.memory
+        self.importer = CommunicationImportService(
+            database=context.database
         )
         self.future = None
+        self.import_progress = None
         self._destroyed = False
 
         self.build_page()
@@ -62,7 +63,7 @@ class CommunicationsMemoryPage(ctk.CTkFrame):
 
         import_button = ctk.CTkButton(
             header,
-            text="Import JSON Export",
+            text="Import CSV/JSON",
             command=self.choose_import
         )
 
@@ -115,8 +116,9 @@ class CommunicationsMemoryPage(ctk.CTkFrame):
     def choose_import(self):
 
         path = filedialog.askopenfilename(
-            title="Import Social Media JSON Export",
+            title="Import Communications CSV or JSON",
             filetypes=(
+                ("CSV files", "*.csv"),
                 ("JSON files", "*.json"),
                 ("All files", "*.*")
             )
@@ -130,7 +132,8 @@ class CommunicationsMemoryPage(ctk.CTkFrame):
         )
         self.future = context.job_manager.submit(
             self.importer.import_file,
-            path
+            path,
+            progress_callback=self._on_import_progress
         )
         logger.info(
             "Communications memory import queued path=%s",
@@ -146,6 +149,16 @@ class CommunicationsMemoryPage(ctk.CTkFrame):
             return
 
         if not self.future.done():
+            if self.import_progress:
+                self.status.configure(
+                    text=(
+                        "Importing communications memory: "
+                        f"{self.import_progress['records_processed']} processed, "
+                        f"{self.import_progress['records_inserted']} inserted, "
+                        f"{self.import_progress['duplicates_skipped']} duplicates, "
+                        f"{self.import_progress['records_failed']} failed."
+                    )
+                )
             self.after(150, self.check_import)
             return
 
@@ -169,11 +182,18 @@ class CommunicationsMemoryPage(ctk.CTkFrame):
         self.status.configure(
             text=(
                 "Import complete: "
-                f"{summary['posts_imported']} posts, "
-                f"{summary['duplicate_posts']} duplicates."
+                f"{summary['records_inserted']} records, "
+                f"{summary['deliveries_inserted']} deliveries, "
+                f"{summary['duplicates_skipped']} duplicates."
             )
         )
         self.refresh()
+
+    ##########################################################
+
+    def _on_import_progress(self, progress):
+
+        self.import_progress = progress
 
     ##########################################################
 
@@ -221,7 +241,13 @@ class CommunicationsMemoryPage(ctk.CTkFrame):
             "Overview",
             [
                 f"Total Posts: {stats['total_posts']:,}",
+                f"Communication Records: {stats['communication_records']:,}",
+                f"Deliveries: {stats['communication_deliveries']:,}",
                 f"Campaigns: {stats['campaigns']:,}",
+                f"Communication Campaigns: {stats['communication_campaigns']:,}",
+                f"Communication Programs: {stats['communication_programs']:,}",
+                f"Topics: {stats['communication_topics']:,}",
+                f"Import Runs: {stats['communication_import_runs']:,}",
                 f"Platforms: {stats['platforms']:,}",
                 f"Linked Media Uses: {stats['media_usage']:,}"
             ]
@@ -280,6 +306,22 @@ class CommunicationsMemoryPage(ctk.CTkFrame):
                 f"{campaign} ({count})"
                 for campaign, count in stats["recent_campaigns"]
             ] or ["No campaigns discovered yet."]
+        )
+        row += 1
+
+        self.section(
+            row,
+            "Memory Statistics",
+            [
+                f"Normalized Records: {stats['engine']['records']:,}",
+                f"Delivery Records: {stats['engine']['deliveries']:,}",
+                f"Campaign Objects: {stats['engine']['campaigns']:,}",
+                f"Program Objects: {stats['engine']['programs']:,}",
+                f"Topic Links: {stats['engine']['topics']:,}"
+            ] + [
+                f"Topic: {item['topic']} ({item['count']})"
+                for item in stats["engine"].get("top_topics", [])[:5]
+            ] or ["No normalized communication memory imported yet."]
         )
         row += 1
 

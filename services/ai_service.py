@@ -1,5 +1,5 @@
-import re
 import json
+import re
 
 from services.logging_service import LoggingService
 
@@ -9,73 +9,36 @@ logger = LoggingService.get_logger("ai")
 
 class AIService:
 
+    STATUS_VALID = "valid_structured_response"
+    STATUS_REPAIRED = "repaired_structured_response"
+    STATUS_PARTIAL = "partial_response"
+    STATUS_INVALID = "invalid_response"
+    STATUS_EMPTY = "empty_response"
+
+    ############################################################
+
     def parse_analysis(self, text, model="unknown"):
 
-        try:
-            data = json.loads(self._clean_json(text))
-        except Exception:
-            logger.exception("AI response was not valid JSON")
+        raw_response = "" if text is None else str(text)
+        warnings = []
+        parse_status = self.STATUS_VALID
 
-            data = {
-                "description": text,
-                "scene_type": "",
-                "activity": "",
-                "people_count": 0,
-                "apparatus": [],
-                "equipment": [],
-                "keywords": [],
-                "community_score": 50,
-                "recruitment_score": 50,
-                "education_score": 50,
-                "technical_score": 50,
-                "overall_score": 50,
-                "facebook_caption": "",
-                "instagram_caption": "",
-                "model": model
-            }
+        if not raw_response.strip():
+            data = {}
+            parse_status = self.STATUS_EMPTY
+            warnings.append("Provider returned empty output")
+        else:
+            data, parse_status, warnings = self._parse_json(raw_response)
 
-        defaults = {
-            "description": "",
-            "scene_type": "",
-            "activity": "",
-            "people_count": 0,
-            "apparatus": [],
-            "equipment": [],
-            "keywords": [],
-            "community_score": 0,
-            "recruitment_score": 0,
-            "education_score": 0,
-            "technical_score": 0,
-            "overall_score": 0,
-            "facebook_caption": "",
-            "instagram_caption": "",
-            "model": model
-        }
-
-        for k, v in defaults.items():
-            data.setdefault(k, v)
-
-        data["description"] = self._ensure_text(data.get("description"))
-        data["scene_type"] = self._ensure_text(data.get("scene_type"))
-        data["activity"] = self._ensure_text(data.get("activity"))
-        data["apparatus"] = self._ensure_list(data.get("apparatus"))
-        data["equipment"] = self._ensure_list(data.get("equipment"))
-        data["keywords"] = self._ensure_list(data.get("keywords"))
-        data["people_count"] = self._ensure_people_count(
-            data.get("people_count"),
-            data
+        analysis = self._normalize_analysis(
+            data,
+            model,
+            raw_response,
+            parse_status,
+            warnings
         )
 
-        for key in (
-            "community_score",
-            "recruitment_score",
-            "education_score",
-            "technical_score",
-            "overall_score"
-        ):
-            data[key] = self._ensure_int(data.get(key))
-
-        return data
+        return analysis
 
     ############################################################
 
@@ -90,25 +53,219 @@ class AIService:
 
     ############################################################
 
-    def _clean_json(self, text):
+    def _parse_json(self, raw_response):
 
-        text = text.strip()
+        text = self._strip_fence(raw_response.strip())
+        warnings = []
+
+        try:
+            return json.loads(text), self.STATUS_VALID, warnings
+        except Exception:
+            pass
+
+        extracted = self._extract_json_object(text)
+
+        if extracted and extracted != text:
+            warnings.append("Extracted JSON object from surrounding text")
+
+            try:
+                return json.loads(extracted), self.STATUS_REPAIRED, warnings
+            except Exception:
+                text = extracted
+
+        repaired = self._repair_truncated_json(text)
+
+        if repaired and repaired != text:
+            warnings.append("Repaired truncated JSON braces")
+
+            try:
+                return json.loads(repaired), self.STATUS_PARTIAL, warnings
+            except Exception:
+                pass
+
+        logger.warning("AI response was not valid structured JSON")
+        warnings.append("Could not parse provider output as JSON")
+
+        return {}, self.STATUS_INVALID, warnings
+
+    ############################################################
+
+    def _normalize_analysis(
+        self,
+        data,
+        model,
+        raw_response,
+        parse_status,
+        warnings
+    ):
+
+        if not isinstance(data, dict):
+            data = {}
+            warnings.append("JSON root was not an object")
+            parse_status = self.STATUS_INVALID
+
+        description = self._text(data.get("description"))
+        people = self._list(data.get("people"))
+        apparatus = self._list(data.get("apparatus"))
+        equipment = self._list(data.get("equipment"))
+        activities = self._list(data.get("activities") or data.get("activity"))
+        keywords = self._list(data.get("keywords"))
+        safety_concerns = self._list(data.get("safety_concerns"))
+        public_use_risks = self._list(data.get("public_use_risks"))
+        setting = self._text(data.get("setting"))
+        indoor_outdoor = self._choice(
+            data.get("indoor_outdoor"),
+            {"indoor", "outdoor", "mixed", "unknown"},
+            "unknown"
+        )
+        confidence = self._confidence(data.get("confidence"), warnings)
+        people_count = self._people_count(
+            data.get("people_count"),
+            description,
+            people,
+            warnings
+        )
+        visual_facts = self._visual_fact_count(
+            description,
+            people_count,
+            people,
+            apparatus,
+            equipment,
+            activities,
+            setting
+        )
+
+        if parse_status == self.STATUS_VALID and visual_facts < 2:
+            parse_status = self.STATUS_PARTIAL
+            warnings.append("Structured response contained little visual detail")
+
+        if parse_status == self.STATUS_EMPTY:
+            confidence = 0.0
+        elif parse_status == self.STATUS_INVALID:
+            confidence = min(confidence, 0.05)
+        elif parse_status == self.STATUS_PARTIAL:
+            confidence = min(confidence, 0.35)
+        elif parse_status == self.STATUS_REPAIRED:
+            confidence = min(confidence, 0.7)
+
+        scene_type = self._scene_type(
+            data,
+            setting,
+            indoor_outdoor,
+            activities
+        )
+        activity = ", ".join(activities)
+        keyword_set = self._unique(
+            keywords +
+            people +
+            activities +
+            safety_concerns +
+            public_use_risks +
+            [setting, indoor_outdoor]
+        )
+        overall_score = int(round(confidence * 100))
+
+        return {
+            "description": description,
+            "scene_type": scene_type,
+            "activity": activity,
+            "people_count": people_count,
+            "people": people,
+            "apparatus": apparatus,
+            "equipment": equipment,
+            "activities": activities,
+            "setting": setting,
+            "indoor_outdoor": indoor_outdoor,
+            "training": self._bool(data.get("training")),
+            "incident_scene": self._bool(data.get("incident_scene")),
+            "public_education": self._bool(data.get("public_education")),
+            "community_event": self._bool(data.get("community_event")),
+            "safety_concerns": safety_concerns,
+            "public_use_risks": public_use_risks,
+            "keywords": keyword_set,
+            "community_score": overall_score if self._bool(data.get("community_event")) else 0,
+            "recruitment_score": 0,
+            "education_score": overall_score if self._bool(data.get("public_education")) else 0,
+            "technical_score": overall_score if equipment or apparatus else 0,
+            "overall_score": overall_score,
+            "facebook_caption": "",
+            "instagram_caption": "",
+            "model": self._text(data.get("model")) or model,
+            "confidence": confidence,
+            "raw_response": raw_response,
+            "parse_status": parse_status,
+            "parse_warnings": warnings,
+            "structured_field_completeness": self._completeness({
+                "description": description,
+                "people_count": people_count,
+                "people": people,
+                "apparatus": apparatus,
+                "equipment": equipment,
+                "activities": activities,
+                "setting": setting,
+                "indoor_outdoor": indoor_outdoor,
+                "confidence": confidence
+            })
+        }
+
+    ############################################################
+
+    def _strip_fence(self, text):
 
         if text.startswith("```"):
-            text = re.sub(r"^```(?:json)?", "", text)
-            text = re.sub(r"```$", "", text)
+            text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.I)
+            text = re.sub(r"\s*```$", "", text)
 
         return text.strip()
 
     ############################################################
 
-    def _ensure_list(self, value):
+    def _extract_json_object(self, text):
+
+        start = text.find("{")
+        end = text.rfind("}")
+
+        if start < 0 or end < start:
+            return ""
+
+        return text[start:end + 1].strip()
+
+    ############################################################
+
+    def _repair_truncated_json(self, text):
+
+        start = text.find("{")
+
+        if start < 0:
+            return ""
+
+        candidate = text[start:].strip().rstrip(",")
+        open_braces = candidate.count("{")
+        close_braces = candidate.count("}")
+        open_brackets = candidate.count("[")
+        close_brackets = candidate.count("]")
+
+        if open_braces <= close_braces and open_brackets <= close_brackets:
+            return candidate
+
+        candidate += "]" * max(0, open_brackets - close_brackets)
+        candidate += "}" * max(0, open_braces - close_braces)
+
+        return candidate
+
+    ############################################################
+
+    def _list(self, value):
 
         if value is None:
             return []
 
         if isinstance(value, list):
-            return value
+            return [
+                self._text(item)
+                for item in value
+                if self._text(item)
+            ]
 
         if isinstance(value, str):
             if not value.strip():
@@ -119,15 +276,23 @@ class AIService:
                 if item.strip()
             ]
 
-        return [str(value)]
+        return [self._text(value)] if self._text(value) else []
 
     ############################################################
 
-    def _ensure_int(self, value):
+    def _text(self, value):
+
+        if value is None:
+            return ""
+
+        return str(value).strip()
+
+    ############################################################
+
+    def _int(self, value):
 
         if isinstance(value, str):
             match = re.search(r"-?\d+", value)
-
             if match:
                 value = match.group(0)
 
@@ -138,43 +303,145 @@ class AIService:
 
     ############################################################
 
-    def _ensure_people_count(self, value, data):
+    def _confidence(self, value, warnings):
 
-        count = self._ensure_int(value)
+        try:
+            confidence = float(value)
+        except Exception:
+            warnings.append("Missing or invalid confidence")
+            return 0.0
 
-        if count > 0:
-            return count
+        if confidence > 1:
+            warnings.append("Confidence was outside 0-1 range")
+            confidence = confidence / 100 if confidence <= 100 else 1
 
-        text = self._analysis_text(data)
-
-        if re.search(r"\b(one|single|a)\s+(firefighter|person|worker)\b", text):
-            return 1
-
-        if re.search(r"\b(firefighter|firefighters|person|people|crew member)\b", text):
-            return 1
-
-        return 0
+        return max(0.0, min(1.0, confidence))
 
     ############################################################
 
-    def _analysis_text(self, data):
+    def _people_count(self, value, description, people, warnings):
 
-        parts = [
-            data.get("description", ""),
-            data.get("scene_type", ""),
-            data.get("activity", ""),
-            " ".join(self._ensure_list(data.get("apparatus"))),
-            " ".join(self._ensure_list(data.get("equipment"))),
-            " ".join(self._ensure_list(data.get("keywords")))
-        ]
+        count = self._int(value)
 
-        return " ".join(str(part).lower() for part in parts if part)
+        if count < 0:
+            warnings.append("Negative people_count changed to zero")
+            return 0
+
+        if count == 0 and people:
+            count = len(people)
+
+        description_text = description.lower()
+
+        if count == 0 and re.search(
+            r"\b(no|without)\s+(people|person|firefighters|firefighter|crew)\b",
+            description_text
+        ):
+            return 0
+
+        if count == 0 and re.search(
+            r"\b(person|people|firefighter|firefighters|crew|child|children)\b",
+            description_text
+        ):
+            count = 1
+            warnings.append("Inferred people_count from description text")
+
+        return count
 
     ############################################################
 
-    def _ensure_text(self, value):
+    def _choice(self, value, allowed, default):
 
-        if value is None:
-            return ""
+        text = self._text(value).lower()
+        return text if text in allowed else default
 
-        return str(value).strip()
+    ############################################################
+
+    def _bool(self, value):
+
+        if isinstance(value, bool):
+            return value
+
+        if isinstance(value, str):
+            return value.strip().lower() in {"true", "yes", "1"}
+
+        return bool(value)
+
+    ############################################################
+
+    def _scene_type(self, data, setting, indoor_outdoor, activities):
+
+        scene = self._text(data.get("scene_type"))
+
+        if scene:
+            return scene
+
+        if setting:
+            return setting
+
+        if activities:
+            return activities[0]
+
+        return indoor_outdoor if indoor_outdoor != "unknown" else ""
+
+    ############################################################
+
+    def _visual_fact_count(
+        self,
+        description,
+        people_count,
+        people,
+        apparatus,
+        equipment,
+        activities,
+        setting
+    ):
+
+        return sum(
+            1
+            for value in (
+                description,
+                people_count,
+                people,
+                apparatus,
+                equipment,
+                activities,
+                setting
+            )
+            if value
+        )
+
+    ############################################################
+
+    def _completeness(self, fields):
+
+        total = len(fields)
+        present = 0
+
+        for key, value in fields.items():
+            if key == "people_count":
+                present += 1
+            elif key == "indoor_outdoor":
+                present += 1 if value != "unknown" else 0
+            elif value:
+                present += 1
+
+        return round(present / total, 3) if total else 0
+
+    ############################################################
+
+    def _unique(self, values):
+
+        seen = set()
+        results = []
+
+        for value in values:
+            text = self._text(value)
+            key = text.lower()
+
+            if not text or key in seen:
+                continue
+
+            seen.add(key)
+            results.append(text)
+
+        return results

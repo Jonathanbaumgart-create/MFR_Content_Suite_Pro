@@ -5,15 +5,30 @@ from concurrent.futures import Future
 
 from config.ai_config import AI_CONFIG
 from core.app_context import context
+from models.analysis_queue import (
+    AnalysisFailureCategory,
+    AnalysisQueueState,
+    AnalysisSessionStatus
+)
 from services.ai_service import AIService
 from services.logging_service import LoggingService
 from services.media_intelligence_service import MediaIntelligenceService
+from services.time_service import TimeService
 from services.vision_service import VisionService
 from services.human_feedback_service import HumanFeedbackService
 
 
 logger = LoggingService.get_logger("ai")
 intelligence_logger = LoggingService.get_logger("intelligence")
+
+
+class VisionParseError(RuntimeError):
+
+    def __init__(self, analysis):
+
+        self.analysis = analysis
+        status = analysis.get("parse_status", "invalid_response")
+        super().__init__(f"Vision provider returned {status}")
 
 
 class BulkAnalysisHandle:
@@ -33,6 +48,7 @@ class BrainService:
     _active_jobs = {}
     _active_jobs_lock = threading.Lock()
     _bulk_cancel = threading.Event()
+    _active_session_id = None
     BULK_BATCH_SIZE = 200
 
     def __init__(
@@ -155,6 +171,9 @@ class BrainService:
         progress = self.queue_progress()
         metrics = self.db.ai_metrics()
         mock_summary = self.legacy_mock_analysis_summary()
+        session = self.db.analysis_session_summary(
+            self._active_session_id
+        ) or self.db.analysis_session_summary()
 
         metrics.update(progress)
         metrics["provider"] = self.vision.provider_key()
@@ -162,6 +181,9 @@ class BrainService:
         metrics["legacy_mock_analysis"] = mock_summary.get(
             "media_count",
             0
+        )
+        metrics.update(
+            self._session_metrics(session)
         )
 
         return metrics
@@ -196,6 +218,12 @@ class BrainService:
         self._bulk_cancel.set()
 
         canceled = self.jobs.cancel_queued()
+
+        if self._active_session_id:
+            canceled += self.db.cancel_analysis_session(
+                self._active_session_id,
+                "Canceled by user"
+            )
 
         with self._active_jobs_lock:
             for media_id, future in list(self._active_jobs.items()):
@@ -322,10 +350,23 @@ class BrainService:
 
         self._bulk_cancel.clear()
 
-        future = self.jobs.submit(
-            self._analyze_media_batch,
+        session_id = self._create_analysis_session(
+            "selected media",
+            len(media_items),
+            force=force
+        )
+
+        self.db.enqueue_analysis_items(
+            session_id,
             media_items,
-            force,
+            self.vision.provider_key(),
+            self.vision.model_name(),
+            force=force
+        )
+
+        future = self.jobs.submit(
+            self._run_persistent_analysis_session,
+            session_id,
             progress_callback
         )
 
@@ -368,8 +409,15 @@ class BrainService:
         total = self.db.media_under_path_count(folder_path)
         self._bulk_cancel.clear()
 
+        session_id = self._create_analysis_session(
+            f"folder:{folder_path}",
+            total,
+            force=force
+        )
+
         future = self.jobs.submit(
-            self._analyze_folder_batch,
+            self._enqueue_folder_and_run,
+            session_id,
             folder_path,
             total,
             force,
@@ -397,8 +445,15 @@ class BrainService:
         total = self.db.image_media_count()
         self._bulk_cancel.clear()
 
+        session_id = self._create_analysis_session(
+            "entire library",
+            total,
+            force=force
+        )
+
         future = self.jobs.submit(
-            self._analyze_library_batch,
+            self._enqueue_library_and_run,
+            session_id,
             total,
             force,
             progress_callback
@@ -416,6 +471,535 @@ class BrainService:
 
     ############################################################
 
+    def _create_analysis_session(self, scope, total, force=False):
+
+        settings = {
+            "batch_size": self._batch_size(),
+            "worker_count": self.config.get("worker_count", 1),
+            "pause_between_batches": self._pause_between_batches(),
+            "retry_limit": self.config.get("retry_attempts", 2),
+            "timeout": self.vision.provider_settings().get("timeout")
+        }
+        settings["force"] = bool(force)
+
+        session_id = self.db.create_analysis_session(
+            scope,
+            self.vision.provider_key(),
+            self.vision.model_name(),
+            total_items=total,
+            settings=settings
+        )
+        self.__class__._active_session_id = session_id
+
+        logger.info(
+            "Created persistent analysis session id=%s scope=%s total=%s provider=%s model=%s",
+            session_id,
+            scope,
+            total,
+            self.vision.provider_key(),
+            self.vision.model_name()
+        )
+
+        return session_id
+
+    ############################################################
+
+    def _enqueue_folder_and_run(
+        self,
+        session_id,
+        folder_path,
+        total,
+        force,
+        progress_callback
+    ):
+
+        offset = 0
+
+        while offset < total and not self._bulk_cancel.is_set():
+
+            self.jobs.wait_if_paused()
+            media_items = self.db.get_media_under_path_page(
+                folder_path,
+                self._batch_size(),
+                offset
+            )
+
+            if not media_items:
+                break
+
+            self.db.enqueue_analysis_items(
+                session_id,
+                media_items,
+                self.vision.provider_key(),
+                self.vision.model_name(),
+                force=force
+            )
+            offset += len(media_items)
+
+        return self._run_persistent_analysis_session(
+            session_id,
+            progress_callback
+        )
+
+    ############################################################
+
+    def _enqueue_library_and_run(
+        self,
+        session_id,
+        total,
+        force,
+        progress_callback
+    ):
+
+        offset = 0
+
+        while offset < total and not self._bulk_cancel.is_set():
+
+            self.jobs.wait_if_paused()
+            media_items = self.db.get_image_media_page(
+                self._batch_size(),
+                offset
+            )
+
+            if not media_items:
+                break
+
+            self.db.enqueue_analysis_items(
+                session_id,
+                media_items,
+                self.vision.provider_key(),
+                self.vision.model_name(),
+                force=force
+            )
+            offset += len(media_items)
+
+        return self._run_persistent_analysis_session(
+            session_id,
+            progress_callback
+        )
+
+    ############################################################
+
+    def _run_persistent_analysis_session(self, session_id, progress_callback):
+
+        started = time.perf_counter()
+        self.__class__._active_session_id = session_id
+        self.db.reset_stale_analysis_items(session_id)
+        self.db.update_analysis_session(
+            session_id,
+            status=AnalysisSessionStatus.RUNNING,
+            started_at=TimeService.utc_now_iso(),
+            provider=self.vision.provider_key(),
+            model=self.vision.model_name(),
+            cancel_reason=""
+        )
+
+        processed = 0
+
+        try:
+            while not self._bulk_cancel.is_set():
+
+                self.jobs.wait_if_paused()
+                batch = self.db.next_analysis_queue_batch(
+                    session_id,
+                    self._batch_size()
+                )
+
+                if not batch:
+                    break
+
+                for item in batch:
+
+                    if self._bulk_cancel.is_set():
+                        break
+
+                    self.jobs.wait_if_paused()
+                    processed += 1
+                    self._run_queue_item(session_id, item)
+
+                    if processed % 5 == 0:
+                        self._report_persistent_progress(
+                            session_id,
+                            progress_callback
+                        )
+
+                self._report_persistent_progress(
+                    session_id,
+                    progress_callback
+                )
+
+                pause = self._pause_between_batches()
+                if pause:
+                    time.sleep(pause)
+
+            if self._bulk_cancel.is_set():
+                self.db.cancel_analysis_session(
+                    session_id,
+                    "Canceled by user"
+                )
+            else:
+                self._finish_session(session_id, started)
+
+            self._report_persistent_progress(
+                session_id,
+                progress_callback
+            )
+
+            return self._bulk_result_from_session(
+                self.db.analysis_session_summary(session_id)
+            )
+
+        finally:
+            if self._active_session_id == session_id:
+                self.__class__._active_session_id = None
+
+    ############################################################
+
+    def _run_queue_item(self, session_id, item):
+
+        queue_id = item["queue_id"]
+        media_id = item["media_id"]
+        path = item["path"]
+        filename = item["filename"]
+        force = bool(item.get("force"))
+        started = time.perf_counter()
+
+        self.db.mark_analysis_queue_analyzing(queue_id)
+        self.db.update_analysis_session(
+            session_id,
+            current_media_id=media_id,
+            current_filename=filename
+        )
+
+        try:
+            cached = self.get_analysis(media_id)
+
+            if self.is_mock_provider() and self._is_non_mock_success(cached):
+                self.db.mark_analysis_queue_skipped(
+                    queue_id,
+                    "Existing real analysis preserved while mock provider is active"
+                )
+                return
+
+            if not force and cached and not cached.get("failure_reason"):
+                self.db.mark_analysis_queue_skipped(
+                    queue_id,
+                    "Existing successful analysis"
+                )
+                return
+
+            self._analyze_and_save(media_id, path)
+            self.db.mark_analysis_queue_completed(
+                queue_id,
+                duration=time.perf_counter() - started
+            )
+
+        except Exception as error:
+            duration = time.perf_counter() - started
+            category = self._failure_category(error)
+            self.db.mark_analysis_queue_failed(
+                queue_id,
+                category,
+                str(error),
+                duration=duration
+            )
+            logger.error(
+                "Persistent analysis item failed session_id=%s media_id=%s category=%s",
+                session_id,
+                media_id,
+                category,
+                exc_info=(
+                    type(error),
+                    error,
+                    error.__traceback__
+                )
+            )
+
+        finally:
+            self.db.refresh_analysis_session_counts(session_id)
+
+    ############################################################
+
+    def _finish_session(self, session_id, started_perf):
+
+        summary = self.db.analysis_session_summary(session_id)
+        failed = summary.get("failed_count", 0)
+        queued = summary.get("queued_count", 0)
+        status = AnalysisSessionStatus.COMPLETED
+
+        if failed and not (
+            summary.get("completed_count", 0) or
+            summary.get("skipped_count", 0)
+        ):
+            status = AnalysisSessionStatus.FAILED
+
+        if queued:
+            status = AnalysisSessionStatus.QUEUED
+
+        elapsed = time.perf_counter() - started_perf
+        done = (
+            summary.get("completed_count", 0) +
+            summary.get("failed_count", 0) +
+            summary.get("skipped_count", 0)
+        )
+        average = elapsed / done if done else 0
+        throughput = (done / elapsed) * 3600 if elapsed else 0
+
+        self.db.update_analysis_session(
+            session_id,
+            status=status,
+            finished_at=TimeService.utc_now_iso(),
+            elapsed_seconds=elapsed,
+            average_seconds_per_item=average,
+            throughput_per_hour=throughput,
+            estimated_remaining_seconds=0,
+            current_media_id=None,
+            current_filename=""
+        )
+
+    ############################################################
+
+    def _report_persistent_progress(self, session_id, progress_callback):
+
+        if not progress_callback:
+            return
+
+        summary = self.db.analysis_session_summary(session_id)
+        self._update_session_timing(session_id, summary)
+        summary = self.db.analysis_session_summary(session_id)
+        progress = self.queue_progress()
+        progress.update(self._session_metrics(summary))
+        progress["status"] = "bulk running"
+        progress["bulk_total"] = progress.get("analysis_total", 0)
+        progress["bulk_processed"] = progress.get("analysis_processed", 0)
+        progress["bulk_analyzed"] = progress.get("analysis_completed", 0)
+        progress["bulk_skipped"] = progress.get("analysis_skipped", 0)
+        progress["bulk_failed"] = progress.get("analysis_failed", 0)
+
+        progress_callback(progress)
+
+    ############################################################
+
+    def _update_session_timing(self, session_id, summary):
+
+        started_at = summary.get("started_at")
+        total = summary.get("total_items", 0)
+        processed = (
+            summary.get("completed_count", 0) +
+            summary.get("failed_count", 0) +
+            summary.get("skipped_count", 0)
+        )
+
+        if not started_at or not processed:
+            return
+
+        elapsed = max(
+            0,
+            TimeService.elapsed_seconds_since_utc(started_at)
+        )
+        average = elapsed / processed if processed else 0
+        remaining = max(0, total - processed)
+        eta = remaining * average
+        throughput = (processed / elapsed) * 3600 if elapsed else 0
+        self.db.update_analysis_session(
+            session_id,
+            elapsed_seconds=elapsed,
+            average_seconds_per_item=average,
+            throughput_per_hour=throughput,
+            estimated_remaining_seconds=eta
+        )
+
+    ############################################################
+
+    def _session_metrics(self, session):
+
+        if not session:
+            return {
+                "analysis_session": "None",
+                "analysis_status": "Idle",
+                "analysis_total": 0,
+                "analysis_completed": 0,
+                "analysis_failed": 0,
+                "analysis_skipped": 0,
+                "analysis_remaining": 0,
+                "analysis_current": "",
+                "analysis_speed": "0/hr",
+                "analysis_eta": "0s"
+            }
+
+        total = session.get("total_items", 0)
+        completed = session.get("completed_count", 0)
+        failed = session.get("failed_count", 0)
+        skipped = session.get("skipped_count", 0)
+        processed = completed + failed + skipped
+        remaining = max(0, total - processed)
+
+        return {
+            "analysis_session": session.get("session_id", ""),
+            "analysis_status": session.get("status", ""),
+            "analysis_total": total,
+            "analysis_processed": processed,
+            "analysis_completed": completed,
+            "analysis_failed": failed,
+            "analysis_skipped": skipped,
+            "analysis_remaining": remaining,
+            "analysis_current": session.get("current_filename", ""),
+            "analysis_provider": session.get("provider", ""),
+            "analysis_model": session.get("model", ""),
+            "analysis_speed": f"{session.get('throughput_per_hour', 0):.1f}/hr",
+            "analysis_eta": self._format_seconds(
+                session.get("estimated_remaining_seconds", 0)
+            )
+        }
+
+    ############################################################
+
+    def _bulk_result_from_session(self, session):
+
+        session = session or {}
+        completed = session.get("completed_count", 0)
+        failed = session.get("failed_count", 0)
+        skipped = session.get("skipped_count", 0)
+        processed = completed + failed + skipped
+
+        result = dict(session)
+        result.update({
+            "total": session.get("total_items", 0),
+            "processed": processed,
+            "analyzed": completed,
+            "skipped": skipped,
+            "failed": failed,
+            "canceled": (
+                session.get("status") == AnalysisSessionStatus.CANCELED
+            )
+        })
+
+        return result
+
+    ############################################################
+
+    def _failure_category(self, error):
+
+        text = str(error).lower()
+        name = type(error).__name__.lower()
+
+        if "timeout" in text or "timeout" in name or "timed out" in text:
+            return AnalysisFailureCategory.TIMEOUT
+
+        if "cuda" in text or "out of memory" in text or "memory" in text:
+            return AnalysisFailureCategory.OUT_OF_MEMORY
+
+        if "connection" in text or "refused" in text or "unreachable" in text:
+            return AnalysisFailureCategory.PROVIDER_UNAVAILABLE
+
+        if "unsupported" in text or "format" in text:
+            return AnalysisFailureCategory.UNSUPPORTED_FORMAT
+
+        if "corrupt" in text or "truncated" in text:
+            return AnalysisFailureCategory.CORRUPT_MEDIA
+
+        if "image" in text and "invalid" in text:
+            return AnalysisFailureCategory.INVALID_IMAGE
+
+        return AnalysisFailureCategory.UNEXPECTED
+
+    ############################################################
+
+    def _batch_size(self):
+
+        return max(
+            1,
+            int(self.config.get("batch_size", self.BULK_BATCH_SIZE))
+        )
+
+    ############################################################
+
+    def _pause_between_batches(self):
+
+        return float(self.config.get("pause_between_batches", 0) or 0)
+
+    ############################################################
+
+    def _format_seconds(self, seconds):
+
+        seconds = int(seconds or 0)
+
+        if seconds < 60:
+            return f"{seconds}s"
+
+        minutes = seconds // 60
+
+        if minutes < 60:
+            return f"{minutes}m"
+
+        hours = minutes // 60
+        minutes = minutes % 60
+
+        return f"{hours}h {minutes}m"
+
+    ############################################################
+
+    def resume_previous_analysis(self, session_id=None, progress_callback=None):
+
+        session = (
+            self.db.analysis_session_summary(session_id)
+            if session_id
+            else self.db.latest_incomplete_analysis_session()
+        )
+
+        if not session:
+            future = Future()
+            future.set_result({
+                "resumed": False,
+                "reason": "No incomplete analysis session found"
+            })
+            return BulkAnalysisHandle(future, 0)
+
+        self._bulk_cancel.clear()
+        self.db.reset_stale_analysis_items(session["session_id"])
+        future = self.jobs.submit(
+            self._run_persistent_analysis_session,
+            session["session_id"],
+            progress_callback
+        )
+
+        return BulkAnalysisHandle(
+            future,
+            session.get("total_items", 0)
+        )
+
+    ############################################################
+
+    def retry_failed_analysis(self, session_id=None, progress_callback=None):
+
+        retry_count = self.db.retry_failed_analysis_items(session_id)
+
+        if not session_id:
+            session = self.db.analysis_session_summary()
+            session_id = session.get("session_id") if session else None
+
+        if not session_id:
+            future = Future()
+            future.set_result({
+                "retry_count": retry_count,
+                "reason": "No analysis session found"
+            })
+            return BulkAnalysisHandle(future, retry_count)
+
+        self._bulk_cancel.clear()
+        future = self.jobs.submit(
+            self._run_persistent_analysis_session,
+            session_id,
+            progress_callback
+        )
+
+        return BulkAnalysisHandle(
+            future,
+            retry_count
+        )
+
+    ############################################################
+
     def _analyze_and_save(self, media_id, image_path):
 
         started = time.perf_counter()
@@ -427,6 +1011,12 @@ class BrainService:
             analysis["provider"] = self.vision.provider_key()
             analysis["retry_count"] = retry_count
             analysis["failure_reason"] = ""
+
+            if analysis.get("parse_status") in (
+                "empty_response",
+                "invalid_response"
+            ):
+                raise VisionParseError(analysis)
 
             self.db.save_ai_analysis(
                 media_id,
@@ -445,6 +1035,7 @@ class BrainService:
         except Exception as error:
 
             duration = time.perf_counter() - started
+            parsed = getattr(error, "analysis", {}) or {}
 
             self.db.save_ai_failure(
                 media_id,
@@ -453,7 +1044,20 @@ class BrainService:
                     "provider": self.vision.provider_key(),
                     "retry_count": self.config.get("retry_attempts", 2),
                     "failure_reason": str(error),
-                    "model": self.vision.model_name()
+                    "model": self.vision.model_name(),
+                    "raw_response": parsed.get("raw_response"),
+                    "parse_status": parsed.get("parse_status"),
+                    "parse_warnings": parsed.get("parse_warnings"),
+                    "confidence": parsed.get("confidence"),
+                    "people": parsed.get("people"),
+                    "activities": parsed.get("activities"),
+                    "setting": parsed.get("setting"),
+                    "indoor_outdoor": parsed.get("indoor_outdoor"),
+                    "safety_concerns": parsed.get("safety_concerns"),
+                    "public_use_risks": parsed.get("public_use_risks"),
+                    "structured_field_completeness": parsed.get(
+                        "structured_field_completeness"
+                    )
                 }
             )
 

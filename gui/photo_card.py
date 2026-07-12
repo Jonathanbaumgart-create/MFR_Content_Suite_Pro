@@ -31,7 +31,8 @@ class PhotoCard(ctk.CTkFrame):
         filename,
         filepath,
         thumbnail_service=None,
-        selection_callback=None
+        selection_callback=None,
+        analysis_status=None
     ):
 
         super().__init__(
@@ -46,6 +47,7 @@ class PhotoCard(ctk.CTkFrame):
         self.filename = filename
         self.filepath = filepath
         self.media_id = media_id
+        self.analysis_status = analysis_status or "Not analyzed"
         self.selection_callback = selection_callback
         self.thumbnail_service = thumbnail_service
         self.image = None
@@ -82,7 +84,19 @@ class PhotoCard(ctk.CTkFrame):
 
         self.filename_label.pack(
             padx=5,
-            pady=(0, 8)
+            pady=(0, 4)
+        )
+
+        self.status_label = ctk.CTkLabel(
+            self,
+            text=self.analysis_status,
+            font=("Segoe UI", 10),
+            text_color=self.status_color()
+        )
+
+        self.status_label.pack(
+            padx=5,
+            pady=(0, 6)
         )
 
         self.selected = ctk.BooleanVar(value=False)
@@ -103,7 +117,8 @@ class PhotoCard(ctk.CTkFrame):
         for widget in (
             self,
             self.preview,
-            self.filename_label
+            self.filename_label,
+            self.status_label
         ):
 
             widget.bind(
@@ -140,6 +155,27 @@ class PhotoCard(ctk.CTkFrame):
             )
         except Exception:
             pass
+
+    ##########################################################
+
+    def status_color(self):
+
+        colors = {
+            "Analyzing": "#f6c453",
+            "Queued": "#9fb7ff",
+            "Analyzed": "#7bd88f",
+            "Real": "#7bd88f",
+            "Effective Intelligence": "#7bd88f",
+            "Human Corrected": "#c9a8ff",
+            "Failed": "#ff8a8a",
+            "Mock": "#ffcf7a",
+            "Not analyzed": "#a8a8a8"
+        }
+
+        return colors.get(
+            self.analysis_status,
+            "#a8a8a8"
+        )
 
     ##########################################################
 

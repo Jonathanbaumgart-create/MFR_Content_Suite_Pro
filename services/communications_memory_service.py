@@ -4,6 +4,7 @@ from collections import Counter
 from datetime import datetime
 
 from core.app_context import context
+from services.communication_history_service import CommunicationHistoryService
 from services.logging_service import LoggingService
 from services.time_service import TimeService
 
@@ -30,6 +31,9 @@ class CommunicationsMemoryService:
     def __init__(self, database=None):
 
         self.db = database or context.database
+        self.history = CommunicationHistoryService(
+            database=self.db
+        )
 
     ############################################################
 
@@ -273,10 +277,18 @@ class CommunicationsMemoryService:
     def statistics(self):
 
         summary = self.db.communication_memory_summary()
+        engine = self.history.memory_statistics()
         patterns = self.db.writing_pattern_statistics()
 
         return {
             **summary,
+            "engine": engine,
+            "communication_records": engine.get("records", 0),
+            "communication_deliveries": engine.get("deliveries", 0),
+            "communication_campaigns": engine.get("campaigns", 0),
+            "communication_programs": engine.get("programs", 0),
+            "communication_topics": engine.get("topics", 0),
+            "communication_import_runs": engine.get("import_runs", 0),
             "writing_statistics": patterns,
             "posting_frequency": self.posting_frequency(),
             "platform_preferences": summary["platform_counts"]
@@ -340,6 +352,25 @@ class CommunicationsMemoryService:
 
     def search(self, query, limit=50):
 
+        if self.db.communication_memory_engine_summary().get("records", 0):
+            return [
+                post
+                for post in self.history.memory_posts(limit=limit)
+                if (
+                    not query or
+                    query.lower() in " ".join(
+                        str(post.get(key, ""))
+                        for key in (
+                            "caption",
+                            "headline",
+                            "campaign",
+                            "opportunity_type",
+                            "context"
+                        )
+                    ).lower()
+                )
+            ][:limit]
+
         return self.db.social_posts(
             limit=limit,
             search_text=query
@@ -357,7 +388,10 @@ class CommunicationsMemoryService:
 
     def posting_frequency(self):
 
-        posts = self.db.social_posts(limit=1000)
+        if self.db.communication_memory_engine_summary().get("records", 0):
+            posts = self.history.memory_posts(limit=1000)
+        else:
+            posts = self.db.social_posts(limit=1000)
         counts = Counter(
             post.get("post_date", "")[:7]
             for post in posts

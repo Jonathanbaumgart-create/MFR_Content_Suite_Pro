@@ -36,41 +36,32 @@ class OllamaVisionProvider(VisionProvider):
         model = self.model_name()
 
         prompt = """
-You are the AI assistant for Morden Fire & Rescue.
+Describe only what is visibly present in this image.
 
-Analyze this image.
+Return JSON only. No markdown. No prose before or after JSON.
+Do not invent identities, ranks, locations, department names, incident types,
+or apparatus types unless visible evidence supports them. Use "unknown" when
+unclear. Use empty lists instead of guesses.
 
-Return ONLY valid JSON.
-
-Do not wrap the JSON in markdown.
-
-Return this exact structure:
-
+Schema:
 {
-  "description":"",
-  "scene_type":"",
-  "activity":"",
-  "people_count":0,
-  "apparatus":[],
-  "equipment":[],
-  "keywords":[],
-  "community_score":0,
-  "recruitment_score":0,
-  "education_score":0,
-  "technical_score":0,
-  "overall_score":0,
-  "facebook_caption":"",
-  "instagram_caption":"",
-  "model":"%s"
+  "description": "Clear factual description of visible content.",
+  "people_count": 0,
+  "people": [],
+  "apparatus": [],
+  "equipment": [],
+  "activities": [],
+  "setting": "",
+  "indoor_outdoor": "unknown",
+  "training": false,
+  "incident_scene": false,
+  "public_education": false,
+  "community_event": false,
+  "safety_concerns": [],
+  "public_use_risks": [],
+  "confidence": 0.0,
+  "model": "%s"
 }
-
-Rules:
-
-- Be factual.
-- Do not invent information.
-- Estimate scores from 0-100.
-- Apparatus, equipment and keywords MUST be arrays.
-- Return JSON only.
 """ % model
 
         response = requests.post(

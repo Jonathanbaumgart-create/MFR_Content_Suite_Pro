@@ -15,6 +15,9 @@ AI_CONFIG = {
     "default_provider": AI_PROVIDER,
     "retry_attempts": 2,
     "retry_delay_seconds": 2,
+    "batch_size": 200,
+    "worker_count": 1,
+    "pause_between_batches": 0,
     "diagnostics": {
         "text_model": "llama3.1:8b"
     },

@@ -3,6 +3,16 @@ from pathlib import Path
 import json
 import re
 
+from database.analysis_queue_repository import AnalysisQueueRepository
+from database.analysis_queue_schema import (
+    analysis_queue_indexes,
+    create_analysis_queue_tables
+)
+from database.communication_repository import CommunicationRepository
+from database.communication_schema import (
+    communication_indexes,
+    create_communication_tables
+)
 from services.logging_service import LoggingService
 from services.time_service import TimeService
 
@@ -17,6 +27,8 @@ class DatabaseManager:
         Path("database").mkdir(exist_ok=True)
 
         self.db = Path("database") / "mfr_content.db"
+        self._analysis_queue_repo = None
+        self._communication_repo = None
 
         self.initialize()
 
@@ -129,6 +141,28 @@ class DatabaseManager:
             analyzed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
             model TEXT
+
+        )
+
+        """)
+
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS ai_analysis_history(
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            media_id INTEGER,
+
+            provider TEXT,
+
+            model TEXT,
+
+            failure_reason TEXT,
+
+            analysis_json TEXT,
+
+            saved_at TEXT
 
         )
 
@@ -850,6 +884,9 @@ class DatabaseManager:
 
         """)
 
+        create_analysis_queue_tables(cur)
+        create_communication_tables(cur)
+
         ########################################################
         # Content Templates
         ########################################################
@@ -1305,6 +1342,7 @@ class DatabaseManager:
     def get_media_page(self, limit, offset=0):
 
         conn = self.connection()
+        conn.row_factory = sqlite3.Row
 
         cur = conn.cursor()
 
@@ -1312,17 +1350,55 @@ class DatabaseManager:
 
         SELECT
 
-            id,
+            media.id,
 
-            filename,
+            media.filename,
 
-            path,
+            media.path,
 
-            media_type
+            media.media_type,
+
+            ai_analysis.provider,
+
+            ai_analysis.model,
+
+            ai_analysis.failure_reason,
+
+            media_intelligence.media_id AS intelligence_media_id,
+
+            media_corrections.id AS correction_id,
+
+            latest_queue.state AS queue_state
 
         FROM media
 
-        ORDER BY filename
+        LEFT JOIN ai_analysis
+        ON ai_analysis.media_id=media.id
+
+        LEFT JOIN media_intelligence
+        ON media_intelligence.media_id=media.id
+
+        LEFT JOIN (
+            SELECT media_id, MIN(id) AS id
+            FROM media_corrections
+            WHERE active=1
+            GROUP BY media_id
+        ) media_corrections
+        ON media_corrections.media_id=media.id
+
+        LEFT JOIN (
+            SELECT q1.media_id, q1.state
+            FROM analysis_queue q1
+            INNER JOIN (
+                SELECT media_id, MAX(queue_id) AS queue_id
+                FROM analysis_queue
+                GROUP BY media_id
+            ) latest
+            ON latest.queue_id=q1.queue_id
+        ) latest_queue
+        ON latest_queue.media_id=media.id
+
+        ORDER BY media.filename
 
         LIMIT ? OFFSET ?
 
@@ -1336,11 +1412,56 @@ class DatabaseManager:
 
         ))
 
-        rows = cur.fetchall()
+        rows = [
+            (
+                row["id"],
+                row["filename"],
+                row["path"],
+                row["media_type"],
+                self._media_analysis_status_from_row(row)
+            )
+            for row in cur.fetchall()
+        ]
 
         conn.close()
 
         return rows
+
+    ############################################################
+
+    def _media_analysis_status_from_row(self, row):
+
+        queue_state = row["queue_state"] or ""
+
+        if queue_state in (
+            "Waiting",
+            "Queued",
+            "Retry Pending"
+        ):
+            return "Queued"
+
+        if queue_state == "Analyzing":
+            return "Analyzing"
+
+        if row["failure_reason"]:
+            return "Failed"
+
+        provider = row["provider"] or ""
+        model = row["model"] or ""
+
+        if provider == "mock" or model.startswith("mock"):
+            return "Mock"
+
+        if provider:
+            if row["correction_id"]:
+                return "Human Corrected"
+
+            if row["intelligence_media_id"]:
+                return "Effective Intelligence"
+
+            return "Real"
+
+        return "Not analyzed"
 
     ############################################################
 
@@ -1845,6 +1966,13 @@ class DatabaseManager:
 
         now = TimeService.utc_now_iso()
 
+        self._save_ai_analysis_history(
+            cur,
+            media_id,
+            analysis,
+            now
+        )
+
         cur.execute("""
 
         INSERT OR REPLACE INTO ai_analysis(
@@ -1891,11 +2019,33 @@ class DatabaseManager:
 
             failure_reason,
 
-            last_analyzed
+            last_analyzed,
+
+            raw_response,
+
+            parse_status,
+
+            parse_warnings,
+
+            confidence,
+
+            people,
+
+            activities,
+
+            setting,
+
+            indoor_outdoor,
+
+            safety_concerns,
+
+            public_use_risks,
+
+            structured_field_completeness
 
         )
 
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 
         """,
 
@@ -1943,7 +2093,29 @@ class DatabaseManager:
 
             analysis.get("failure_reason"),
 
-            now
+            now,
+
+            analysis.get("raw_response"),
+
+            analysis.get("parse_status"),
+
+            self._to_json(analysis.get("parse_warnings")),
+
+            self._to_float(analysis.get("confidence")),
+
+            self._to_json(analysis.get("people")),
+
+            self._to_json(analysis.get("activities")),
+
+            analysis.get("setting"),
+
+            analysis.get("indoor_outdoor"),
+
+            self._to_json(analysis.get("safety_concerns")),
+
+            self._to_json(analysis.get("public_use_risks")),
+
+            self._to_float(analysis.get("structured_field_completeness"))
 
         ))
 
@@ -1953,11 +2125,84 @@ class DatabaseManager:
 
     ############################################################
 
+    def _save_ai_analysis_history(self, cur, media_id, analysis, saved_at):
+
+        cur.execute("""
+
+        INSERT INTO ai_analysis_history(
+
+            media_id,
+
+            provider,
+
+            model,
+
+            failure_reason,
+
+            analysis_json,
+
+            saved_at
+
+        )
+
+        VALUES(?,?,?,?,?,?)
+
+        """,
+
+        (
+
+            media_id,
+
+            analysis.get("provider"),
+
+            analysis.get("model"),
+
+            analysis.get("failure_reason"),
+
+            self._to_json(analysis),
+
+            saved_at
+
+        ))
+
+    ############################################################
+
     def save_ai_failure(self, media_id, failure):
 
         existing = self.get_ai_analysis(media_id)
 
         if existing and not existing.get("failure_reason"):
+            now = TimeService.utc_now_iso()
+            conn = self.connection()
+            cur = conn.cursor()
+            self._save_ai_analysis_history(
+                cur,
+                media_id,
+                {
+                    "description": "",
+                    "provider": failure.get("provider"),
+                    "model": failure.get("model"),
+                    "failure_reason": failure.get("failure_reason"),
+                    "analysis_duration": failure.get("analysis_duration"),
+                    "retry_count": failure.get("retry_count"),
+                    "raw_response": failure.get("raw_response"),
+                    "parse_status": failure.get("parse_status"),
+                    "parse_warnings": failure.get("parse_warnings"),
+                    "confidence": failure.get("confidence"),
+                    "people": failure.get("people"),
+                    "activities": failure.get("activities"),
+                    "setting": failure.get("setting"),
+                    "indoor_outdoor": failure.get("indoor_outdoor"),
+                    "safety_concerns": failure.get("safety_concerns"),
+                    "public_use_risks": failure.get("public_use_risks"),
+                    "structured_field_completeness": failure.get(
+                        "structured_field_completeness"
+                    )
+                },
+                now
+            )
+            conn.commit()
+            conn.close()
             logger.error(
                 "AI failure preserved existing analysis media_id=%s provider=%s reason=%s",
                 media_id,
@@ -1989,6 +2234,22 @@ class DatabaseManager:
         analysis["retry_count"] = failure.get("retry_count")
         analysis["failure_reason"] = failure.get("failure_reason")
         analysis["model"] = failure.get("model")
+
+        for key in (
+            "raw_response",
+            "parse_status",
+            "parse_warnings",
+            "confidence",
+            "people",
+            "activities",
+            "setting",
+            "indoor_outdoor",
+            "safety_concerns",
+            "public_use_risks",
+            "structured_field_completeness"
+        ):
+            if key in failure:
+                analysis[key] = failure.get(key)
 
         self.save_ai_analysis(
             media_id,
@@ -6216,6 +6477,261 @@ class DatabaseManager:
 
     ############################################################
 
+    def _analysis_queue_repository(self):
+
+        if self._analysis_queue_repo is None:
+            self._analysis_queue_repo = AnalysisQueueRepository(self)
+
+        return self._analysis_queue_repo
+
+    ############################################################
+
+    def create_analysis_session(
+        self,
+        scope,
+        provider,
+        model,
+        total_items=0,
+        settings=None
+    ):
+
+        return self._analysis_queue_repository().create_session(
+            scope,
+            provider,
+            model,
+            total_items,
+            settings
+        )
+
+    def enqueue_analysis_items(
+        self,
+        session_id,
+        media_items,
+        provider,
+        model,
+        force=False
+    ):
+
+        return self._analysis_queue_repository().enqueue_items(
+            session_id,
+            media_items,
+            provider,
+            model,
+            force=force
+        )
+
+    def next_analysis_queue_batch(self, session_id, limit):
+
+        return self._analysis_queue_repository().next_batch(session_id, limit)
+
+    def mark_analysis_queue_analyzing(self, queue_id):
+
+        return self._analysis_queue_repository().mark_analyzing(queue_id)
+
+    def mark_analysis_queue_completed(
+        self,
+        queue_id,
+        duration=0,
+        provider_latency=0,
+        db_write_duration=0
+    ):
+
+        return self._analysis_queue_repository().mark_completed(
+            queue_id,
+            duration=duration,
+            provider_latency=provider_latency,
+            db_write_duration=db_write_duration
+        )
+
+    def mark_analysis_queue_skipped(self, queue_id, reason):
+
+        return self._analysis_queue_repository().mark_skipped(queue_id, reason)
+
+    def mark_analysis_queue_failed(
+        self,
+        queue_id,
+        category,
+        reason,
+        duration=0
+    ):
+
+        return self._analysis_queue_repository().mark_failed(
+            queue_id,
+            category,
+            reason,
+            duration=duration
+        )
+
+    def retry_failed_analysis_items(self, session_id=None):
+
+        return self._analysis_queue_repository().retry_failed(session_id)
+
+    def cancel_analysis_session(self, session_id, reason="Canceled by user"):
+
+        return self._analysis_queue_repository().cancel_session(
+            session_id,
+            reason
+        )
+
+    def reset_stale_analysis_items(self, session_id=None):
+
+        return self._analysis_queue_repository().reset_stale_analyzing(
+            session_id
+        )
+
+    def update_analysis_session(self, session_id, **fields):
+
+        return self._analysis_queue_repository().update_session(
+            session_id,
+            **fields
+        )
+
+    def refresh_analysis_session_counts(self, session_id):
+
+        return self._analysis_queue_repository().refresh_session_counts(
+            session_id
+        )
+
+    def analysis_session_summary(self, session_id=None):
+
+        return self._analysis_queue_repository().session_summary(session_id)
+
+    def incomplete_analysis_sessions(self):
+
+        return self._analysis_queue_repository().incomplete_sessions()
+
+    def latest_incomplete_analysis_session(self):
+
+        return self._analysis_queue_repository().latest_incomplete_session()
+
+    def analysis_queue_counts(self, session_id=None):
+
+        return self._analysis_queue_repository().queue_counts(session_id)
+
+    def media_analysis_statuses(self, media_ids):
+
+        return self._analysis_queue_repository().media_statuses(media_ids)
+
+    ############################################################
+
+    def _communication_repository(self):
+
+        if self._communication_repo is None:
+            self._communication_repo = CommunicationRepository(self)
+
+        return self._communication_repo
+
+    ############################################################
+
+    def save_communication_record(self, record):
+
+        return self._communication_repository().save_communication_record(record)
+
+    def save_communication_delivery(self, delivery):
+
+        return self._communication_repository().save_communication_delivery(delivery)
+
+    def save_communication_intelligence(self, intelligence):
+
+        return self._communication_repository().save_communication_intelligence(intelligence)
+
+    def save_communication_correction(self, correction):
+
+        return self._communication_repository().save_communication_correction(correction)
+
+    def clear_communication_correction(self, communication_id, field_name):
+
+        return self._communication_repository().clear_communication_correction(
+            communication_id,
+            field_name
+        )
+
+    def save_communication_campaign(self, campaign):
+
+        return self._communication_repository().save_communication_campaign(campaign)
+
+    def save_communication_program(self, program):
+
+        return self._communication_repository().save_communication_program(program)
+
+    def link_communication_campaign(self, communication_id, campaign_id, evidence="", confidence=0):
+
+        return self._communication_repository().link_communication_campaign(
+            communication_id,
+            campaign_id,
+            evidence,
+            confidence
+        )
+
+    def link_communication_program(self, communication_id, program_id, evidence="", confidence=0):
+
+        return self._communication_repository().link_communication_program(
+            communication_id,
+            program_id,
+            evidence,
+            confidence
+        )
+
+    def link_communication_topic(self, communication_id, topic, evidence="", confidence=0):
+
+        return self._communication_repository().link_communication_topic(
+            communication_id,
+            topic,
+            evidence,
+            confidence
+        )
+
+    def save_communication_outcome(self, outcome):
+
+        return self._communication_repository().save_communication_outcome(outcome)
+
+    def save_communication_import_run(self, summary):
+
+        return self._communication_repository().save_communication_import_run(summary)
+
+    def communication_records(self, limit=100, search_text=""):
+
+        return self._communication_repository().communication_records(limit, search_text)
+
+    def communication_deliveries(self, communication_id=None, limit=100):
+
+        return self._communication_repository().communication_deliveries(
+            communication_id,
+            limit
+        )
+
+    def communication_campaigns(self, limit=100):
+
+        return self._communication_repository().communication_campaigns(limit)
+
+    def communication_programs(self, limit=100):
+
+        return self._communication_repository().communication_programs(limit)
+
+    def communication_import_runs(self, limit=20):
+
+        return self._communication_repository().communication_import_runs(limit)
+
+    def effective_communication_intelligence(self, communication_id):
+
+        return self._communication_repository().effective_communication_intelligence(
+            communication_id
+        )
+
+    def effective_communication_memory(self, limit=500):
+
+        return self._communication_repository().effective_communication_memory(limit)
+
+    def communication_memory_topic_summary(self, limit=50):
+
+        return self._communication_repository().communication_memory_topic_summary(limit)
+
+    def communication_memory_engine_summary(self):
+
+        return self._communication_repository().communication_memory_engine_summary()
+
+    ############################################################
+
     def content_templates(self, writing_style=None, platform=None):
 
         conn = self.connection()
@@ -6795,7 +7311,20 @@ class DatabaseManager:
             "provider": row["provider"] or "",
             "retry_count": row["retry_count"] or 0,
             "failure_reason": row["failure_reason"] or "",
-            "last_analyzed": row["last_analyzed"] or ""
+            "last_analyzed": row["last_analyzed"] or "",
+            "raw_response": row["raw_response"] or "",
+            "parse_status": row["parse_status"] or "",
+            "parse_warnings": self._from_json(row["parse_warnings"]),
+            "confidence": row["confidence"] or 0,
+            "people": self._from_json(row["people"]),
+            "activities": self._from_json(row["activities"]),
+            "setting": row["setting"] or "",
+            "indoor_outdoor": row["indoor_outdoor"] or "",
+            "safety_concerns": self._from_json(row["safety_concerns"]),
+            "public_use_risks": self._from_json(row["public_use_risks"]),
+            "structured_field_completeness": (
+                row["structured_field_completeness"] or 0
+            )
         }
 
     ############################################################
@@ -7207,7 +7736,18 @@ class DatabaseManager:
             "provider": "TEXT",
             "retry_count": "INTEGER DEFAULT 0",
             "failure_reason": "TEXT",
-            "last_analyzed": "TIMESTAMP"
+            "last_analyzed": "TIMESTAMP",
+            "raw_response": "TEXT",
+            "parse_status": "TEXT",
+            "parse_warnings": "TEXT",
+            "confidence": "REAL DEFAULT 0",
+            "people": "TEXT",
+            "activities": "TEXT",
+            "setting": "TEXT",
+            "indoor_outdoor": "TEXT",
+            "safety_concerns": "TEXT",
+            "public_use_risks": "TEXT",
+            "structured_field_completeness": "REAL DEFAULT 0"
         }
 
         for name, definition in additions.items():
@@ -7367,6 +7907,9 @@ class DatabaseManager:
             "CREATE INDEX IF NOT EXISTS idx_ai_model ON ai_analysis(model)",
             "CREATE INDEX IF NOT EXISTS idx_ai_provider ON ai_analysis(provider)",
             "CREATE INDEX IF NOT EXISTS idx_ai_last_analyzed ON ai_analysis(last_analyzed)",
+            "CREATE INDEX IF NOT EXISTS idx_ai_history_media ON ai_analysis_history(media_id)",
+            "CREATE INDEX IF NOT EXISTS idx_ai_history_saved ON ai_analysis_history(saved_at)",
+            "CREATE INDEX IF NOT EXISTS idx_ai_history_provider ON ai_analysis_history(provider)",
             "CREATE INDEX IF NOT EXISTS idx_intelligence_media ON media_intelligence(media_id)",
             "CREATE INDEX IF NOT EXISTS idx_intelligence_scene ON media_intelligence(normalized_scene)",
             "CREATE INDEX IF NOT EXISTS idx_intelligence_incident ON media_intelligence(incident_type)",
@@ -7436,8 +7979,8 @@ class DatabaseManager:
             "CREATE INDEX IF NOT EXISTS idx_media_usage_used_at ON media_usage(used_at)",
             "CREATE INDEX IF NOT EXISTS idx_writing_patterns_post ON writing_patterns(post_id)",
             "CREATE INDEX IF NOT EXISTS idx_hashtags_tag ON hashtags(tag)",
-            "CREATE INDEX IF NOT EXISTS idx_hashtags_use_count ON hashtags(use_count)"
-        )
+            "CREATE INDEX IF NOT EXISTS idx_hashtags_use_count ON hashtags(use_count)",
+        ) + analysis_queue_indexes() + communication_indexes()
 
         for statement in indexes:
             cur.execute(statement)

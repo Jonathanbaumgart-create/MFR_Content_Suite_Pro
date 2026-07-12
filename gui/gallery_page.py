@@ -158,7 +158,12 @@ class GalleryPage(ctk.CTkFrame):
 
             index, item = self.pending_cards.popleft()
 
-            media_id, filename, path, media_type = item
+            media_id, filename, path, media_type = item[:4]
+            analysis_status = (
+                item[4]
+                if len(item) > 4
+                else "Not analyzed"
+            )
 
             try:
 
@@ -168,7 +173,8 @@ class GalleryPage(ctk.CTkFrame):
                     filename,
                     path,
                     thumbnail_service=self.thumbnail_service,
-                    selection_callback=self.selection_changed
+                    selection_callback=self.selection_changed,
+                    analysis_status=analysis_status
                 )
 
                 row = index // 4

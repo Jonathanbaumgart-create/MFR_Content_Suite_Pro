@@ -93,10 +93,19 @@ class AIDashboardPage(ctk.CTkFrame):
             ("completed", "Completed"),
             ("failed", "Failed"),
             ("provider", "Provider"),
+            ("provider_model", "Vision Model"),
             ("average_analysis_time", "Avg Time"),
             ("total_analyzed", "Analyzed"),
             ("last_analyzed", "Last Analyzed"),
-            ("legacy_mock_analysis", "Legacy Mock")
+            ("legacy_mock_analysis", "Legacy Mock"),
+            ("analysis_status", "Session"),
+            ("analysis_completed", "Session Done"),
+            ("analysis_failed", "Session Failed"),
+            ("analysis_skipped", "Session Skipped"),
+            ("analysis_remaining", "Remaining"),
+            ("analysis_current", "Current Image"),
+            ("analysis_speed", "Avg Speed"),
+            ("analysis_eta", "ETA")
         )
 
         for index, (key, label) in enumerate(metrics):
@@ -157,6 +166,8 @@ class AIDashboardPage(ctk.CTkFrame):
         controls = (
             ("Pause Queue", self.pause_queue),
             ("Resume Queue", self.resume_queue),
+            ("Resume Previous", self.resume_previous),
+            ("Retry Failed", self.retry_failed),
             ("Cancel Queued Jobs", self.cancel_jobs),
             ("Clear Completed Jobs", self.clear_completed),
             ("Clear Legacy Mock Analysis", self.clear_mock_analysis)
@@ -659,6 +670,30 @@ class AIDashboardPage(ctk.CTkFrame):
 
         self.brain.resume_queue()
         self.refresh_metrics()
+
+    ##########################################################
+
+    def resume_previous(self):
+
+        handle = self.brain.resume_previous_analysis(
+            progress_callback=self.progress_update
+        )
+
+        self.status.configure(
+            text=f"Resume requested for {len(handle):,} queued items"
+        )
+
+    ##########################################################
+
+    def retry_failed(self):
+
+        handle = self.brain.retry_failed_analysis(
+            progress_callback=self.progress_update
+        )
+
+        self.status.configure(
+            text=f"Retry requested for {len(handle):,} failed items"
+        )
 
     ##########################################################
 
