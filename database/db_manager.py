@@ -4648,6 +4648,216 @@ class DatabaseManager:
 
     ############################################################
 
+    def communications_officer_metrics(self, since_utc=None):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        since = since_utc or "1970-01-01T00:00:00+00:00"
+
+        added_expr = self._media_added_timestamp_expr()
+
+        cur.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM media
+            WHERE datetime({added_expr}) >= datetime(?)
+            """,
+            (since,)
+        )
+        new_media = cur.fetchone()[0] or 0
+
+        cur.execute("""
+        SELECT COUNT(*)
+        FROM ai_analysis
+        WHERE datetime(REPLACE(REPLACE(last_analyzed, 'T', ' '), '+00:00', '')) >= datetime(?)
+        """, (since,))
+        analyzed_since = cur.fetchone()[0] or 0
+
+        cur.execute("""
+        SELECT COUNT(*)
+        FROM ai_analysis
+        WHERE provider!='mock'
+        AND (
+            review_status IS NULL
+            OR review_status=''
+            OR review_status IN ('review_required', 'reanalyze_requested')
+            OR trust_state='unreviewed_real'
+        )
+        """)
+        review_queue = cur.fetchone()[0] or 0
+
+        cur.execute("""
+        SELECT COUNT(*)
+        FROM ai_analysis
+        WHERE review_status='approved'
+        OR trust_state='approved_real'
+        """)
+        approved = cur.fetchone()[0] or 0
+
+        cur.execute("""
+        SELECT COUNT(*)
+        FROM ai_analysis
+        WHERE review_status='corrected'
+        OR trust_state='corrected_real'
+        """)
+        corrected = cur.fetchone()[0] or 0
+
+        cur.execute("""
+        SELECT COUNT(*)
+        FROM ai_analysis
+        WHERE failure_reason IS NOT NULL
+        AND failure_reason!=''
+        """)
+        failed = cur.fetchone()[0] or 0
+
+        cur.execute("""
+        SELECT COUNT(*)
+        FROM media
+        LEFT JOIN ai_analysis
+        ON ai_analysis.media_id=media.id
+        WHERE media.media_type='video'
+        AND ai_analysis.provider IS NOT NULL
+        AND ai_analysis.provider!='mock'
+        AND (
+            ai_analysis.review_status IS NULL
+            OR ai_analysis.review_status=''
+            OR ai_analysis.review_status IN ('review_required', 'reanalyze_requested')
+            OR ai_analysis.trust_state='unreviewed_real'
+        )
+        """)
+        videos_awaiting_review = cur.fetchone()[0] or 0
+
+        cur.execute("SELECT COUNT(*) FROM social_posts")
+        memory_posts = cur.fetchone()[0] or 0
+
+        cur.execute("""
+        SELECT MAX(post_date)
+        FROM social_posts
+        WHERE post_date IS NOT NULL
+        AND post_date!=''
+        """)
+        latest_post = cur.fetchone()[0] or ""
+
+        if not latest_post:
+            cur.execute("""
+            SELECT MAX(published_at)
+            FROM communication_deliveries
+            WHERE published_at IS NOT NULL
+            AND published_at!=''
+            """)
+            latest_post = cur.fetchone()[0] or ""
+
+        cur.execute("SELECT COUNT(*) FROM recommendation_history")
+        recommendation_history = cur.fetchone()[0] or 0
+
+        conn.close()
+
+        return {
+            "new_media_since": new_media,
+            "media_analyzed_since": analyzed_since,
+            "review_queue_size": review_queue,
+            "approved_media_count": approved,
+            "corrected_media_count": corrected,
+            "failed_analysis_count": failed,
+            "videos_awaiting_review": videos_awaiting_review,
+            "communications_memory_posts": memory_posts,
+            "communications_memory_latest_post": latest_post,
+            "recommendation_history_count": recommendation_history
+        }
+
+    ############################################################
+
+    def media_added_count_between(self, start_utc, end_utc):
+
+        conn = self.connection()
+        cur = conn.cursor()
+        added_expr = self._media_added_timestamp_expr()
+
+        cur.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM media
+            WHERE datetime({added_expr}) >= datetime(?)
+            AND datetime({added_expr}) < datetime(?)
+            """,
+            (
+                start_utc,
+                end_utc
+            )
+        )
+
+        count = cur.fetchone()[0] or 0
+        conn.close()
+
+        return count
+
+    ############################################################
+
+    def communications_officer_assets(self, media_ids, limit=25):
+
+        ids = [
+            self._to_int(media_id)
+            for media_id in media_ids[:int(limit or 25)]
+            if self._to_int(media_id)
+        ]
+
+        if not ids:
+            return []
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        placeholders = ",".join("?" for _ in ids)
+
+        cur.execute(f"""
+        SELECT
+            media.id AS result_media_id,
+            media.filename,
+            media.path,
+            media.media_type,
+            media_intelligence.*,
+            ai_analysis.trust_state,
+            ai_analysis.review_status,
+            ai_analysis.failure_reason,
+            ai_analysis.provider,
+            ai_analysis.model
+        FROM media
+        JOIN media_intelligence
+        ON media_intelligence.media_id=media.id
+        LEFT JOIN ai_analysis
+        ON ai_analysis.media_id=media.id
+        WHERE media.id IN ({placeholders})
+        """, tuple(ids))
+
+        rows = cur.fetchall()
+        conn.close()
+
+        by_id = {}
+
+        for row in rows:
+            asset = self._intelligence_from_row(row)
+            asset.update({
+                "media_id": row["result_media_id"],
+                "filename": row["filename"] or "",
+                "path": row["path"] or "",
+                "media_type": row["media_type"] or "",
+                "trust_state": row["trust_state"] or "",
+                "review_status": row["review_status"] or "",
+                "failure_reason": row["failure_reason"] or "",
+                "provider": row["provider"] or "",
+                "model": row["model"] or ""
+            })
+            by_id[asset["media_id"]] = asset
+
+        return [
+            by_id[media_id]
+            for media_id in ids
+            if media_id in by_id
+        ]
+
+    ############################################################
+
     def save_recommendation_history(self, recommendation):
 
         conn = self.connection()

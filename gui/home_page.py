@@ -1,7 +1,7 @@
 import customtkinter as ctk
 
 from core.app_context import context
-from services.daily_brief_service import DailyBriefService
+from services.communications_officer_service import CommunicationsOfficerService
 from services.logging_service import LoggingService
 from services.time_service import TimeService
 
@@ -15,7 +15,7 @@ class HomePage(ctk.CTkFrame):
 
         super().__init__(parent)
 
-        self.service = DailyBriefService()
+        self.service = CommunicationsOfficerService()
         self.future = None
         self.brief = None
         self._refresh_after_id = None
@@ -27,7 +27,7 @@ class HomePage(ctk.CTkFrame):
             self.refresh_brief
         )
 
-        logger.info("Daily Brief viewed from Home page")
+        logger.info("Communications Officer Morning Brief viewed from Home page")
 
     ##########################################################
 
@@ -108,7 +108,7 @@ class HomePage(ctk.CTkFrame):
 
         self._refresh_after_id = None
         self.status.configure(
-            text="Preparing today's communications brief..."
+            text="Preparing today's communication priorities..."
         )
         self.render_loading()
 
@@ -116,7 +116,7 @@ class HomePage(ctk.CTkFrame):
             self.service.generate
         )
 
-        logger.info("Daily Brief refresh queued")
+        logger.info("Communications Officer Morning Brief refresh queued")
         self.after(150, self.check_brief_future)
 
     ##########################################################
@@ -138,7 +138,7 @@ class HomePage(ctk.CTkFrame):
 
         except Exception as ex:
             logger.error(
-                "Daily Brief refresh failed",
+                "Communications Officer Morning Brief refresh failed",
                 exc_info=(
                     type(ex),
                     ex,
@@ -146,7 +146,7 @@ class HomePage(ctk.CTkFrame):
                 )
             )
             self.status.configure(
-                text=f"Daily Brief error: {ex}"
+                text=f"Morning Brief error: {ex}"
             )
             self.render_error(str(ex))
             return
@@ -211,19 +211,200 @@ class HomePage(ctk.CTkFrame):
             return
 
         self.add_section(
-            self.brief.get("title", "Daily Communications Brief"),
+            self.brief.get("title", "AI Communications Officer Morning Brief"),
             [
-                self.brief.get("greeting", ""),
-                self.brief.get("current_date", "")
+                self.brief.get("current_date", ""),
+                "Why today matters: " + self.brief.get("why_today_matters", ""),
+                (
+                    "Confidence: "
+                    f"{self.brief.get('confidence', 0)}%"
+                )
             ]
         )
-        self.render_context()
-        self.render_editorial_recommendations()
-        self.render_top_recommendation()
-        self.render_additional_opportunities()
-        self.render_library_health()
-        self.render_learning()
-        self.render_gaps()
+        self.render_communication_priorities()
+        self.render_top_story()
+        self.render_secondary_stories()
+        self.render_review_queue()
+        self.render_new_media()
+        self.render_videos_awaiting_review()
+        self.render_memory_status()
+
+    ##########################################################
+
+    def render_communication_priorities(self):
+
+        opportunities = self.brief.get(
+            "top_three_communication_opportunities",
+            []
+        )
+        lines = []
+
+        for index, item in enumerate(opportunities, start=1):
+            lines.append(
+                (
+                    f"{index}. {item.get('title', '')} - "
+                    f"{item.get('confidence', 0)}% confidence - "
+                    f"{item.get('why_today_matters', '')}"
+                )
+            )
+
+        if not lines:
+            lines.append("No reviewed communication priority is ready yet.")
+
+        self.add_section(
+            "Today's Communication Priorities",
+            lines
+        )
+
+    ##########################################################
+
+    def render_top_story(self):
+
+        story = self.brief.get("top_story", {})
+        package = story.get("media_package", {})
+        best_photo = package.get("best_photo", {})
+        best_video = package.get("best_video", {})
+        lines = [
+            story.get("summary", ""),
+            "Why today: " + story.get("why_today_matters", ""),
+            "Why the public would care: " + story.get("why_public_would_care", ""),
+            "Why it should outperform: " + story.get("why_it_should_outperform", ""),
+            "Platforms: " + self.format_list(story.get("recommended_platforms", [])),
+            "Estimated audience: " + self.format_list(story.get("estimated_audience", [])),
+            (
+                "Best photo: " +
+                (best_photo.get("filename") or "None")
+            ),
+            (
+                "Best video: " +
+                (best_video.get("filename") or "None")
+            ),
+            (
+                "Media package score: "
+                f"{package.get('communications_score', 0)}"
+            ),
+            (
+                "Positive factors: " +
+                self.format_list(story.get("positive_factors", []))
+            ),
+            (
+                "Limitations: " +
+                self.format_list(story.get("confidence_limitations", []))
+            )
+        ]
+
+        self.add_section(
+            "Top Story: " + story.get("title", ""),
+            lines
+        )
+
+    ##########################################################
+
+    def render_secondary_stories(self):
+
+        stories = self.brief.get("secondary_stories", [])
+        lines = []
+
+        for story in stories:
+            lines.append(
+                (
+                    f"{story.get('title', '')}: "
+                    f"{story.get('confidence', 0)}% confidence. "
+                    f"{story.get('why_it_should_outperform', '')}"
+                )
+            )
+
+        if not lines:
+            lines.append("No secondary reviewed stories are ready yet.")
+
+        self.add_section(
+            "Secondary Stories",
+            lines
+        )
+
+    ##########################################################
+
+    def render_review_queue(self):
+
+        summary = self.brief.get("summary", {})
+        lines = [
+            f"Review queue size: {summary.get('review_queue_size', 0):,}",
+            f"Approved media: {summary.get('approved_media_count', 0):,}",
+            f"Corrected media: {summary.get('corrected_media_count', 0):,}",
+            f"Failed analysis: {summary.get('failed_analysis_count', 0):,}",
+            (
+                "Analyzed since last session window: "
+                f"{summary.get('media_analyzed_since_last_session', 0):,}"
+            )
+        ]
+
+        self.add_section(
+            "Review Queue",
+            lines
+        )
+
+    ##########################################################
+
+    def render_new_media(self):
+
+        summary = self.brief.get("summary", {})
+        today = self.brief.get("todays_new_media", {})
+        lines = [
+            (
+                "New media added yesterday: "
+                f"{summary.get('new_media_added_yesterday', 0):,}"
+            ),
+            f"Added today: {today.get('added_today', 0):,}",
+            f"Photos added today: {today.get('photos', 0):,}",
+            f"Videos added today: {today.get('videos', 0):,}",
+            f"Unanalyzed new media: {today.get('unanalyzed', 0):,}"
+        ]
+
+        self.add_section(
+            "Today's New Media",
+            lines
+        )
+
+    ##########################################################
+
+    def render_videos_awaiting_review(self):
+
+        self.add_section(
+            "Videos Awaiting Review",
+            [
+                (
+                    "Videos awaiting human review: "
+                    f"{self.brief.get('videos_awaiting_review', 0):,}"
+                )
+            ]
+        )
+
+    ##########################################################
+
+    def render_memory_status(self):
+
+        memory = self.brief.get("communications_memory_status", {})
+        lines = [
+            "Status: " + memory.get("status", ""),
+            f"Stored posts: {memory.get('total_posts', 0):,}",
+            (
+                "Latest post: " +
+                (
+                    TimeService.format_local(memory.get("latest_post", ""))
+                    or memory.get("latest_post", "")
+                    or "Unknown"
+                )
+            ),
+            (
+                "Recommendation history: "
+                f"{memory.get('recommendation_history_count', 0):,}"
+            )
+        ]
+
+        self.add_section(
+            "Communications Memory Status",
+            lines
+        )
 
     ##########################################################
 
