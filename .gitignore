@@ -29,9 +29,14 @@ dist/
 
 # Logs
 *.log
+logs/
 logs/scan_report_*.json
-# User database
 
+# Local runtime folders
+imports/
+database/backups/
+
+# User database
 database/*.db
 database/*.sqlite
 database/*.sqlite3
