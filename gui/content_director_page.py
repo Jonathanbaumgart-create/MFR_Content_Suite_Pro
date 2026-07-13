@@ -928,14 +928,13 @@ class ContentDirectorPage(ctk.CTkFrame):
 
     def generate_package(self, opportunity):
 
-        return self.content_generation_service.generate_package(
+        communication_package = self.communication_package_service.generate_package(
             opportunity,
-            context_snapshot=(
-                self.brief.get("context_snapshot", {})
-                if self.brief
-                else None
-            ),
-            editorial_strategy=opportunity.get("selected_editorial_strategy")
+            "Facebook"
+        )
+
+        return self.content_generation_service.generate_from_package(
+            communication_package
         )
 
     ##########################################################
@@ -1473,6 +1472,13 @@ class ContentDirectorPage(ctk.CTkFrame):
 
         self.update_writing_provider_status(package)
 
+        if "facebook" in package:
+            return self.render_generated_content_package(
+                parent,
+                package,
+                start_row=start_row
+            )
+
         self.add_caption_line(
             parent,
             start_row,
@@ -1550,6 +1556,70 @@ class ContentDirectorPage(ctk.CTkFrame):
 
     ##########################################################
 
+    def render_generated_content_package(self, parent, package, start_row=3):
+
+        source = package.get("source_package", {}) or {}
+        warning = package.get("internal_warning", "")
+
+        self.add_caption_line(
+            parent,
+            start_row,
+            "Multi-Platform Content Package",
+            source.get("headline", "")
+        )
+        self.add_caption_line(
+            parent,
+            start_row + 1,
+            "Internal Warning",
+            warning or "No internal warning."
+        )
+
+        rows = (
+            ("Facebook Post", "facebook"),
+            ("Instagram Caption", "instagram"),
+            ("LinkedIn Post", "linkedin"),
+            ("Website Article", "website"),
+            ("News Release", "news_release"),
+            ("Newsletter Article", "newsletter")
+        )
+
+        for offset, (label, key) in enumerate(rows, start=2):
+            self.add_caption_line(
+                parent,
+                start_row + offset,
+                label,
+                (package.get(key, {}) or {}).get("copy_text", "")
+            )
+
+        self.add_caption_line(
+            parent,
+            start_row + 8,
+            "Word Counts",
+            str(package.get("word_counts", {}))
+        )
+        controls = self.render_copy_controls(
+            parent,
+            package,
+            start_row + 9
+        )
+        preview_button = ctk.CTkButton(
+            controls,
+            text="Preview Platforms",
+            width=145,
+            command=lambda item=package: self.show_generated_content_preview(item)
+        )
+        preview_button.grid(
+            row=2,
+            column=0,
+            sticky="w",
+            padx=(0, 8),
+            pady=(0, 6)
+        )
+
+        return start_row + 10
+
+    ##########################################################
+
     def render_copy_controls(self, parent, package, row):
 
         controls = ctk.CTkFrame(
@@ -1567,36 +1637,32 @@ class ContentDirectorPage(ctk.CTkFrame):
         for column in range(3):
             controls.grid_columnconfigure(column, weight=0)
 
-        hashtags = " ".join(
-            dict.fromkeys(
-                (package.get("facebook_hashtags") or []) +
-                (package.get("instagram_hashtags") or []) +
-                (package.get("hashtags") or [])
+        if "copy_buttons" in package:
+            buttons = (
+                ("Copy Facebook", package["copy_buttons"].get("facebook", "")),
+                ("Copy Instagram", package["copy_buttons"].get("instagram", "")),
+                ("Copy LinkedIn", package["copy_buttons"].get("linkedin", "")),
+                ("Copy Website", package["copy_buttons"].get("website", "")),
+                ("Copy News Release", package["copy_buttons"].get("news_release", "")),
+                ("Copy Newsletter", package["copy_buttons"].get("newsletter", "")),
+                ("Copy All", self.package_text(package))
             )
-        )
+        else:
+            hashtags = " ".join(
+                dict.fromkeys(
+                    (package.get("facebook_hashtags") or []) +
+                    (package.get("instagram_hashtags") or []) +
+                    (package.get("hashtags") or [])
+                )
+            )
 
-        buttons = (
-            (
-                "Copy Facebook",
-                package.get("facebook_caption", "")
-            ),
-            (
-                "Copy Instagram",
-                package.get("instagram_caption", "")
-            ),
-            (
-                "Copy Hashtags",
-                hashtags
-            ),
-            (
-                "Copy CTA",
-                package.get("call_to_action", "")
-            ),
-            (
-                "Copy All",
-                self.package_text(package)
+            buttons = (
+                ("Copy Facebook", package.get("facebook_caption", "")),
+                ("Copy Instagram", package.get("instagram_caption", "")),
+                ("Copy Hashtags", hashtags),
+                ("Copy CTA", package.get("call_to_action", "")),
+                ("Copy All", self.package_text(package))
             )
-        )
 
         for index, (label, value) in enumerate(buttons):
             button = ctk.CTkButton(
@@ -1617,6 +1683,8 @@ class ContentDirectorPage(ctk.CTkFrame):
                 pady=(0, 6)
             )
 
+        return controls
+
     ##########################################################
 
     def copy_text(self, label, value):
@@ -1629,7 +1697,193 @@ class ContentDirectorPage(ctk.CTkFrame):
 
     ##########################################################
 
+    def show_generated_content_preview(self, package):
+
+        window = ctk.CTkToplevel(self)
+        window.title("Generated Content Preview")
+        window.geometry("950x760")
+        window.transient(self.winfo_toplevel())
+        window.lift()
+
+        selected = {
+            "platform": "facebook"
+        }
+        body = ctk.CTkTextbox(
+            window,
+            wrap="word"
+        )
+        body.pack(
+            fill="both",
+            expand=True,
+            padx=16,
+            pady=(8, 8)
+        )
+
+        controls = ctk.CTkFrame(
+            window,
+            fg_color="transparent"
+        )
+        controls.pack(
+            fill="x",
+            padx=16,
+            pady=(16, 0)
+        )
+
+        def render(platform):
+            selected["platform"] = platform
+            output = package.get(platform, {}) or {}
+            body.configure(state="normal")
+            body.delete("1.0", "end")
+
+            warning = package.get("internal_warning", "")
+
+            if warning:
+                body.insert("end", "INTERNAL WARNING\n" + warning + "\n\n")
+
+            body.insert(
+                "end",
+                "\n\n".join(
+                    [
+                        output.get("title", self.format_label(platform)),
+                        output.get("copy_text", ""),
+                        "Word count: " + str(output.get("word_count", "")),
+                        (
+                            "Reading time: " +
+                            str(output.get("estimated_reading_time", ""))
+                        ),
+                        "Notes: " + output.get("notes", "")
+                    ]
+                )
+            )
+            body.configure(state="disabled")
+
+        for platform in (
+            "facebook",
+            "instagram",
+            "linkedin",
+            "website",
+            "news_release",
+            "newsletter"
+        ):
+            ctk.CTkButton(
+                controls,
+                text=self.format_label(platform),
+                width=120,
+                command=lambda item=platform: render(item)
+            ).pack(
+                side="left",
+                padx=(0, 8),
+                pady=(0, 8)
+            )
+
+        footer = ctk.CTkFrame(
+            window,
+            fg_color="transparent"
+        )
+        footer.pack(
+            fill="x",
+            padx=16,
+            pady=(0, 16)
+        )
+
+        ctk.CTkButton(
+            footer,
+            text="Copy Current",
+            command=lambda: self.copy_text(
+                "Current platform",
+                package.get("copy_buttons", {}).get(selected["platform"], "")
+            )
+        ).pack(
+            side="left",
+            padx=(0, 8)
+        )
+        ctk.CTkButton(
+            footer,
+            text="Regenerate Current",
+            command=lambda: self.regenerate_generated_platform(
+                package,
+                selected["platform"],
+                render
+            )
+        ).pack(
+            side="left",
+            padx=(0, 8)
+        )
+        ctk.CTkButton(
+            footer,
+            text="Close",
+            command=window.destroy
+        ).pack(
+            side="right"
+        )
+        render("facebook")
+
+    ##########################################################
+
+    def regenerate_generated_platform(self, package, platform, render_callback):
+
+        self.status.configure(
+            text=f"Regenerating {self.format_label(platform)}..."
+        )
+        future = self.executor.submit(
+            self.content_generation_service.regenerate_platform,
+            package,
+            platform
+        )
+        future.add_done_callback(
+            lambda item: self.enqueue_ui(
+                self.finish_regenerate_generated_platform,
+                item,
+                package,
+                platform,
+                render_callback
+            )
+        )
+
+    ##########################################################
+
+    def finish_regenerate_generated_platform(
+        self,
+        future,
+        package,
+        platform,
+        render_callback
+    ):
+
+        if self._destroyed:
+            return
+
+        try:
+            updated = future.result()
+        except Exception as ex:
+            logger.error(
+                "Generated platform regeneration failed",
+                exc_info=(type(ex), ex, ex.__traceback__)
+            )
+            self.status.configure(
+                text=f"Regeneration error: {ex}"
+            )
+            return
+
+        package.clear()
+        package.update(updated)
+        self.status.configure(
+            text=f"{self.format_label(platform)} regenerated."
+        )
+        render_callback(platform)
+
+    ##########################################################
+
     def package_text(self, package):
+
+        if "copy_buttons" in package:
+            return "\n\n".join(
+                [
+                    self.format_label(platform) + ":\n" + text
+                    for platform, text in package.get("copy_buttons", {}).items()
+                    if text
+                ]
+            )
 
         return "\n\n".join(
             [

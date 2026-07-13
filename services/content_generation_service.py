@@ -1,16 +1,30 @@
+import time
+
 from core.app_context import context
 from services.context_engine import ContextEngine
 from services.communications_memory_service import CommunicationsMemoryService
 from services.editorial_review_service import EditorialReviewService
+from services.human_feedback_service import HumanFeedbackService
 from services.knowledge_service import KnowledgeService
 from services.logging_service import LoggingService
 from services.writing_service import WritingService
+from services.time_service import TimeService
 
 
 logger = LoggingService.get_logger("content")
 
 
 class ContentGenerationService:
+
+    GENERATION_VERSION = "multi-platform-v1"
+    PLATFORMS = (
+        "facebook",
+        "instagram",
+        "linkedin",
+        "website",
+        "news_release",
+        "newsletter"
+    )
 
     WRITING_STYLES = {
         "community": {
@@ -123,6 +137,9 @@ class ContentGenerationService:
         self.memory = memory_service or CommunicationsMemoryService(
             database=self.db
         )
+        self.human_feedback = HumanFeedbackService(
+            database=self.db
+        )
         self.editorial_review = (
             editorial_review_service or EditorialReviewService()
         )
@@ -138,6 +155,11 @@ class ContentGenerationService:
         writing_style=None,
         editorial_strategy=None
     ):
+
+        if self._is_communication_package(recommendation):
+            return self.generate_from_package(
+                recommendation
+            )
 
         opportunity_type = opportunity_type or recommendation.get(
             "opportunity_type",
@@ -324,6 +346,458 @@ class ContentGenerationService:
         )
 
         return package
+
+    ############################################################
+
+    def generate_from_package(
+        self,
+        communication_package,
+        platforms=None,
+        include_mock=False
+    ):
+
+        started = time.perf_counter()
+        package = dict(communication_package or {})
+        platforms = [
+            platform
+            for platform in (platforms or self.PLATFORMS)
+            if platform in self.PLATFORMS
+        ]
+
+        if not platforms:
+            platforms = list(self.PLATFORMS)
+
+        source = self._package_source(
+            package,
+            include_mock=include_mock
+        )
+        outputs = {}
+
+        for platform in platforms:
+            outputs[platform] = self._platform_output(
+                platform,
+                package,
+                source
+            )
+
+        word_counts = {
+            platform: self._word_count(output.get("copy_text", ""))
+            for platform, output in outputs.items()
+        }
+        generated = {
+            "source_package": package,
+            "facebook": outputs.get("facebook", {}),
+            "instagram": outputs.get("instagram", {}),
+            "linkedin": outputs.get("linkedin", {}),
+            "website": outputs.get("website", {}),
+            "news_release": outputs.get("news_release", {}),
+            "newsletter": outputs.get("newsletter", {}),
+            "copy_buttons": {
+                platform: output.get("copy_text", "")
+                for platform, output in outputs.items()
+            },
+            "word_counts": word_counts,
+            "estimated_reading_time": {
+                platform: self._reading_time(words)
+                for platform, words in word_counts.items()
+            },
+            "generation_timestamp": TimeService.utc_now_iso(),
+            "generation_version": self.GENERATION_VERSION,
+            "internal_warning": self._internal_warning(package),
+            "writing_provider": "deterministic",
+            "writing_model": self.GENERATION_VERSION,
+            "writing_fallback_used": False,
+            "writing_provider_error": "",
+            "performance": {
+                "total_seconds": round(time.perf_counter() - started, 3),
+                "platform_count": len(outputs)
+            }
+        }
+        logger.info(
+            "Generated multi-platform content package platforms=%s elapsed=%s",
+            len(outputs),
+            generated["performance"]["total_seconds"]
+        )
+
+        return generated
+
+    ############################################################
+
+    def regenerate_platform(self, generated_package, platform):
+
+        platform = str(platform or "").lower()
+
+        if platform not in self.PLATFORMS:
+            raise ValueError(f"Unsupported platform: {platform}")
+
+        package = dict(generated_package or {})
+        source_package = package.get("source_package", {})
+        source = self._package_source(source_package)
+        output = self._platform_output(
+            platform,
+            source_package,
+            source,
+            variant="regenerated"
+        )
+        package[platform] = output
+        package.setdefault("copy_buttons", {})[platform] = output.get(
+            "copy_text",
+            ""
+        )
+        package.setdefault("word_counts", {})[platform] = self._word_count(
+            output.get("copy_text", "")
+        )
+        package.setdefault("estimated_reading_time", {})[platform] = self._reading_time(
+            package["word_counts"][platform]
+        )
+        package["generation_timestamp"] = TimeService.utc_now_iso()
+        package["generation_version"] = self.GENERATION_VERSION
+
+        return package
+
+    ############################################################
+
+    def _package_source(self, package, include_mock=False):
+
+        media_package = package.get("media_package", {}) or {}
+        media = []
+
+        for key in (
+            "primary_photo",
+            "primary_video"
+        ):
+            item = media_package.get(key) or {}
+
+            if item:
+                media.append(item)
+
+        for key in (
+            "gallery_photos",
+            "gallery_videos"
+        ):
+            media.extend(media_package.get(key) or [])
+
+        filtered = []
+
+        for item in media:
+            if item.get("trust_state") in ("rejected_real", "failed"):
+                continue
+
+            if item.get("review_status") == "rejected":
+                continue
+
+            if item.get("provider") == "mock" and not include_mock:
+                continue
+
+            filtered.append(item)
+
+        corrections = []
+
+        for item in filtered[:8]:
+            media_id = item.get("media_id")
+
+            if not media_id:
+                continue
+
+            try:
+                corrections.extend(
+                    self.human_feedback.corrections_for_media(media_id)
+                )
+            except Exception:
+                continue
+
+        return {
+            "media": filtered,
+            "knowledge": self.knowledge.snapshot(),
+            "memory": self.memory.writing_memory(),
+            "corrections": corrections[:12],
+            "context": self.context_engine.snapshot()
+        }
+
+    def _platform_output(self, platform, package, source, variant="standard"):
+
+        builders = {
+            "facebook": self._facebook_output,
+            "instagram": self._instagram_output,
+            "linkedin": self._linkedin_output,
+            "website": self._website_output,
+            "news_release": self._news_release_output,
+            "newsletter": self._newsletter_output
+        }
+        output = builders[platform](
+            package,
+            source,
+            variant=variant
+        )
+        output["word_count"] = self._word_count(
+            output.get("copy_text", "")
+        )
+        output["estimated_reading_time"] = self._reading_time(
+            output["word_count"]
+        )
+        output["platform"] = platform
+
+        return output
+
+    def _facebook_output(self, package, source, variant="standard"):
+
+        headline = package.get("headline", "")
+        story = self._story(package)
+        today = package.get("why_today_matters", "")
+        cta = package.get("suggested_cta", "")
+        hashtags = self._hashtags_for(package, "facebook")
+        emoji = "🚒" if variant == "standard" else "🔥"
+        text = "\n\n".join(
+            self._clean_lines(
+                [
+                    f"{emoji} {headline}",
+                    story,
+                    today,
+                    cta,
+                    " ".join(hashtags)
+                ]
+            )
+        )
+
+        return {
+            "title": "Facebook Post",
+            "copy_text": text,
+            "hashtags": hashtags,
+            "cta": cta,
+            "notes": "Community storytelling, moderate length, conversation-oriented."
+        }
+
+    def _instagram_output(self, package, source, variant="standard"):
+
+        media = source.get("media", [])
+        visual = self._visual_line(media)
+        story = self._story(package)
+        cta = package.get("suggested_cta", "")
+        hashtags = self._hashtags_for(package, "instagram")
+        text = "\n\n".join(
+            self._clean_lines(
+                [
+                    f"📸 {package.get('headline', '')}",
+                    visual,
+                    story,
+                    cta,
+                    " ".join(hashtags)
+                ]
+            )
+        )
+
+        return {
+            "title": "Instagram Caption",
+            "copy_text": text,
+            "hashtags": hashtags,
+            "cta": cta,
+            "notes": "Visual-first caption with platform-appropriate hashtags."
+        }
+
+    def _linkedin_output(self, package, source, variant="standard"):
+
+        headline = package.get("headline", "")
+        story = self._story(package)
+        audience = ", ".join(package.get("audience", [])[:2])
+        cta = package.get("suggested_cta", "")
+        text = "\n\n".join(
+            self._clean_lines(
+                [
+                    headline,
+                    story,
+                    (
+                        "This package is best framed around leadership, "
+                        f"volunteerism, emergency services readiness, and service to {audience or 'the community'}."
+                    ),
+                    cta,
+                    " ".join(self._hashtags_for(package, "linkedin")[:3])
+                ]
+            )
+        )
+
+        return {
+            "title": "LinkedIn Post",
+            "copy_text": text,
+            "hashtags": self._hashtags_for(package, "linkedin")[:3],
+            "cta": cta,
+            "notes": "Professional post focused on leadership and public service."
+        }
+
+    def _website_output(self, package, source, variant="standard"):
+
+        headline = package.get("headline", "")
+        story = self._story(package)
+        evidence = self._evidence_summary(package)
+        cta = package.get("suggested_cta", "")
+        text = "\n\n".join(
+            self._clean_lines(
+                [
+                    headline,
+                    "Overview",
+                    story,
+                    "Why It Matters",
+                    package.get("why_today_matters", ""),
+                    "Media Evidence",
+                    evidence,
+                    "Next Step",
+                    cta
+                ]
+            )
+        )
+
+        return {
+            "title": "Website Article",
+            "copy_text": text,
+            "hashtags": [],
+            "cta": cta,
+            "notes": "SEO-friendly headings and readable paragraphs."
+        }
+
+    def _news_release_output(self, package, source, variant="standard"):
+
+        headline = package.get("headline", "")
+        story = self._story(package)
+        text = "\n\n".join(
+            self._clean_lines(
+                [
+                    headline,
+                    "MORDEN, Man. - [Date] - " + story,
+                    "Quote placeholder: [Insert approved spokesperson quote.]",
+                    "Contact placeholder: [Insert approved department contact.]"
+                ]
+            )
+        )
+
+        return {
+            "title": "News Release",
+            "copy_text": text,
+            "hashtags": [],
+            "cta": "For more information, follow official Morden Fire & Rescue updates.",
+            "notes": "Journalistic structure with dateline and placeholders."
+        }
+
+    def _newsletter_output(self, package, source, variant="standard"):
+
+        story = self._story(package)
+        cta = package.get("suggested_cta", "")
+        text = "\n\n".join(
+            self._clean_lines(
+                [
+                    package.get("headline", ""),
+                    story,
+                    "Community takeaway: " + (
+                        package.get("why_today_matters", "") or
+                        "This story supports local awareness and preparedness."
+                    ),
+                    cta
+                ]
+            )
+        )
+
+        return {
+            "title": "Newsletter Article",
+            "copy_text": text,
+            "hashtags": [],
+            "cta": cta,
+            "notes": "Friendly community summary."
+        }
+
+    ############################################################
+
+    def _is_communication_package(self, value):
+
+        return (
+            isinstance(value, dict) and
+            "writing_strategy" in value and
+            "media_package" in value and
+            "package_scoring" in value
+        )
+
+    def _story(self, package):
+
+        return (
+            package.get("primary_story")
+            or package.get("summary")
+            or package.get("headline")
+            or "This package is ready for communications review."
+        )
+
+    def _visual_line(self, media):
+
+        if not media:
+            return "Use the strongest approved or corrected visual from this package."
+
+        names = [
+            item.get("filename", "")
+            for item in media[:3]
+            if item.get("filename")
+        ]
+
+        return "Visual focus: " + ", ".join(names)
+
+    def _evidence_summary(self, package):
+
+        evidence = package.get("supporting_evidence") or []
+
+        if evidence:
+            return " ".join(str(item) for item in evidence[:4])
+
+        return package.get("trust_label", "Evidence should be reviewed before publishing.")
+
+    def _hashtags_for(self, package, platform):
+
+        base = list(package.get("suggested_hashtags") or [])
+        platform_defaults = {
+            "facebook": ["#MordenFireRescue", "#CommunitySafety"],
+            "instagram": ["#Morden", "#FireService", "#Community"],
+            "linkedin": ["#PublicSafety", "#CommunityService", "#Volunteerism"]
+        }
+
+        for tag in platform_defaults.get(platform, []):
+            if tag not in base:
+                base.append(tag)
+
+        return base[:5]
+
+    def _internal_warning(self, package):
+
+        trust = (
+            package.get("trust_label", "") +
+            " " +
+            package.get("trust_level", "")
+        ).lower()
+
+        if "fallback" in trust or "unreviewed" in trust:
+            return "Review AI-generated facts before publishing."
+
+        return ""
+
+    def _word_count(self, value):
+
+        return len(
+            [
+                word
+                for word in str(value or "").split()
+                if word.strip()
+            ]
+        )
+
+    def _reading_time(self, words):
+
+        words = max(0, int(words or 0))
+
+        if words <= 0:
+            return "0 min"
+
+        return f"{max(1, round(words / 220))} min"
+
+    def _clean_lines(self, values):
+
+        return [
+            str(value).strip()
+            for value in values
+            if str(value or "").strip()
+        ]
 
     ############################################################
 

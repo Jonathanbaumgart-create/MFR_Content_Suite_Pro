@@ -4,6 +4,7 @@ import time
 from core.app_context import context
 from services.communication_package_service import CommunicationPackageService
 from services.communications_officer_service import CommunicationsOfficerService
+from services.content_generation_service import ContentGenerationService
 from services.logging_service import LoggingService
 from services.time_service import TimeService
 
@@ -19,8 +20,10 @@ class HomePage(ctk.CTkFrame):
 
         self.service = CommunicationsOfficerService()
         self.package_service = CommunicationPackageService()
+        self.content_generation_service = ContentGenerationService()
         self.future = None
         self.package_future = None
+        self.content_future = None
         self.brief = None
         self._refresh_after_id = None
         self._destroyed = False
@@ -429,6 +432,16 @@ class HomePage(ctk.CTkFrame):
 
         ctk.CTkButton(
             window,
+            text="Generate Content",
+            command=lambda item=package: self.request_generated_content(item)
+        ).pack(
+            anchor="e",
+            padx=16,
+            pady=(0, 8)
+        )
+
+        ctk.CTkButton(
+            window,
             text="Close",
             command=window.destroy
         ).pack(
@@ -474,6 +487,150 @@ class HomePage(ctk.CTkFrame):
                 "Suggested CTA\n" + package.get("suggested_cta", ""),
                 "Package Score\n" + str(scoring)
             ]
+        )
+
+    ##########################################################
+
+    def request_generated_content(self, package):
+
+        if self.content_future and not self.content_future.done():
+            return
+
+        self.status.configure(
+            text="Generating multi-platform content..."
+        )
+        self.content_future = context.job_manager.submit(
+            self.content_generation_service.generate_from_package,
+            package
+        )
+        self.after(150, self.check_generated_content_future)
+
+    ##########################################################
+
+    def check_generated_content_future(self):
+
+        if self._destroyed:
+            return
+
+        if self.content_future is None:
+            return
+
+        if not self.content_future.done():
+            self.after(150, self.check_generated_content_future)
+            return
+
+        try:
+            generated = self.content_future.result()
+        except Exception as ex:
+            logger.error(
+                "Multi-platform content generation failed",
+                exc_info=(type(ex), ex, ex.__traceback__)
+            )
+            self.status.configure(
+                text=f"Content generation error: {ex}"
+            )
+            return
+
+        self.status.configure(
+            text="Multi-platform content ready."
+        )
+        self.show_generated_content_preview(generated)
+
+    ##########################################################
+
+    def show_generated_content_preview(self, package):
+
+        window = ctk.CTkToplevel(self)
+        window.title("Generated Content Preview")
+        window.geometry("950x760")
+        window.transient(self.winfo_toplevel())
+        window.lift()
+
+        selected = {"platform": "facebook"}
+        body = ctk.CTkTextbox(window, wrap="word")
+        body.pack(
+            fill="both",
+            expand=True,
+            padx=16,
+            pady=(8, 8)
+        )
+
+        controls = ctk.CTkFrame(window, fg_color="transparent")
+        controls.pack(
+            fill="x",
+            padx=16,
+            pady=(16, 0)
+        )
+
+        def render(platform):
+            selected["platform"] = platform
+            output = package.get(platform, {}) or {}
+            body.configure(state="normal")
+            body.delete("1.0", "end")
+            warning = package.get("internal_warning", "")
+
+            if warning:
+                body.insert("end", "INTERNAL WARNING\n" + warning + "\n\n")
+
+            body.insert(
+                "end",
+                "\n\n".join(
+                    [
+                        output.get("title", self.format_label(platform)),
+                        output.get("copy_text", ""),
+                        "Word count: " + str(output.get("word_count", "")),
+                        (
+                            "Reading time: " +
+                            str(output.get("estimated_reading_time", ""))
+                        )
+                    ]
+                )
+            )
+            body.configure(state="disabled")
+
+        for platform in (
+            "facebook",
+            "instagram",
+            "linkedin",
+            "website",
+            "news_release",
+            "newsletter"
+        ):
+            ctk.CTkButton(
+                controls,
+                text=self.format_label(platform),
+                width=120,
+                command=lambda item=platform: render(item)
+            ).pack(side="left", padx=(0, 8), pady=(0, 8))
+
+        footer = ctk.CTkFrame(window, fg_color="transparent")
+        footer.pack(fill="x", padx=16, pady=(0, 16))
+
+        ctk.CTkButton(
+            footer,
+            text="Copy Current",
+            command=lambda: self.copy_generated_text(
+                package,
+                selected["platform"]
+            )
+        ).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(
+            footer,
+            text="Close",
+            command=window.destroy
+        ).pack(side="right")
+        render("facebook")
+
+    ##########################################################
+
+    def copy_generated_text(self, package, platform):
+
+        self.clipboard_clear()
+        self.clipboard_append(
+            package.get("copy_buttons", {}).get(platform, "")
+        )
+        self.status.configure(
+            text=f"{self.format_label(platform)} copied."
         )
 
     ##########################################################

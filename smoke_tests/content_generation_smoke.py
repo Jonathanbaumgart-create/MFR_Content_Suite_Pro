@@ -114,11 +114,13 @@ def save_analysis(db, media_id):
             "overall_score": 91,
             "facebook_caption": "",
             "instagram_caption": "",
-            "model": "mock",
+            "model": "moondream:latest",
             "analysis_duration": 0.1,
-            "provider": "mock",
+            "provider": "ollama",
             "retry_count": 0,
-            "failure_reason": ""
+            "failure_reason": "",
+            "trust_state": "approved_real",
+            "review_status": "approved"
         }
     )
 
@@ -189,6 +191,9 @@ def main():
             )
             from services.content_generation_service import (
                 ContentGenerationService
+            )
+            from services.communication_package_service import (
+                CommunicationPackageService
             )
 
             director = CommunicationsDirector(
@@ -305,9 +310,64 @@ def main():
             assert not hasattr(service, "vision")
             assert not hasattr(service, "ai")
 
+            communication_package = CommunicationPackageService(
+                db
+            ).generate_package(
+                recommendation,
+                package_type="Facebook"
+            )
+            generated = service.generate_from_package(
+                communication_package
+            )
+
+            for platform in (
+                "facebook",
+                "instagram",
+                "linkedin",
+                "website",
+                "news_release",
+                "newsletter"
+            ):
+                assert generated[platform]["copy_text"], generated
+                assert generated["copy_buttons"][platform], generated
+                assert generated["word_counts"][platform] > 0, generated
+                assert generated["estimated_reading_time"][platform], generated
+
+            assert generated["generation_version"] == service.GENERATION_VERSION
+            assert generated["generation_timestamp"], generated
+            assert "Quote placeholder" in generated["news_release"]["copy_text"]
+            assert "Contact placeholder" in generated["news_release"]["copy_text"]
+            assert generated["facebook"]["copy_text"] != generated["instagram"]["copy_text"]
+            assert generated["linkedin"]["copy_text"] != generated["website"]["copy_text"]
+            assert len(generated["facebook"]["hashtags"]) <= 5, generated
+            assert len(generated["instagram"]["hashtags"]) <= 5, generated
+
+            fallback_package = dict(communication_package)
+            fallback_package["trust_label"] = "Fallback: unreviewed evidence"
+            fallback = service.generate_from_package(
+                fallback_package
+            )
+            assert (
+                fallback["internal_warning"] ==
+                "Review AI-generated facts before publishing."
+            ), fallback
+            assert (
+                "Review AI-generated facts before publishing." not in
+                fallback["copy_buttons"]["facebook"]
+            ), fallback
+
+            regenerated = service.regenerate_platform(
+                generated,
+                "instagram"
+            )
+            assert regenerated["instagram"]["copy_text"], regenerated
+            assert regenerated["generation_timestamp"], regenerated
+
             from gui.content_director_page import ContentDirectorPage
 
             assert ContentDirectorPage is not None
+            assert hasattr(ContentDirectorPage, "show_generated_content_preview")
+            assert hasattr(ContentDirectorPage, "regenerate_generated_platform")
 
         finally:
             os.chdir(original)
