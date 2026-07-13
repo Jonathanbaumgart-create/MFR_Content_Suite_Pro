@@ -13,6 +13,7 @@ class GalleryPage(ctk.CTkFrame):
     PAGE_SIZE = 200
     CARD_RENDER_CHUNK = 4
     CARD_RENDER_DELAY_MS = 50
+    MAX_SELECTION_IDS = 10000
 
     def __init__(self, parent):
 
@@ -26,6 +27,9 @@ class GalleryPage(ctk.CTkFrame):
         self.loaded = 0
         self.total = 0
         self.selected = set()
+        self.visible_media_ids = set()
+        self.visible_media_types = {}
+        self.cards_by_media_id = {}
         self.thumbnail_service = ThumbnailService()
         self.loading_cards = False
         self.pending_cards = deque()
@@ -118,13 +122,78 @@ class GalleryPage(ctk.CTkFrame):
             padx=(0, 10)
         )
 
-        clear_selected = ctk.CTkButton(
+        self.clear_selected_button = ctk.CTkButton(
             actions,
             text="Clear Selection",
             command=self.clear_selection
         )
 
-        clear_selected.pack(
+        self.clear_selected_button.pack(
+            side="left"
+        )
+
+        bulk_actions = ctk.CTkFrame(
+            self,
+            fg_color="transparent"
+        )
+
+        bulk_actions.pack(
+            fill="x",
+            padx=20,
+            pady=(8, 0)
+        )
+
+        self.select_all_visible_button = ctk.CTkButton(
+            bulk_actions,
+            text="Select All Visible",
+            command=self.select_all_visible,
+            width=140
+        )
+        self.select_all_visible_button.pack(
+            side="left",
+            padx=(0, 8)
+        )
+
+        self.select_all_filter_button = ctk.CTkButton(
+            bulk_actions,
+            text="Select All 0",
+            command=self.select_all_current_filter,
+            width=130
+        )
+        self.select_all_filter_button.pack(
+            side="left",
+            padx=(0, 8)
+        )
+
+        self.invert_selection_button = ctk.CTkButton(
+            bulk_actions,
+            text="Invert Selection",
+            command=self.invert_selection,
+            width=130
+        )
+        self.invert_selection_button.pack(
+            side="left",
+            padx=(0, 8)
+        )
+
+        self.select_all_photos_button = ctk.CTkButton(
+            bulk_actions,
+            text="Select All Photos",
+            command=self.select_all_photos,
+            width=135
+        )
+        self.select_all_photos_button.pack(
+            side="left",
+            padx=(0, 8)
+        )
+
+        self.select_all_videos_button = ctk.CTkButton(
+            bulk_actions,
+            text="Select All Videos",
+            command=self.select_all_videos,
+            width=135
+        )
+        self.select_all_videos_button.pack(
             side="left"
         )
 
@@ -148,6 +217,7 @@ class GalleryPage(ctk.CTkFrame):
         self.total = self.service.media_count(
             self.current_filter()
         )
+        self.refresh_selection_controls()
 
         self.load_more()
 
@@ -212,8 +282,13 @@ class GalleryPage(ctk.CTkFrame):
                     analysis_status=analysis_status,
                     media_type=media_type,
                     duration_seconds=duration_seconds,
-                    date_label=date_label
+                    date_label=date_label,
+                    selected=media_id in self.selected
                 )
+
+                self.visible_media_ids.add(media_id)
+                self.visible_media_types[media_id] = media_type
+                self.cards_by_media_id[media_id] = card
 
                 row = index // 4
                 column = index % 4
@@ -261,6 +336,8 @@ class GalleryPage(ctk.CTkFrame):
                 text="Load More"
             )
 
+        self.refresh_selection_controls()
+
     ########################################################
 
     def selection_changed(self, media_id, selected):
@@ -273,6 +350,7 @@ class GalleryPage(ctk.CTkFrame):
         self.selected_label.configure(
             text=f"Selected: {len(self.selected):,}"
         )
+        self.refresh_visible_selection_state()
 
     ########################################################
 
@@ -292,6 +370,9 @@ class GalleryPage(ctk.CTkFrame):
 
         self.loaded = 0
         self.selected.clear()
+        self.visible_media_ids.clear()
+        self.visible_media_types.clear()
+        self.cards_by_media_id.clear()
         self.pending_cards.clear()
         self.total = self.service.media_count(
             self.current_filter()
@@ -303,6 +384,7 @@ class GalleryPage(ctk.CTkFrame):
         self.selected_label.configure(
             text="Selected: 0"
         )
+        self.refresh_selection_controls()
         self.more.configure(
             state="normal",
             text="Load More"
@@ -314,14 +396,124 @@ class GalleryPage(ctk.CTkFrame):
     def clear_selection(self):
 
         self.selected.clear()
+        self.refresh_visible_selection_state()
+        self.update_selected_label()
+
+    ########################################################
+
+    def select_all_visible(self):
+
+        self.selected.update(self.visible_media_ids)
+        self.refresh_visible_selection_state()
+        self.update_selected_label()
+
+    ########################################################
+
+    def select_all_current_filter(self):
+
+        ids = self.selection_ids_for_current_filter()
+        self.selected.update(ids)
+        self.refresh_visible_selection_state()
+        self.update_selected_label()
+
+    ########################################################
+
+    def select_all_photos(self):
+
+        ids = self.selection_ids_for_current_filter(media_type="image")
+        self.selected.update(ids)
+        self.refresh_visible_selection_state()
+        self.update_selected_label()
+
+    ########################################################
+
+    def select_all_videos(self):
+
+        ids = self.selection_ids_for_current_filter(media_type="video")
+        self.selected.update(ids)
+        self.refresh_visible_selection_state()
+        self.update_selected_label()
+
+    ########################################################
+
+    def invert_selection(self):
+
+        ids = set(
+            self.selection_ids_for_current_filter()
+        )
+
+        for media_id in ids:
+            if media_id in self.selected:
+                self.selected.discard(media_id)
+            else:
+                self.selected.add(media_id)
+
+        self.refresh_visible_selection_state()
+        self.update_selected_label()
+
+    ########################################################
+
+    def selection_ids_for_current_filter(self, media_type=None):
+
+        return self.service.get_media_ids_for_selection(
+            filter_key=self.current_filter(),
+            media_type=media_type,
+            limit=self.MAX_SELECTION_IDS
+        )
+
+    ########################################################
+
+    def refresh_visible_selection_state(self):
 
         for child in self.scroll.winfo_children():
 
-            if hasattr(child, "selected"):
-                child.selected.set(False)
+            if isinstance(child, PhotoCard):
+                child.set_selected(
+                    child.media_id in self.selected
+                )
+
+    ########################################################
+
+    def update_selected_label(self):
 
         self.selected_label.configure(
-            text="Selected: 0"
+            text=f"Selected: {len(self.selected):,}"
+        )
+
+    ########################################################
+
+    def refresh_selection_controls(self):
+
+        filter_key = self.current_filter()
+        total = self.total
+        photos = self.service.media_count_for_selection(
+            filter_key=filter_key,
+            media_type="image"
+        )
+        videos = self.service.media_count_for_selection(
+            filter_key=filter_key,
+            media_type="video"
+        )
+
+        if total > self.MAX_SELECTION_IDS:
+            select_text = (
+                f"Select First {self.MAX_SELECTION_IDS:,} "
+                f"of {total:,}"
+            )
+        else:
+            select_text = f"Select All {total:,}"
+
+        self.select_all_filter_button.configure(
+            text=select_text
+        )
+        self.select_all_visible_button.configure(
+            text=f"Select All Visible {len(self.visible_media_ids):,}"
+        )
+        self.select_all_photos_button.configure(
+            text=f"Select All Photos {photos:,}"
+        )
+        self.select_all_videos_button.configure(
+            text=f"Select All Videos {videos:,}"
         )
 
     ########################################################

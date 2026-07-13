@@ -37,6 +37,30 @@ class GalleryService:
 
     ###########################################################
 
+    def media_count_for_selection(self, filter_key="all", media_type=None):
+
+        return context.database.media_count_for_selection(
+            filter_key=filter_key,
+            media_type=media_type
+        )
+
+    ###########################################################
+
+    def get_media_ids_for_selection(
+        self,
+        filter_key="all",
+        media_type=None,
+        limit=10000
+    ):
+
+        return context.database.get_media_ids_for_selection(
+            filter_key=filter_key,
+            media_type=media_type,
+            limit=limit
+        )
+
+    ###########################################################
+
     def get_media_by_ids(self, media_ids):
 
         return context.database.get_media_by_ids(media_ids)

@@ -35,7 +35,8 @@ class PhotoCard(ctk.CTkFrame):
         analysis_status=None,
         media_type=None,
         duration_seconds=0,
-        date_label=""
+        date_label="",
+        selected=False
     ):
 
         super().__init__(
@@ -57,11 +58,23 @@ class PhotoCard(ctk.CTkFrame):
         self.selection_callback = selection_callback
         self.thumbnail_service = thumbnail_service
         self.image = None
+        self.selected = ctk.BooleanVar(value=bool(selected))
+
+        self.image_area = ctk.CTkFrame(
+            self,
+            width=self.IMAGE_AREA_SIZE[0],
+            height=self.IMAGE_AREA_SIZE[1],
+            fg_color="transparent"
+        )
+        self.image_area.pack(
+            padx=8,
+            pady=(8, 4)
+        )
+        self.image_area.pack_propagate(False)
 
         if self.is_image():
-
             self.preview = ctk.CTkLabel(
-                self,
+                self.image_area,
                 text="Loading...",
                 width=self.IMAGE_AREA_SIZE[0],
                 height=self.IMAGE_AREA_SIZE[1]
@@ -70,15 +83,47 @@ class PhotoCard(ctk.CTkFrame):
         else:
 
             self.preview = ctk.CTkLabel(
-                self,
+                self.image_area,
                 text="Loading video...",
                 width=self.IMAGE_AREA_SIZE[0],
                 height=self.IMAGE_AREA_SIZE[1]
             )
 
         self.preview.pack(
-            padx=8,
-            pady=(8, 4)
+            fill="both",
+            expand=True
+        )
+
+        self.select_box = ctk.CTkCheckBox(
+            self.image_area,
+            text="",
+            variable=self.selected,
+            command=self.selection_changed,
+            width=28,
+            height=28,
+            checkbox_width=24,
+            checkbox_height=24,
+            border_width=2,
+            corner_radius=5,
+            fg_color="#2d7dff",
+            hover_color="#1c5fcc"
+        )
+        self.select_box.place(
+            x=6,
+            y=6
+        )
+        self.select_box.lift()
+        self.select_box.bind(
+            "<Double-Button-1>",
+            lambda _event: "break"
+        )
+        self.select_box.bind(
+            "<Return>",
+            self.toggle_selection_from_keyboard
+        )
+        self.select_box.bind(
+            "<space>",
+            self.toggle_selection_from_keyboard
         )
 
         self.filename_label = ctk.CTkLabel(
@@ -119,23 +164,11 @@ class PhotoCard(ctk.CTkFrame):
             pady=(0, 6)
         )
 
-        self.selected = ctk.BooleanVar(value=False)
-
-        self.select_box = ctk.CTkCheckBox(
-            self,
-            text="Select",
-            variable=self.selected,
-            command=self.selection_changed
-        )
-
-        self.select_box.pack(
-            pady=(0, 6)
-        )
-
         ##########################################
 
         for widget in (
             self,
+            self.image_area,
             self.preview,
             self.filename_label,
             self.status_label
@@ -306,3 +339,23 @@ class PhotoCard(ctk.CTkFrame):
                 self.media_id,
                 self.selected.get()
             )
+
+    ##########################################################
+
+    def set_selected(self, selected, notify=False):
+
+        self.selected.set(bool(selected))
+
+        if notify:
+            self.selection_changed()
+
+    ##########################################################
+
+    def toggle_selection_from_keyboard(self, _event=None):
+
+        self.selected.set(
+            not self.selected.get()
+        )
+        self.selection_changed()
+
+        return "break"

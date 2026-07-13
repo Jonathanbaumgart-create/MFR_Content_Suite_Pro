@@ -1795,6 +1795,95 @@ class DatabaseManager:
 
     ############################################################
 
+    def media_count_for_selection(self, filter_key="all", media_type=None):
+
+        conn = self.connection()
+
+        cur = conn.cursor()
+        where, params, _order_by = self._gallery_filter_clause(filter_key)
+        clauses = []
+
+        if where:
+            clauses.append(where.replace("WHERE ", "", 1))
+
+        if media_type:
+            clauses.append("media.media_type=?")
+            params.append(str(media_type))
+
+        final_where = (
+            "WHERE " + " AND ".join(clauses)
+            if clauses
+            else ""
+        )
+
+        cur.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM media
+            LEFT JOIN ai_analysis
+            ON ai_analysis.media_id=media.id
+            {final_where}
+            """,
+            tuple(params)
+        )
+
+        count = cur.fetchone()[0]
+
+        conn.close()
+
+        return count
+
+    ############################################################
+
+    def get_media_ids_for_selection(
+        self,
+        filter_key="all",
+        media_type=None,
+        limit=10000
+    ):
+
+        conn = self.connection()
+        cur = conn.cursor()
+        where, params, order_by = self._gallery_filter_clause(filter_key)
+        clauses = []
+
+        if where:
+            clauses.append(where.replace("WHERE ", "", 1))
+
+        if media_type:
+            clauses.append("media.media_type=?")
+            params.append(str(media_type))
+
+        final_where = (
+            "WHERE " + " AND ".join(clauses)
+            if clauses
+            else ""
+        )
+
+        cur.execute(
+            f"""
+            SELECT media.id
+            FROM media
+            LEFT JOIN ai_analysis
+            ON ai_analysis.media_id=media.id
+            {final_where}
+            ORDER BY {order_by}
+            LIMIT ?
+            """,
+            tuple(params + [self._to_int(limit)])
+        )
+
+        ids = [
+            row[0]
+            for row in cur.fetchall()
+        ]
+
+        conn.close()
+
+        return ids
+
+    ############################################################
+
     def _gallery_filter_clause(self, filter_key):
 
         filter_key = str(filter_key or "all").lower()
