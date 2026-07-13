@@ -276,6 +276,9 @@ class ContentDirectorService:
         for candidate in candidates:
             candidate = self._effective_candidate(candidate)
 
+            if self._excluded_by_trust(candidate):
+                continue
+
             scored = self._score_candidate(
                 candidate,
                 opportunities
@@ -440,7 +443,9 @@ class ContentDirectorService:
             "reason": "; ".join(self._unique(reasons))[:240],
             "suggested_platforms": list(profile["platforms"]),
             "suggested_caption_theme": profile["theme"],
-            "opportunity_type": primary
+            "opportunity_type": primary,
+            "trust_state": candidate.get("trust_state", ""),
+            "confidence_limitations": self._trust_limitations(candidate)
         }
 
     ############################################################
@@ -464,13 +469,43 @@ class ContentDirectorService:
                     "recruitment_score": candidate.get("recruitment_score", 0),
                     "education_score": candidate.get("education_score", 0),
                     "technical_score": candidate.get("technical_score", 0),
-                    "overall_score": candidate.get("overall_score", 0)
+                    "overall_score": candidate.get("overall_score", 0),
+                    "trust_state": effective.get("trust_state", ""),
+                    "review_status": effective.get("review_status", ""),
+                    "quality_state": effective.get("quality_state", ""),
+                    "quality_warnings": effective.get("quality_warnings", [])
                 }
             )
             return effective
 
         except Exception:
             return candidate
+
+    ############################################################
+
+    def _excluded_by_trust(self, candidate):
+
+        trust_state = candidate.get("trust_state", "")
+
+        return trust_state in ("rejected_real", "failed")
+
+    ############################################################
+
+    def _trust_limitations(self, candidate):
+
+        trust_state = candidate.get("trust_state", "")
+
+        if trust_state == "unreviewed_real":
+            return [
+                "Real provider analysis has not been human reviewed yet"
+            ]
+
+        if trust_state == "mock":
+            return [
+                "Mock provider analysis is test data only"
+            ]
+
+        return []
 
     ############################################################
 

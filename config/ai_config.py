@@ -29,7 +29,10 @@ AI_CONFIG = {
             "text_model": "llama3.1:8b",
             "timeout": 300,
             "diagnostics_timeout": 5,
-            "vision_diagnostics_timeout": 120
+            "vision_diagnostics_timeout": 120,
+            "analysis_max_dimension": 1536,
+            "analysis_retry_max_dimension": 1024,
+            "analysis_max_payload_bytes": 12000000
         },
         "mock": {
             "model": "mock"

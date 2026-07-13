@@ -1,4 +1,3 @@
-import base64
 from abc import ABC, abstractmethod
 
 import requests
@@ -6,9 +5,33 @@ import requests
 from config.ai_config import AI_CONFIG
 from services.ai_settings_service import AISettingsService
 from services.logging_service import LoggingService
+from services.vision_preprocessing_service import (
+    VisionPreprocessingError,
+    VisionPreprocessingService
+)
 
 
 logger = LoggingService.get_logger("ai")
+
+
+class VisionProviderError(RuntimeError):
+
+    def __init__(
+        self,
+        message,
+        category="provider_unavailable",
+        status_code=None,
+        response_excerpt="",
+        request_metadata=None,
+        attempts=None
+    ):
+
+        self.category = category
+        self.status_code = status_code
+        self.response_excerpt = response_excerpt
+        self.request_metadata = request_metadata or {}
+        self.attempts = attempts or []
+        super().__init__(message)
 
 
 class VisionProvider(ABC):
@@ -28,24 +51,260 @@ class VisionProvider(ABC):
 
 class OllamaVisionProvider(VisionProvider):
 
+    PROMPT_VERSION = "qwen_visual_json_v2"
+
+    def __init__(self, settings=None):
+
+        super().__init__(settings=settings)
+        self.preprocessor = VisionPreprocessingService()
+
     def analyze(self, image_path: str) -> str:
 
-        with open(image_path, "rb") as image:
-            encoded = base64.b64encode(image.read()).decode("utf-8")
-
         model = self.model_name()
+        url = self.settings.get("url")
+        prompt = self._prompt()
+        attempts = []
+        dimensions = [
+            self.settings.get("analysis_max_dimension", 1536),
+            self.settings.get("analysis_retry_max_dimension", 1024)
+        ]
+        last_error = None
 
-        prompt = """
-Describe only what is visibly present in this image.
+        for index, max_dimension in enumerate(dimensions, start=1):
 
-Return JSON only. No markdown. No prose before or after JSON.
-Do not invent identities, ranks, locations, department names, incident types,
-or apparatus types unless visible evidence supports them. Use "unknown" when
-unclear. Use empty lists instead of guesses.
+            try:
+                response_text, metadata = self._attempt(
+                    image_path,
+                    url,
+                    model,
+                    prompt,
+                    int(max_dimension or 1536),
+                    index
+                )
+                attempts.append(metadata)
+                self._last_metadata = {
+                    "prompt_version": self.PROMPT_VERSION,
+                    "attempts": attempts,
+                    "preprocessing": metadata.get("preprocessing", {}),
+                    "request": metadata.get("request", {})
+                }
 
-Schema:
+                logger.info(
+                    "Ollama vision analysis completed model=%s attempt=%s submitted=%s bytes=%s",
+                    model,
+                    index,
+                    metadata.get("preprocessing", {}).get("submitted_dimensions"),
+                    metadata.get("preprocessing", {}).get("submitted_byte_size")
+                )
+
+                return response_text
+
+            except VisionProviderError as ex:
+                attempts.append(
+                    {
+                        "attempt": index,
+                        "failure_category": ex.category,
+                        "status_code": ex.status_code,
+                        "response_excerpt": ex.response_excerpt,
+                        "request": ex.request_metadata
+                    }
+                )
+                last_error = ex
+
+                if index == 1 and ex.category in {
+                    "request_payload_invalid",
+                    "image_encoding_failed",
+                    "unsupported_image_mode",
+                    "image_too_large",
+                    "provider_http_400"
+                }:
+                    continue
+
+                break
+
+        self._last_metadata = {
+            "prompt_version": self.PROMPT_VERSION,
+            "attempts": attempts
+        }
+        if last_error:
+            last_error.attempts = attempts
+            raise last_error
+
+        raise VisionProviderError(
+            "Vision provider failed without returning a response",
+            category="provider_unavailable",
+            attempts=attempts
+        )
+
+    ############################################################
+
+    def request_metadata(self):
+
+        return getattr(self, "_last_metadata", {})
+
+    ############################################################
+
+    def _attempt(self, image_path, url, model, prompt, max_dimension, attempt):
+
+        if not url:
+            raise VisionProviderError(
+                "Ollama provider URL is not configured",
+                category="request_payload_invalid"
+            )
+
+        if not model:
+            raise VisionProviderError(
+                "Ollama vision model is not configured",
+                category="request_payload_invalid"
+            )
+
+        if not prompt.strip():
+            raise VisionProviderError(
+                "Vision prompt is empty",
+                category="request_payload_invalid"
+            )
+
+        try:
+            prepared = self.preprocessor.preprocess(
+                image_path,
+                max_dimension=max_dimension
+            )
+        except VisionPreprocessingError as ex:
+            raise VisionProviderError(
+                str(ex),
+                category=ex.category,
+                request_metadata=ex.metadata
+            ) from ex
+
+        encoded = prepared["base64"]
+        preprocessing = prepared["metadata"]
+        max_payload = int(self.settings.get("analysis_max_payload_bytes", 0) or 0)
+
+        if max_payload and preprocessing.get("submitted_byte_size", 0) > max_payload:
+            raise VisionProviderError(
+                "Encoded image payload is larger than configured limit",
+                category="image_too_large",
+                request_metadata=preprocessing
+            )
+
+        payload = {
+            "model": model,
+            "prompt": prompt,
+            "images": [encoded],
+            "stream": False,
+        }
+        self._validate_payload(payload)
+        request_metadata = {
+            "attempt": attempt,
+            "model": model,
+            "prompt_version": self.PROMPT_VERSION,
+            "image_count": 1,
+            "preprocessing": preprocessing,
+            "payload_keys": sorted(payload.keys())
+        }
+
+        try:
+            response = requests.post(
+                url,
+                json=payload,
+                timeout=self.settings.get("timeout", 300),
+            )
+        except requests.exceptions.ReadTimeout as ex:
+            raise VisionProviderError(
+                "Vision provider timed out",
+                category="provider_timeout",
+                request_metadata=request_metadata
+            ) from ex
+        except requests.exceptions.RequestException as ex:
+            raise VisionProviderError(
+                f"Vision provider unavailable: {ex}",
+                category="provider_unavailable",
+                request_metadata=request_metadata
+            ) from ex
+
+        if response.status_code == 400:
+            raise VisionProviderError(
+                "Vision provider rejected the request with HTTP 400",
+                category="provider_http_400",
+                status_code=response.status_code,
+                response_excerpt=self._safe_excerpt(response.text),
+                request_metadata=request_metadata
+            )
+
+        try:
+            response.raise_for_status()
+        except requests.exceptions.RequestException as ex:
+            raise VisionProviderError(
+                f"Vision provider HTTP error: {ex}",
+                category="provider_unavailable",
+                status_code=response.status_code,
+                response_excerpt=self._safe_excerpt(response.text),
+                request_metadata=request_metadata
+            ) from ex
+
+        data = response.json()
+        text = data.get("response", "")
+
+        if not str(text).strip():
+            raise VisionProviderError(
+                "Vision provider returned an empty response",
+                category="empty_provider_response",
+                request_metadata=request_metadata
+            )
+
+        metadata = {
+            "attempt": attempt,
+            "failure_category": "",
+            "status_code": response.status_code,
+            "response_excerpt": self._safe_excerpt(text),
+            "preprocessing": preprocessing,
+            "request": request_metadata
+        }
+
+        return text, metadata
+
+    ############################################################
+
+    def _validate_payload(self, payload):
+
+        if not isinstance(payload.get("images"), list) or not payload["images"]:
+            raise VisionProviderError(
+                "Vision request payload is missing images",
+                category="request_payload_invalid"
+            )
+
+        required = ("model", "prompt", "images", "stream")
+
+        for key in required:
+            if key not in payload:
+                raise VisionProviderError(
+                    f"Vision request payload missing required field: {key}",
+                    category="request_payload_invalid"
+                )
+
+    ############################################################
+
+    def _safe_excerpt(self, value, limit=500):
+
+        text = str(value or "").replace("\r", " ").replace("\n", " ")
+
+        return text[:limit]
+
+    ############################################################
+
+    def _prompt(self):
+
+        return """
+Describe only visible evidence in this image. Return JSON only.
+Do not identify people, infer rank, infer department identity, infer location,
+infer incident type, or invent apparatus types unless clearly visible.
+Use unknown when uncertain. Use empty lists when evidence is absent.
+Put uncertain claims in uncertain_observations.
+visible_text must contain only clearly readable text.
+people_count must be numeric. confidence must be between 0 and 1.
+No Markdown fences. No introductory text.
 {
-  "description": "Clear factual description of visible content.",
+  "description": "",
   "people_count": 0,
   "people": [],
   "apparatus": [],
@@ -53,35 +312,17 @@ Schema:
   "activities": [],
   "setting": "",
   "indoor_outdoor": "unknown",
+  "visible_text": [],
   "training": false,
   "incident_scene": false,
   "public_education": false,
   "community_event": false,
   "safety_concerns": [],
   "public_use_risks": [],
-  "confidence": 0.0,
-  "model": "%s"
+  "uncertain_observations": [],
+  "confidence": 0.0
 }
-""" % model
-
-        response = requests.post(
-            self.settings.get("url"),
-            json={
-                "model": model,
-                "prompt": prompt,
-                "images": [encoded],
-                "stream": False,
-            },
-            timeout=self.settings.get("timeout", 300),
-        )
-        response.raise_for_status()
-
-        logger.info(
-            "Ollama vision analysis completed model=%s",
-            model
-        )
-
-        return response.json()["response"]
+""".strip()
 
 
 class MockVisionProvider(VisionProvider):
@@ -108,6 +349,15 @@ class MockVisionProvider(VisionProvider):
   "model":"%s"
 }
 """ % model
+
+    def request_metadata(self):
+
+        return {
+            "prompt_version": "mock",
+            "attempts": [],
+            "preprocessing": {},
+            "request": {}
+        }
 
 
 class VisionProviderRegistry:
@@ -185,6 +435,13 @@ class VisionService:
     def analyze(self, image_path: str) -> str:
 
         return self._provider.analyze(image_path)
+
+    def request_metadata(self):
+
+        if hasattr(self._provider, "request_metadata"):
+            return self._provider.request_metadata()
+
+        return {}
 
     def provider_name(self):
 

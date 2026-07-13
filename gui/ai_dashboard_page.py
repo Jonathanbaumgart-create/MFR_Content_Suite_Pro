@@ -2,9 +2,11 @@ import customtkinter as ctk
 from tkinter import messagebox
 
 from services.brain_service import BrainService
+from services.analysis_review_service import AnalysisReviewService
 from services.provider_diagnostics_service import ProviderDiagnosticsService
 from services.time_service import TimeService
 from services.writing_service import WritingService
+from gui.photo_viewer import PhotoViewer
 
 
 class AIDashboardPage(ctk.CTkFrame):
@@ -14,6 +16,7 @@ class AIDashboardPage(ctk.CTkFrame):
         super().__init__(parent)
 
         self.brain = BrainService()
+        self.review = AnalysisReviewService()
         self.diagnostics = ProviderDiagnosticsService()
         self.writing = WritingService()
         self.metric_labels = {}
@@ -105,7 +108,13 @@ class AIDashboardPage(ctk.CTkFrame):
             ("analysis_remaining", "Remaining"),
             ("analysis_current", "Current Image"),
             ("analysis_speed", "Avg Speed"),
-            ("analysis_eta", "ETA")
+            ("analysis_eta", "ETA"),
+            ("review_unreviewed", "Review Needed"),
+            ("review_approved", "Approved"),
+            ("review_corrected", "Corrected"),
+            ("review_rejected", "Rejected"),
+            ("review_failed", "Review Failed"),
+            ("review_completion_percentage", "Review %")
         )
 
         for index, (key, label) in enumerate(metrics):
@@ -170,6 +179,8 @@ class AIDashboardPage(ctk.CTkFrame):
             ("Retry Failed", self.retry_failed),
             ("Cancel Queued Jobs", self.cancel_jobs),
             ("Clear Completed Jobs", self.clear_completed),
+            ("Open Review Queue", self.open_review_queue),
+            ("Review Next", self.review_next),
             ("Clear Legacy Mock Analysis", self.clear_mock_analysis)
         )
 
@@ -764,6 +775,116 @@ class AIDashboardPage(ctk.CTkFrame):
         self.status.configure(
             text="Building intelligence index..."
         )
+
+    ##########################################################
+
+    def open_review_queue(self):
+
+        items = self.review.queue(limit=50)
+        popup = ctk.CTkToplevel(self)
+        popup.title("AI Analysis Review Queue")
+        popup.geometry("900x600")
+        popup.transient(self.winfo_toplevel())
+
+        heading = ctk.CTkLabel(
+            popup,
+            text=f"Review Queue ({len(items)} loaded)",
+            font=("Segoe UI", 22, "bold")
+        )
+        heading.pack(
+            anchor="w",
+            padx=20,
+            pady=(20, 10)
+        )
+
+        if not items:
+            ctk.CTkLabel(
+                popup,
+                text="No analysis items currently require review."
+            ).pack(
+                anchor="w",
+                padx=20,
+                pady=20
+            )
+            return
+
+        scroll = ctk.CTkScrollableFrame(popup)
+        scroll.pack(
+            fill="both",
+            expand=True,
+            padx=20,
+            pady=(0, 20)
+        )
+
+        for item in items:
+            self._review_queue_row(scroll, item)
+
+    ##########################################################
+
+    def _review_queue_row(self, parent, item):
+
+        row = ctk.CTkFrame(parent)
+        row.pack(
+            fill="x",
+            pady=5
+        )
+
+        text = (
+            f"{item.get('filename', '')}\n"
+            f"{item.get('provider', '')} / {item.get('model', '')} | "
+            f"{item.get('trust_state', '') or 'unreviewed_real'} | "
+            f"{item.get('parse_status', '')} | "
+            f"confidence {item.get('confidence', 0):.2f}"
+        )
+
+        label = ctk.CTkLabel(
+            row,
+            text=text,
+            justify="left",
+            anchor="w",
+            wraplength=620
+        )
+        label.pack(
+            side="left",
+            fill="x",
+            expand=True,
+            padx=10,
+            pady=10
+        )
+
+        ctk.CTkButton(
+            row,
+            text="Open",
+            command=lambda current=item: self.open_review_item(current)
+        ).pack(
+            side="right",
+            padx=10
+        )
+
+    ##########################################################
+
+    def open_review_item(self, item):
+
+        PhotoViewer(
+            self,
+            item["media_id"],
+            item["filename"],
+            item["path"]
+        )
+
+    ##########################################################
+
+    def review_next(self):
+
+        items = self.review.queue(limit=1)
+
+        if not items:
+            self.status.configure(
+                text="No analysis items currently require review."
+            )
+            return
+
+        self.open_review_item(items[0])
 
     ##########################################################
 

@@ -141,6 +141,90 @@ class DatabaseManager:
             analyzed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
 
             model TEXT
+,
+            failure_category TEXT,
+
+            raw_response TEXT,
+
+            parse_status TEXT,
+
+            parse_warnings TEXT,
+
+            confidence REAL DEFAULT 0,
+
+            people TEXT,
+
+            activities TEXT,
+
+            setting TEXT,
+
+            indoor_outdoor TEXT,
+
+            safety_concerns TEXT,
+
+            public_use_risks TEXT,
+
+            visible_text TEXT,
+
+            uncertain_observations TEXT,
+
+            structured_field_completeness REAL DEFAULT 0,
+
+            request_metadata TEXT,
+
+            preprocessing_metadata TEXT,
+
+            provider_attempts TEXT,
+
+            provider_response_excerpt TEXT,
+
+            provider_status_code INTEGER,
+
+            prompt_version TEXT,
+
+            analysis_version TEXT,
+
+            quality_state TEXT,
+
+            trust_state TEXT,
+
+            review_status TEXT,
+
+            quality_warnings TEXT,
+
+            media_context TEXT,
+
+            reviewed_at TEXT,
+
+            reviewer_notes TEXT
+
+        )
+
+        """)
+
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS analysis_review_history(
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            media_id INTEGER,
+
+            analysis_saved_at TEXT,
+
+            decision TEXT,
+
+            trust_state TEXT,
+
+            review_status TEXT,
+
+            reviewer TEXT,
+
+            corrections_json TEXT,
+
+            notes TEXT,
+
+            created_at TEXT
 
         )
 
@@ -1364,6 +1448,12 @@ class DatabaseManager:
 
             ai_analysis.failure_reason,
 
+            ai_analysis.trust_state,
+
+            ai_analysis.review_status,
+
+            ai_analysis.quality_state,
+
             media_intelligence.media_id AS intelligence_media_id,
 
             media_corrections.id AS correction_id,
@@ -1448,18 +1538,32 @@ class DatabaseManager:
 
         provider = row["provider"] or ""
         model = row["model"] or ""
+        trust_state = row["trust_state"] or ""
+        review_status = row["review_status"] or ""
 
         if provider == "mock" or model.startswith("mock"):
             return "Mock"
 
         if provider:
+            if trust_state == "rejected_real" or review_status == "rejected":
+                return "Real - Rejected"
+
             if row["correction_id"]:
-                return "Human Corrected"
+                return "Real - Corrected"
+
+            if trust_state == "corrected_real" or review_status == "corrected":
+                return "Real - Corrected"
+
+            if trust_state == "approved_real" or review_status == "approved":
+                return "Real - Approved"
+
+            if trust_state == "unreviewed_real" or review_status == "review_required":
+                return "Real - Review Required"
 
             if row["intelligence_media_id"]:
-                return "Effective Intelligence"
+                return "Real - Review Required"
 
-            return "Real"
+            return "Real - Review Required"
 
         return "Not analyzed"
 
@@ -2042,10 +2146,44 @@ class DatabaseManager:
             public_use_risks,
 
             structured_field_completeness
+,
+            failure_category,
+
+            visible_text,
+
+            uncertain_observations,
+
+            request_metadata,
+
+            preprocessing_metadata,
+
+            provider_attempts,
+
+            provider_response_excerpt,
+
+            provider_status_code,
+
+            prompt_version,
+
+            analysis_version,
+
+            quality_state,
+
+            trust_state,
+
+            review_status,
+
+            quality_warnings,
+
+            media_context,
+
+            reviewed_at,
+
+            reviewer_notes
 
         )
 
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 
         """,
 
@@ -2116,6 +2254,40 @@ class DatabaseManager:
             self._to_json(analysis.get("public_use_risks")),
 
             self._to_float(analysis.get("structured_field_completeness"))
+,
+            analysis.get("failure_category"),
+
+            self._to_json(analysis.get("visible_text")),
+
+            self._to_json(analysis.get("uncertain_observations")),
+
+            self._to_json(analysis.get("request_metadata")),
+
+            self._to_json(analysis.get("preprocessing_metadata")),
+
+            self._to_json(analysis.get("provider_attempts")),
+
+            analysis.get("provider_response_excerpt"),
+
+            self._to_int(analysis.get("provider_status_code")),
+
+            analysis.get("prompt_version"),
+
+            analysis.get("analysis_version"),
+
+            analysis.get("quality_state"),
+
+            analysis.get("trust_state"),
+
+            analysis.get("review_status"),
+
+            self._to_json(analysis.get("quality_warnings")),
+
+            analysis.get("media_context"),
+
+            analysis.get("reviewed_at"),
+
+            analysis.get("reviewer_notes")
 
         ))
 
@@ -2197,7 +2369,22 @@ class DatabaseManager:
                     "public_use_risks": failure.get("public_use_risks"),
                     "structured_field_completeness": failure.get(
                         "structured_field_completeness"
-                    )
+                    ),
+                    "failure_category": failure.get("failure_category"),
+                    "request_metadata": failure.get("request_metadata"),
+                    "preprocessing_metadata": failure.get(
+                        "preprocessing_metadata"
+                    ),
+                    "provider_attempts": failure.get("provider_attempts"),
+                    "provider_response_excerpt": failure.get(
+                        "provider_response_excerpt"
+                    ),
+                    "provider_status_code": failure.get(
+                        "provider_status_code"
+                    ),
+                    "quality_state": failure.get("quality_state"),
+                    "trust_state": failure.get("trust_state"),
+                    "review_status": failure.get("review_status")
                 },
                 now
             )
@@ -2233,6 +2420,7 @@ class DatabaseManager:
         analysis["provider"] = failure.get("provider")
         analysis["retry_count"] = failure.get("retry_count")
         analysis["failure_reason"] = failure.get("failure_reason")
+        analysis["failure_category"] = failure.get("failure_category")
         analysis["model"] = failure.get("model")
 
         for key in (
@@ -2246,7 +2434,17 @@ class DatabaseManager:
             "indoor_outdoor",
             "safety_concerns",
             "public_use_risks",
-            "structured_field_completeness"
+            "structured_field_completeness",
+            "request_metadata",
+            "preprocessing_metadata",
+            "provider_attempts",
+            "provider_response_excerpt",
+            "provider_status_code",
+            "quality_state",
+            "trust_state",
+            "review_status",
+            "quality_warnings",
+            "media_context"
         ):
             if key in failure:
                 analysis[key] = failure.get(key)
@@ -2255,6 +2453,201 @@ class DatabaseManager:
             media_id,
             analysis
         )
+
+    ############################################################
+
+    def analysis_review_queue(self, limit=50):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute("""
+        SELECT
+            media.id AS media_id,
+            media.filename,
+            media.path,
+            ai_analysis.provider,
+            ai_analysis.model,
+            ai_analysis.parse_status,
+            ai_analysis.confidence,
+            ai_analysis.quality_state,
+            ai_analysis.trust_state,
+            ai_analysis.review_status,
+            ai_analysis.quality_warnings,
+            ai_analysis.raw_response,
+            ai_analysis.last_analyzed
+        FROM ai_analysis
+        JOIN media
+        ON media.id=ai_analysis.media_id
+        WHERE ai_analysis.provider!='mock'
+        AND (
+            ai_analysis.review_status IS NULL
+            OR ai_analysis.review_status=''
+            OR ai_analysis.review_status IN ('review_required', 'reanalyze_requested')
+            OR ai_analysis.trust_state='unreviewed_real'
+        )
+        ORDER BY ai_analysis.last_analyzed DESC
+        LIMIT ?
+        """, (self._to_int(limit),))
+        rows = [
+            {
+                "media_id": row["media_id"],
+                "filename": row["filename"] or "",
+                "path": row["path"] or "",
+                "provider": row["provider"] or "",
+                "model": row["model"] or "",
+                "parse_status": row["parse_status"] or "",
+                "confidence": row["confidence"] or 0,
+                "quality_state": row["quality_state"] or "",
+                "trust_state": row["trust_state"] or "",
+                "review_status": row["review_status"] or "",
+                "quality_warnings": self._from_json(row["quality_warnings"]),
+                "raw_response": row["raw_response"] or "",
+                "last_analyzed": row["last_analyzed"] or ""
+            }
+            for row in cur.fetchall()
+        ]
+        conn.close()
+
+        return rows
+
+    ############################################################
+
+    def analysis_review_metrics(self):
+
+        conn = self.connection()
+        cur = conn.cursor()
+        cur.execute("""
+        SELECT trust_state, review_status, COUNT(*)
+        FROM ai_analysis
+        WHERE provider IS NOT NULL
+        AND provider!=''
+        GROUP BY trust_state, review_status
+        """)
+        counts = {}
+
+        for trust_state, review_status, count in cur.fetchall():
+            key = trust_state or review_status or "unreviewed_real"
+            counts[key] = counts.get(key, 0) + count
+
+        conn.close()
+
+        approved = counts.get("approved_real", 0)
+        corrected = counts.get("corrected_real", 0)
+        rejected = counts.get("rejected_real", 0)
+        failed = counts.get("failed", 0)
+        mock = counts.get("mock", 0)
+        unreviewed = counts.get("unreviewed_real", 0)
+        total_real = approved + corrected + rejected + failed + unreviewed
+        reviewed = approved + corrected + rejected
+
+        return {
+            "review_unreviewed": unreviewed,
+            "review_approved": approved,
+            "review_corrected": corrected,
+            "review_rejected": rejected,
+            "review_failed": failed,
+            "review_mock": mock,
+            "review_completion_percentage": (
+                round((reviewed / total_real) * 100, 1)
+                if total_real else 0
+            )
+        }
+
+    ############################################################
+
+    def record_analysis_review(
+        self,
+        media_id,
+        decision,
+        trust_state,
+        review_status,
+        reviewer="Jonathan",
+        corrections=None,
+        notes=""
+    ):
+
+        now = TimeService.utc_now_iso()
+        existing = self.get_ai_analysis(media_id) or {}
+        conn = self.connection()
+        cur = conn.cursor()
+        cur.execute("""
+        INSERT INTO analysis_review_history(
+            media_id,
+            analysis_saved_at,
+            decision,
+            trust_state,
+            review_status,
+            reviewer,
+            corrections_json,
+            notes,
+            created_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            media_id,
+            existing.get("last_analyzed") or existing.get("analyzed_at", ""),
+            decision,
+            trust_state,
+            review_status,
+            reviewer,
+            self._to_json(corrections or {}),
+            notes,
+            now
+        ))
+        cur.execute("""
+        UPDATE ai_analysis
+        SET trust_state=?,
+            review_status=?,
+            reviewed_at=?,
+            reviewer_notes=?
+        WHERE media_id=?
+        """,
+        (
+            trust_state,
+            review_status,
+            now,
+            notes,
+            media_id
+        ))
+        conn.commit()
+        conn.close()
+
+        return self.get_ai_analysis(media_id)
+
+    ############################################################
+
+    def analysis_review_history(self, media_id, limit=50):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute("""
+        SELECT *
+        FROM analysis_review_history
+        WHERE media_id=?
+        ORDER BY id DESC
+        LIMIT ?
+        """, (media_id, self._to_int(limit)))
+        rows = [
+            {
+                "id": row["id"],
+                "media_id": row["media_id"],
+                "analysis_saved_at": row["analysis_saved_at"] or "",
+                "decision": row["decision"] or "",
+                "trust_state": row["trust_state"] or "",
+                "review_status": row["review_status"] or "",
+                "reviewer": row["reviewer"] or "",
+                "corrections": self._from_json(row["corrections_json"]),
+                "notes": row["notes"] or "",
+                "created_at": row["created_at"] or ""
+            }
+            for row in cur.fetchall()
+        ]
+        conn.close()
+
+        return rows
 
     ############################################################
 
@@ -3442,7 +3835,17 @@ class DatabaseManager:
 
             ai_analysis.technical_score,
 
-            ai_analysis.overall_score
+            ai_analysis.overall_score,
+
+            ai_analysis.provider,
+
+            ai_analysis.model,
+
+            ai_analysis.trust_state,
+
+            ai_analysis.review_status,
+
+            ai_analysis.quality_state
 
         FROM media
 
@@ -3451,6 +3854,16 @@ class DatabaseManager:
 
         LEFT JOIN ai_analysis
         ON ai_analysis.media_id = media.id
+
+        WHERE (
+            ai_analysis.failure_reason IS NULL
+            OR ai_analysis.failure_reason=''
+        )
+        AND (
+            ai_analysis.trust_state IS NULL
+            OR ai_analysis.trust_state=''
+            OR ai_analysis.trust_state NOT IN ('rejected_real', 'failed')
+        )
 
         ORDER BY
             media_intelligence.communications_score DESC,
@@ -3484,7 +3897,12 @@ class DatabaseManager:
                     "recruitment_score": row["recruitment_score"] or 0,
                     "education_score": row["education_score"] or 0,
                     "technical_score": row["technical_score"] or 0,
-                    "overall_score": row["overall_score"] or 0
+                    "overall_score": row["overall_score"] or 0,
+                    "provider": row["provider"] or "",
+                    "model": row["model"] or "",
+                    "trust_state": row["trust_state"] or "",
+                    "review_status": row["review_status"] or "",
+                    "quality_state": row["quality_state"] or ""
                 }
             )
             candidates.append(intelligence)
@@ -7322,9 +7740,30 @@ class DatabaseManager:
             "indoor_outdoor": row["indoor_outdoor"] or "",
             "safety_concerns": self._from_json(row["safety_concerns"]),
             "public_use_risks": self._from_json(row["public_use_risks"]),
+            "visible_text": self._from_json(row["visible_text"]),
+            "uncertain_observations": self._from_json(
+                row["uncertain_observations"]
+            ),
             "structured_field_completeness": (
                 row["structured_field_completeness"] or 0
-            )
+            ),
+            "failure_category": row["failure_category"] or "",
+            "request_metadata": self._from_json(row["request_metadata"]),
+            "preprocessing_metadata": self._from_json(
+                row["preprocessing_metadata"]
+            ),
+            "provider_attempts": self._from_json(row["provider_attempts"]),
+            "provider_response_excerpt": row["provider_response_excerpt"] or "",
+            "provider_status_code": row["provider_status_code"] or 0,
+            "prompt_version": row["prompt_version"] or "",
+            "analysis_version": row["analysis_version"] or "",
+            "quality_state": row["quality_state"] or "",
+            "trust_state": row["trust_state"] or "",
+            "review_status": row["review_status"] or "",
+            "quality_warnings": self._from_json(row["quality_warnings"]),
+            "media_context": row["media_context"] or "",
+            "reviewed_at": row["reviewed_at"] or "",
+            "reviewer_notes": row["reviewer_notes"] or ""
         }
 
     ############################################################
@@ -7747,7 +8186,24 @@ class DatabaseManager:
             "indoor_outdoor": "TEXT",
             "safety_concerns": "TEXT",
             "public_use_risks": "TEXT",
-            "structured_field_completeness": "REAL DEFAULT 0"
+            "visible_text": "TEXT",
+            "uncertain_observations": "TEXT",
+            "structured_field_completeness": "REAL DEFAULT 0",
+            "failure_category": "TEXT",
+            "request_metadata": "TEXT",
+            "preprocessing_metadata": "TEXT",
+            "provider_attempts": "TEXT",
+            "provider_response_excerpt": "TEXT",
+            "provider_status_code": "INTEGER",
+            "prompt_version": "TEXT",
+            "analysis_version": "TEXT",
+            "quality_state": "TEXT",
+            "trust_state": "TEXT",
+            "review_status": "TEXT",
+            "quality_warnings": "TEXT",
+            "media_context": "TEXT",
+            "reviewed_at": "TEXT",
+            "reviewer_notes": "TEXT"
         }
 
         for name, definition in additions.items():
@@ -7907,9 +8363,14 @@ class DatabaseManager:
             "CREATE INDEX IF NOT EXISTS idx_ai_model ON ai_analysis(model)",
             "CREATE INDEX IF NOT EXISTS idx_ai_provider ON ai_analysis(provider)",
             "CREATE INDEX IF NOT EXISTS idx_ai_last_analyzed ON ai_analysis(last_analyzed)",
+            "CREATE INDEX IF NOT EXISTS idx_ai_trust_state ON ai_analysis(trust_state)",
+            "CREATE INDEX IF NOT EXISTS idx_ai_review_status ON ai_analysis(review_status)",
+            "CREATE INDEX IF NOT EXISTS idx_ai_quality_state ON ai_analysis(quality_state)",
             "CREATE INDEX IF NOT EXISTS idx_ai_history_media ON ai_analysis_history(media_id)",
             "CREATE INDEX IF NOT EXISTS idx_ai_history_saved ON ai_analysis_history(saved_at)",
             "CREATE INDEX IF NOT EXISTS idx_ai_history_provider ON ai_analysis_history(provider)",
+            "CREATE INDEX IF NOT EXISTS idx_analysis_review_media ON analysis_review_history(media_id)",
+            "CREATE INDEX IF NOT EXISTS idx_analysis_review_created ON analysis_review_history(created_at)",
             "CREATE INDEX IF NOT EXISTS idx_intelligence_media ON media_intelligence(media_id)",
             "CREATE INDEX IF NOT EXISTS idx_intelligence_scene ON media_intelligence(normalized_scene)",
             "CREATE INDEX IF NOT EXISTS idx_intelligence_incident ON media_intelligence(incident_type)",

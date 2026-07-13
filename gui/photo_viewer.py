@@ -6,6 +6,7 @@ from media.image_dimensions import ImageDimensions
 from services.brain_service import BrainService
 from services.editorial_comparison_service import EditorialComparisonService
 from services.human_feedback_service import HumanFeedbackService
+from services.analysis_review_service import AnalysisReviewService
 from services.time_service import TimeService
 
 
@@ -33,6 +34,7 @@ class PhotoViewer(ctk.CTkToplevel):
         self.parent_window = parent
         self.brain = BrainService()
         self.feedback = HumanFeedbackService()
+        self.review = AnalysisReviewService()
         self.editorial = EditorialComparisonService()
         self.analysis = None
         self.intelligence = None
@@ -172,6 +174,49 @@ class PhotoViewer(ctk.CTkToplevel):
             fill="x",
             padx=20,
             pady=5
+        )
+
+        review_row = ctk.CTkFrame(
+            ai,
+            fg_color="transparent"
+        )
+
+        review_row.pack(
+            fill="x",
+            padx=20,
+            pady=5
+        )
+
+        self.approve_button = ctk.CTkButton(
+            review_row,
+            text="Approve",
+            command=self.approve_analysis,
+            width=90
+        )
+        self.approve_button.pack(
+            side="left",
+            padx=(0, 5)
+        )
+
+        self.reject_button = ctk.CTkButton(
+            review_row,
+            text="Reject",
+            command=self.reject_analysis,
+            width=90
+        )
+        self.reject_button.pack(
+            side="left",
+            padx=(0, 5)
+        )
+
+        self.reanalyze_button = ctk.CTkButton(
+            review_row,
+            text="Reanalyze",
+            command=self.request_reanalysis,
+            width=100
+        )
+        self.reanalyze_button.pack(
+            side="left"
         )
 
         self.content_director_button = ctk.CTkButton(
@@ -465,6 +510,12 @@ class PhotoViewer(ctk.CTkToplevel):
             f"Duration: {analysis.get('analysis_duration', 0):.2f}s",
             f"Retries: {analysis.get('retry_count', 0)}",
             f"Failure: {analysis.get('failure_reason', '')}",
+            f"Trust State: {analysis.get('trust_state', '') or 'unreviewed_real'}",
+            f"Review Status: {analysis.get('review_status', '') or 'review_required'}",
+            "Quality Warnings: " + self.format_list(
+                analysis.get("quality_warnings")
+            ),
+            f"Media Context: {analysis.get('media_context', '')}",
             (
                 "Analyzed: " +
                 self.local_time(
@@ -514,6 +565,16 @@ class PhotoViewer(ctk.CTkToplevel):
                 ] + correction_lines
             )
 
+        review_lines = self.analysis_review_lines()
+
+        if review_lines:
+            lines.extend(
+                [
+                    "",
+                    "Analysis Review"
+                ] + review_lines
+            )
+
         editorial_lines = self.editorial_strategy_lines()
 
         if editorial_lines:
@@ -541,6 +602,36 @@ class PhotoViewer(ctk.CTkToplevel):
             on_saved=self.load_analysis,
             open_media_callback=self.open_suggested_media
         )
+
+    ##########################################################
+
+    def approve_analysis(self):
+
+        self.review.approve(
+            self.media_id,
+            notes="Approved in Photo Viewer"
+        )
+        self.load_analysis()
+
+    ##########################################################
+
+    def reject_analysis(self):
+
+        self.review.reject(
+            self.media_id,
+            notes="Rejected in Photo Viewer"
+        )
+        self.load_analysis()
+
+    ##########################################################
+
+    def request_reanalysis(self):
+
+        self.review.request_reanalysis(
+            self.media_id,
+            notes="Reanalysis requested in Photo Viewer"
+        )
+        self.analyze_photo()
 
     ##########################################################
 
@@ -898,6 +989,32 @@ class PhotoViewer(ctk.CTkToplevel):
                     f"{self.format_value(row.get('new_value'))}"
                 )
             )
+
+        return lines
+
+    ##########################################################
+
+    def analysis_review_lines(self):
+
+        if not self.effective_intelligence:
+            return []
+
+        history = self.effective_intelligence.get(
+            "analysis_review_history"
+        ) or []
+        lines = []
+
+        for row in history[:6]:
+            lines.append(
+                (
+                    f"{self.local_time(row.get('created_at'))}: "
+                    f"{row.get('reviewer', '')} {row.get('decision', '')} "
+                    f"({row.get('trust_state', '')})"
+                )
+            )
+
+            if row.get("notes"):
+                lines.append("  Notes: " + row.get("notes", ""))
 
         return lines
 

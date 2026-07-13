@@ -112,6 +112,8 @@ class AIService:
         keywords = self._list(data.get("keywords"))
         safety_concerns = self._list(data.get("safety_concerns"))
         public_use_risks = self._list(data.get("public_use_risks"))
+        visible_text = self._list(data.get("visible_text"))
+        uncertain_observations = self._list(data.get("uncertain_observations"))
         setting = self._text(data.get("setting"))
         indoor_outdoor = self._choice(
             data.get("indoor_outdoor"),
@@ -182,6 +184,8 @@ class AIService:
             "community_event": self._bool(data.get("community_event")),
             "safety_concerns": safety_concerns,
             "public_use_risks": public_use_risks,
+            "visible_text": visible_text,
+            "uncertain_observations": uncertain_observations,
             "keywords": keyword_set,
             "community_score": overall_score if self._bool(data.get("community_event")) else 0,
             "recruitment_score": 0,
@@ -204,6 +208,7 @@ class AIService:
                 "activities": activities,
                 "setting": setting,
                 "indoor_outdoor": indoor_outdoor,
+                "visible_text": visible_text,
                 "confidence": confidence
             })
         }

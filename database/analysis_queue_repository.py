@@ -499,6 +499,8 @@ class AnalysisQueueRepository:
                ai_analysis.provider,
                ai_analysis.failure_reason,
                ai_analysis.model,
+               ai_analysis.trust_state,
+               ai_analysis.review_status,
                media_intelligence.media_id AS intelligence_media_id,
                media_corrections.id AS correction_id,
                latest_queue.state AS queue_state
@@ -577,18 +579,32 @@ class AnalysisQueueRepository:
 
         provider = row.get("provider") or ""
         model = row.get("model") or ""
+        trust_state = row.get("trust_state") or ""
+        review_status = row.get("review_status") or ""
 
         if provider == "mock" or model.startswith("mock"):
             return "Mock"
 
         if provider:
+            if trust_state == "rejected_real" or review_status == "rejected":
+                return "Real - Rejected"
+
             if row.get("correction_id"):
-                return "Human Corrected"
+                return "Real - Corrected"
+
+            if trust_state == "corrected_real" or review_status == "corrected":
+                return "Real - Corrected"
+
+            if trust_state == "approved_real" or review_status == "approved":
+                return "Real - Approved"
+
+            if trust_state == "unreviewed_real" or review_status == "review_required":
+                return "Real - Review Required"
 
             if row.get("intelligence_media_id"):
-                return "Effective Intelligence"
+                return "Real - Review Required"
 
-            return "Real"
+            return "Real - Review Required"
 
         return "Not analyzed"
 

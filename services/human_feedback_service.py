@@ -100,6 +100,23 @@ class HumanFeedbackService:
             normalized
         )
 
+        try:
+            self.db.record_analysis_review(
+                media_id,
+                decision="correct",
+                trust_state="corrected_real",
+                review_status="corrected",
+                reviewer=correction_source,
+                corrections={field_name: normalized},
+                notes=notes
+            )
+        except Exception:
+            logger.warning(
+                "Could not update analysis review state for correction media_id=%s field=%s",
+                media_id,
+                field_name
+            )
+
         logger.info(
             "Saved human correction media_id=%s field=%s source=%s",
             media_id,
@@ -146,6 +163,13 @@ class HumanFeedbackService:
             "fire_service_intelligence": dict(fire),
             "corrections": corrections,
             "correction_history": self.history_for_media(media_id),
+            "analysis_review_history": self.db.analysis_review_history(
+                media_id
+            ),
+            "trust_state": self._trust_state(analysis, corrections),
+            "review_status": analysis.get("review_status", ""),
+            "quality_state": analysis.get("quality_state", ""),
+            "quality_warnings": analysis.get("quality_warnings", []),
             "is_human_corrected": bool(corrections),
             "correction_count": len(corrections)
         }
@@ -196,6 +220,10 @@ class HumanFeedbackService:
         media["human_corrections"] = effective.get("corrections", [])
         media["is_human_corrected"] = effective.get("is_human_corrected", False)
         media["correction_count"] = effective.get("correction_count", 0)
+        media["trust_state"] = effective.get("trust_state", "")
+        media["review_status"] = effective.get("review_status", "")
+        media["quality_state"] = effective.get("quality_state", "")
+        media["quality_warnings"] = effective.get("quality_warnings", [])
 
         return media
 
@@ -371,6 +399,32 @@ class HumanFeedbackService:
 
         if field == "notes":
             return ""
+
+    ############################################################
+
+    def _trust_state(self, analysis, corrections):
+
+        if corrections:
+            return "corrected_real"
+
+        trust_state = analysis.get("trust_state", "")
+
+        if trust_state:
+            return trust_state
+
+        if analysis.get("failure_reason"):
+            return "failed"
+
+        provider = analysis.get("provider", "")
+        model = analysis.get("model", "")
+
+        if provider == "mock" or str(model).startswith("mock"):
+            return "mock"
+
+        if provider:
+            return "unreviewed_real"
+
+        return ""
 
         return ""
 

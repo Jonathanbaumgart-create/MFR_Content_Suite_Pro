@@ -24,6 +24,7 @@ class RecommendationScoringService:
         "campaign_fatigue": -10.0,
         "low_confidence": -12.0,
         "mock_source": -18.0,
+        "unreviewed_real_source": -8.0,
         "recent_media_use": -14.0,
         "unresolved_conflict": -10.0
     }
@@ -278,6 +279,16 @@ class RecommendationScoringService:
                 )
             )
 
+        if self._unreviewed_real_source(assets):
+            factors.append(
+                self._factor(
+                    "unreviewed_real_source",
+                    "Some supporting real analysis has not been human reviewed",
+                    self.WEIGHTS["unreviewed_real_source"],
+                    "negative"
+                )
+            )
+
         if self._unresolved_conflicts(assets):
             factors.append(
                 self._factor(
@@ -367,6 +378,9 @@ class RecommendationScoringService:
 
         if self._mock_source(assets):
             score -= 24
+
+        if self._unreviewed_real_source(assets):
+            score -= 10
 
         if self._low_confidence(assets):
             score -= 14
@@ -500,6 +514,11 @@ class RecommendationScoringService:
         if self._mock_source(assets):
             limitations.append(
                 "Some supporting media came from mock/test analysis."
+            )
+
+        if self._unreviewed_real_source(assets):
+            limitations.append(
+                "Some supporting media uses unreviewed real provider analysis."
             )
 
         if self._low_confidence(assets):
@@ -648,6 +667,15 @@ class RecommendationScoringService:
             str(asset.get("source_model", "")).startswith("mock")
             or str(asset.get("provider", "")) == "mock"
             or str(asset.get("model", "")).startswith("mock")
+            for asset in assets
+        )
+
+    ############################################################
+
+    def _unreviewed_real_source(self, assets):
+
+        return any(
+            asset.get("trust_state") == "unreviewed_real"
             for asset in assets
         )
 

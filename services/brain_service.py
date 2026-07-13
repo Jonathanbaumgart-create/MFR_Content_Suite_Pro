@@ -11,10 +11,11 @@ from models.analysis_queue import (
     AnalysisSessionStatus
 )
 from services.ai_service import AIService
+from services.analysis_quality_service import AnalysisQualityService
 from services.logging_service import LoggingService
 from services.media_intelligence_service import MediaIntelligenceService
 from services.time_service import TimeService
-from services.vision_service import VisionService
+from services.vision_service import VisionProviderError, VisionService
 from services.human_feedback_service import HumanFeedbackService
 
 
@@ -72,6 +73,7 @@ class BrainService:
         self.feedback = HumanFeedbackService(
             database=self.db
         )
+        self.quality = AnalysisQualityService()
         self.config = config or AI_CONFIG
 
     ############################################################
@@ -184,6 +186,9 @@ class BrainService:
         )
         metrics.update(
             self._session_metrics(session)
+        )
+        metrics.update(
+            self.db.analysis_review_metrics()
         )
 
         return metrics
@@ -880,6 +885,11 @@ class BrainService:
 
     def _failure_category(self, error):
 
+        category = getattr(error, "category", "")
+
+        if category:
+            return category
+
         text = str(error).lower()
         name = type(error).__name__.lower()
 
@@ -911,6 +921,23 @@ class BrainService:
             1,
             int(self.config.get("batch_size", self.BULK_BATCH_SIZE))
         )
+
+    ############################################################
+
+    def _provider_request_metadata(self):
+
+        if not hasattr(self.vision, "request_metadata"):
+            metadata = {}
+        else:
+            metadata = self.vision.request_metadata()
+
+        return {
+            "request_metadata": metadata.get("request", {}),
+            "preprocessing_metadata": metadata.get("preprocessing", {}),
+            "provider_attempts": metadata.get("attempts", []),
+            "prompt_version": metadata.get("prompt_version", ""),
+            "analysis_version": "sprint28_qwen_review_v1"
+        }
 
     ############################################################
 
@@ -1011,12 +1038,19 @@ class BrainService:
             analysis["provider"] = self.vision.provider_key()
             analysis["retry_count"] = retry_count
             analysis["failure_reason"] = ""
+            analysis.update(
+                self._provider_request_metadata()
+            )
 
             if analysis.get("parse_status") in (
                 "empty_response",
                 "invalid_response"
             ):
                 raise VisionParseError(analysis)
+
+            analysis.update(
+                self.quality.evaluate(analysis)
+            )
 
             self.db.save_ai_analysis(
                 media_id,
@@ -1036,6 +1070,19 @@ class BrainService:
 
             duration = time.perf_counter() - started
             parsed = getattr(error, "analysis", {}) or {}
+            category = getattr(
+                error,
+                "category",
+                "provider_response_invalid"
+            )
+            failure_reason = str(error)
+
+            if isinstance(error, VisionProviderError):
+                parsed["provider_response_excerpt"] = error.response_excerpt
+                parsed["provider_status_code"] = error.status_code
+                parsed["request_metadata"] = error.request_metadata
+                parsed["provider_attempts"] = error.attempts
+                failure_reason = f"{error.category}: {error}"
 
             self.db.save_ai_failure(
                 media_id,
@@ -1043,7 +1090,8 @@ class BrainService:
                     "analysis_duration": duration,
                     "provider": self.vision.provider_key(),
                     "retry_count": self.config.get("retry_attempts", 2),
-                    "failure_reason": str(error),
+                    "failure_reason": failure_reason,
+                    "failure_category": category,
                     "model": self.vision.model_name(),
                     "raw_response": parsed.get("raw_response"),
                     "parse_status": parsed.get("parse_status"),
@@ -1057,7 +1105,19 @@ class BrainService:
                     "public_use_risks": parsed.get("public_use_risks"),
                     "structured_field_completeness": parsed.get(
                         "structured_field_completeness"
-                    )
+                    ),
+                    "request_metadata": parsed.get("request_metadata"),
+                    "preprocessing_metadata": parsed.get(
+                        "preprocessing_metadata"
+                    ),
+                    "provider_attempts": parsed.get("provider_attempts"),
+                    "provider_response_excerpt": parsed.get(
+                        "provider_response_excerpt"
+                    ),
+                    "provider_status_code": parsed.get("provider_status_code"),
+                    "quality_state": "provider_failed",
+                    "trust_state": "failed",
+                    "review_status": "failed"
                 }
             )
 

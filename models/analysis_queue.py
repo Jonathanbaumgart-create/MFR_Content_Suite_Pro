@@ -46,6 +46,14 @@ class AnalysisFailureCategory:
     UNSUPPORTED_FORMAT = "Unsupported format"
     OUT_OF_MEMORY = "Out of memory"
     UNEXPECTED = "Unexpected"
+    REQUEST_PAYLOAD_INVALID = "request_payload_invalid"
+    IMAGE_ENCODING_FAILED = "image_encoding_failed"
+    UNSUPPORTED_IMAGE_MODE = "unsupported_image_mode"
+    IMAGE_TOO_LARGE = "image_too_large"
+    PROVIDER_HTTP_400 = "provider_http_400"
+    PROVIDER_TIMEOUT = "provider_timeout"
+    PROVIDER_RESPONSE_INVALID = "provider_response_invalid"
+    EMPTY_PROVIDER_RESPONSE = "empty_provider_response"
 
 
 @dataclass
