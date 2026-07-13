@@ -114,7 +114,8 @@ class CommunicationImportService:
         cancel_check=None,
         progress_callback=None,
         mapping=None,
-        date_format=None
+        date_format=None,
+        max_inserted_records=None
     ):
 
         path = Path(path)
@@ -139,6 +140,13 @@ class CommunicationImportService:
         rows = self._iter_records(path, source_type)
 
         for raw in rows:
+            if (
+                max_inserted_records and
+                summary["records_inserted"] >= max_inserted_records
+            ):
+                summary["status"] = "bounded_sample"
+                break
+
             if cancel_check and cancel_check():
                 summary["status"] = "cancelled"
                 break
@@ -504,11 +512,19 @@ class CommunicationImportService:
     def _json_records(self, payload):
 
         if isinstance(payload, list):
-            return "generic_json_list", [
+            records = [
                 item
                 for item in payload
                 if isinstance(item, dict)
             ]
+
+            if self._looks_facebook(records):
+                return "facebook_export", self._facebook_records(records)
+
+            if self._looks_instagram(records):
+                return "instagram_export", records
+
+            return "generic_json_list", records
 
         if not isinstance(payload, dict):
             return "unsupported", []
@@ -524,6 +540,7 @@ class CommunicationImportService:
         for key in (
             "communications",
             "posts",
+            "videos_v2",
             "items",
             "records",
             "data"
@@ -531,7 +548,7 @@ class CommunicationImportService:
             if isinstance(payload.get(key), list):
                 guessed = "generic_json_object"
 
-                if key == "posts" and self._looks_facebook(payload.get(key)):
+                if key in ("posts", "videos_v2") and self._looks_facebook(payload.get(key)):
                     guessed = "facebook_export"
                     return guessed, self._facebook_records(payload.get(key))
                 elif self._looks_instagram(payload.get(key)):
@@ -1164,13 +1181,22 @@ class CommunicationImportService:
 
     def _looks_instagram(self, rows):
 
+        records = self._record_list(rows)[:5]
         keys = {
             key.lower()
-            for row in self._record_list(rows)[:5]
+            for row in records
             for key in row.keys()
         }
+        platforms = {
+            str(row.get("platform", "")).strip().lower()
+            for row in records
+            if row.get("platform")
+        }
 
-        return bool(keys & {"media_type", "taken_at", "caption", "permalink"})
+        if "instagram" in platforms:
+            return True
+
+        return bool(keys & {"media_type", "taken_at", "permalink"})
 
     def _record_list(self, value):
 
@@ -1218,15 +1244,77 @@ class CommunicationImportService:
             if item.get("timestamp") and not flattened.get("published_date"):
                 flattened["published_date"] = item.get("timestamp")
 
+            if item.get("creation_timestamp") and not flattened.get("published_date"):
+                flattened["published_date"] = item.get("creation_timestamp")
+
             attachments = item.get("attachments")
+            media_references = []
 
             if attachments and not flattened.get("attachment_filenames"):
-                flattened["attachment_filenames"] = attachments
+                media_references.extend(
+                    self._facebook_attachment_references(attachments)
+                )
+
+            if item.get("uri"):
+                media_references.append(item.get("uri"))
+
+            if media_references and not flattened.get("attachment_filenames"):
+                flattened["attachment_filenames"] = media_references
+
+            if attachments and not flattened.get("text"):
+                attachment_text = self._facebook_attachment_text(attachments)
+
+                if attachment_text:
+                    flattened["text"] = attachment_text
+
+            if item.get("uri") and not flattened.get("video_count"):
+                flattened["video_count"] = 1 if str(item.get("uri")).lower().endswith(".mp4") else 0
+
+            if media_references and not flattened.get("media_count"):
+                flattened["media_count"] = len(media_references)
 
             flattened.setdefault("platform", "facebook")
             records.append(flattened)
 
         return records
+
+    def _facebook_attachment_text(self, attachments):
+
+        parts = []
+
+        for attachment in self._record_list(attachments):
+            for data in self._record_list(attachment.get("data")):
+                media = data.get("media") if isinstance(data, dict) else None
+
+                if isinstance(media, dict):
+                    parts.append(media.get("description") or "")
+                    parts.append(media.get("title") or "")
+
+                external = data.get("external_context") if isinstance(data, dict) else None
+
+                if isinstance(external, dict):
+                    parts.append(external.get("name") or "")
+                    parts.append(external.get("description") or "")
+
+        return " ".join(value for value in parts if value)
+
+    def _facebook_attachment_references(self, attachments):
+
+        references = []
+
+        for attachment in self._record_list(attachments):
+            for data in self._record_list(attachment.get("data")):
+                media = data.get("media") if isinstance(data, dict) else None
+
+                if isinstance(media, dict) and media.get("uri"):
+                    references.append(media.get("uri"))
+
+                external = data.get("external_context") if isinstance(data, dict) else None
+
+                if isinstance(external, dict) and external.get("url"):
+                    references.append(external.get("url"))
+
+        return references
 
     def _unix_timestamp(self, value):
 
@@ -1253,15 +1341,39 @@ class CommunicationImportService:
 
     def _clean(self, value):
 
-        return " ".join(str(value or "").split())
+        return " ".join(self._decode_meta_text(str(value or "")).split())
+
+    def _decode_meta_text(self, value):
+
+        try:
+            decoded = value.encode("latin-1").decode("utf-8")
+        except Exception:
+            return value
+
+        if any(marker in value for marker in ("Ã", "â", "ð")):
+            return decoded
+
+        return value
 
     def _as_list(self, value):
 
         if isinstance(value, list):
             return [
-                str(item).strip()
+                self._clean(
+                    item.get("name") or
+                    item.get("topic") or
+                    item.get("label") or
+                    ""
+                ) if isinstance(item, dict) else str(item).strip()
                 for item in value
-                if str(item).strip()
+                if (
+                    self._clean(
+                        item.get("name") or
+                        item.get("topic") or
+                        item.get("label") or
+                        ""
+                    ) if isinstance(item, dict) else str(item).strip()
+                )
             ]
 
         return [

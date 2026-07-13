@@ -858,6 +858,24 @@ class CommunicationRepository:
             )
             removed[table] = cur.rowcount
 
+        cur.execute("""
+        DELETE FROM communication_campaigns
+        WHERE campaign_id NOT IN (
+            SELECT DISTINCT campaign_id
+            FROM communication_campaign_links
+        )
+        """)
+        removed["orphan_communication_campaigns"] = cur.rowcount
+
+        cur.execute("""
+        DELETE FROM communication_programs
+        WHERE program_id NOT IN (
+            SELECT DISTINCT program_id
+            FROM communication_program_links
+        )
+        """)
+        removed["orphan_communication_programs"] = cur.rowcount
+
         cur.execute(
             "DELETE FROM communication_deliveries WHERE import_run_id=?",
             (import_run_id,)
