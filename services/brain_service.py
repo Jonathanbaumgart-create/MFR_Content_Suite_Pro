@@ -17,6 +17,8 @@ from services.media_intelligence_service import MediaIntelligenceService
 from services.time_service import TimeService
 from services.vision_service import VisionProviderError, VisionService
 from services.human_feedback_service import HumanFeedbackService
+from services.video_metadata_service import VideoMetadataService
+from services.media_priority_service import MediaPriorityService
 
 
 logger = LoggingService.get_logger("ai")
@@ -73,6 +75,8 @@ class BrainService:
         self.feedback = HumanFeedbackService(
             database=self.db
         )
+        self.video = VideoMetadataService()
+        self.priority = MediaPriorityService(database=self.db)
         self.quality = AnalysisQualityService()
         self.config = config or AI_CONFIG
 
@@ -183,6 +187,18 @@ class BrainService:
         metrics["legacy_mock_analysis"] = mock_summary.get(
             "media_count",
             0
+        )
+        today = self.newest_media_preview("today")
+        metrics.update(
+            {
+                "new_media_today": today.get("total", 0),
+                "new_photos_today": today.get("photos", 0),
+                "new_videos_today": today.get("videos", 0),
+                "new_unanalyzed_today": today.get("unanalyzed", 0),
+                "new_review_required_today": today.get("review_required", 0),
+                "new_approved_today": today.get("approved", 0),
+                "new_failed_today": today.get("failed", 0)
+            }
         )
         metrics.update(
             self._session_metrics(session)
@@ -309,8 +325,14 @@ class BrainService:
 
             return active
 
+        worker = (
+            self._analyze_video_and_save
+            if self.video.is_video(image_path)
+            else self._analyze_and_save
+        )
+
         future = self.jobs.submit(
-            self._analyze_and_save,
+            worker,
             media_id,
             image_path,
             callback=self._job_complete(
@@ -346,12 +368,6 @@ class BrainService:
         force=False,
         progress_callback=None
     ):
-
-        media_items = [
-            item
-            for item in media_items
-            if item[3] == "image"
-        ]
 
         self._bulk_cancel.clear()
 
@@ -693,7 +709,10 @@ class BrainService:
                 )
                 return
 
-            self._analyze_and_save(media_id, path)
+            if item.get("media_type") == "video":
+                self._analyze_video_and_save(media_id, path)
+            else:
+                self._analyze_and_save(media_id, path)
             self.db.mark_analysis_queue_completed(
                 queue_id,
                 duration=time.perf_counter() - started
@@ -1122,6 +1141,127 @@ class BrainService:
             )
 
             raise
+
+    ############################################################
+
+    def _analyze_video_and_save(self, media_id, video_path):
+
+        started = time.perf_counter()
+        metadata = self.video.inspect(video_path)
+        self.db.update_media_video_metadata(
+            media_id,
+            metadata
+        )
+        analysis = self.video.video_analysis_from_metadata(
+            media_id,
+            video_path,
+            metadata=metadata
+        )
+        analysis["analysis_duration"] = time.perf_counter() - started
+        self.db.save_ai_analysis(
+            media_id,
+            analysis
+        )
+        saved = self.db.get_ai_analysis(media_id)
+        self._generate_intelligence(
+            media_id,
+            saved
+        )
+        self.db.save_video_intelligence(
+            media_id,
+            {
+                "duration_seconds": metadata.get("duration", 0),
+                "analyzed_frame_count": len(
+                    (analysis.get("preprocessing_metadata") or {}).get(
+                        "keyframe_timestamps",
+                        []
+                    )
+                ),
+                "frame_timestamps": (
+                    (analysis.get("preprocessing_metadata") or {}).get(
+                        "keyframe_timestamps",
+                        []
+                    )
+                ),
+                "people_observed": [],
+                "apparatus_observed": [],
+                "equipment_observed": [],
+                "activities_observed": [],
+                "settings_observed": [],
+                "visible_text": [],
+                "uncertain_observations": analysis.get(
+                    "uncertain_observations",
+                    []
+                ),
+                "likely_content_category": "requires_review",
+                "confidence": analysis.get("confidence", 0),
+                "review_state": analysis.get("review_status", ""),
+                "provider": analysis.get("provider", ""),
+                "model": analysis.get("model", ""),
+                "analysis_version": analysis.get("analysis_version", ""),
+                "raw_frame_outputs": []
+            }
+        )
+
+        return saved
+
+    ############################################################
+
+    def analyze_newest_media(
+        self,
+        preset="today",
+        limit=200,
+        include_photos=True,
+        include_videos=True,
+        only_unanalyzed=True,
+        include_failed=False,
+        force=False,
+        progress_callback=None
+    ):
+
+        candidates = self.priority.candidates(
+            preset=preset,
+            limit=limit,
+            include_photos=include_photos,
+            include_videos=include_videos,
+            only_unanalyzed=only_unanalyzed,
+            include_failed=include_failed,
+            force=force
+        )
+        self._bulk_cancel.clear()
+        session_id = self._create_analysis_session(
+            f"newest:{preset}",
+            len(candidates),
+            force=force
+        )
+        self.db.enqueue_analysis_items(
+            session_id,
+            candidates,
+            self.vision.provider_key(),
+            self.vision.model_name(),
+            force=force
+        )
+        future = self.jobs.submit(
+            self._run_persistent_analysis_session,
+            session_id,
+            progress_callback
+        )
+
+        self._report_progress(
+            progress_callback,
+            "newest media queued"
+        )
+
+        return BulkAnalysisHandle(
+            future,
+            len(candidates)
+        )
+
+    ############################################################
+
+    def newest_media_preview(self, preset="today"):
+
+        return self.priority.preview(preset)
 
     ############################################################
 

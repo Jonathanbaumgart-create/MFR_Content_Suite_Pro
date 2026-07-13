@@ -246,8 +246,11 @@ class OperationsPage(ctk.CTkFrame):
 
         return [
             f"Total media scanned: {data['total_media_scanned']}",
+            f"Photos: {data.get('photo_count', 0)}",
+            f"Videos: {data.get('video_count', 0)}",
             f"AI analyzed count: {data['ai_analyzed_count']}",
             f"Media Intelligence count: {data['media_intelligence_count']}",
+            f"Video Intelligence count: {data.get('video_intelligence_count', 0)}",
             f"Fire Service Intelligence count: {data.get('fire_service_intelligence_count', 0)}",
             f"Unknown fire-service classifications: {data.get('fire_service_unknown_count', 0)}",
             (

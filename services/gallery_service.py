@@ -15,7 +15,7 @@ class GalleryService:
 
     ###########################################################
 
-    def get_media_page(self, limit, offset=0):
+    def get_media_page(self, limit, offset=0, filter_key="all"):
 
         logger.info(
             "Loading media page limit=%s offset=%s",
@@ -25,14 +25,15 @@ class GalleryService:
 
         return context.database.get_media_page(
             limit,
-            offset
+            offset,
+            filter_key=filter_key
         )
 
     ###########################################################
 
-    def media_count(self):
+    def media_count(self, filter_key="all"):
 
-        return context.database.media_count()
+        return context.database.media_count(filter_key=filter_key)
 
     ###########################################################
 

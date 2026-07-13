@@ -86,6 +86,22 @@ class MediaIntelligenceService:
             content_themes
         )
 
+        if analysis.get("media_context") == "video":
+            content_tags = self._unique(
+                content_tags + [
+                    "video",
+                    "short_form_video",
+                    "manual_footage_review"
+                ]
+            )
+            recommended_uses = self._unique(
+                recommended_uses + [
+                    "short_form_video",
+                    "candidate_for_reel",
+                    "manual_footage_review"
+                ]
+            )
+
         all_tags = self._unique(
             apparatus +
             equipment +

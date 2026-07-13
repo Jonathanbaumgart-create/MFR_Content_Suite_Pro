@@ -96,8 +96,11 @@ class OperationsService:
 
         return {
             "total_media_scanned": total,
+            "photo_count": self.db.media_count(filter_key="photos"),
+            "video_count": self.db.media_count(filter_key="videos"),
             "ai_analyzed_count": analyzed,
             "media_intelligence_count": intelligence,
+            "video_intelligence_count": self.db.video_intelligence_count(),
             "fire_service_intelligence_count": fire_service,
             "fire_service_unknown_count": self.db.fire_service_unknown_count(),
             "top_fire_service_incident_types": self.db.fire_service_top_values(

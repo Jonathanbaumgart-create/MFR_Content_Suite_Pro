@@ -29,6 +29,21 @@ class GalleryPage(ctk.CTkFrame):
         self.thumbnail_service = ThumbnailService()
         self.loading_cards = False
         self.pending_cards = deque()
+        self.filter_var = ctk.StringVar(value="All Media")
+        self.filter_map = {
+            "All Media": "all",
+            "Photos": "photos",
+            "Videos": "videos",
+            "Added Today": "added_today",
+            "Captured Today": "captured_today",
+            "Last 7 Days": "last_7_days",
+            "Last 30 Days": "last_30_days",
+            "Last 12 Months": "last_12_months",
+            "Unanalyzed": "unanalyzed",
+            "Review Required": "review_required",
+            "Approved": "approved",
+            "Failed": "failed"
+        }
 
         self.build_page()
 
@@ -79,6 +94,19 @@ class GalleryPage(ctk.CTkFrame):
             padx=(0, 15)
         )
 
+        self.filter_menu = ctk.CTkOptionMenu(
+            actions,
+            values=list(self.filter_map.keys()),
+            variable=self.filter_var,
+            command=self.filter_changed,
+            width=170
+        )
+
+        self.filter_menu.pack(
+            side="left",
+            padx=(0, 10)
+        )
+
         analyze_selected = ctk.CTkButton(
             actions,
             text="Analyze Selected",
@@ -117,7 +145,9 @@ class GalleryPage(ctk.CTkFrame):
 
         self.more.pack(pady=10)
 
-        self.total = self.service.media_count()
+        self.total = self.service.media_count(
+            self.current_filter()
+        )
 
         self.load_more()
 
@@ -130,7 +160,8 @@ class GalleryPage(ctk.CTkFrame):
 
         media = self.service.get_media_page(
             self.PAGE_SIZE,
-            self.loaded
+            self.loaded,
+            self.current_filter()
         )
 
         self.pending_cards = deque(
@@ -164,6 +195,10 @@ class GalleryPage(ctk.CTkFrame):
                 if len(item) > 4
                 else "Not analyzed"
             )
+            duration_seconds = item[5] if len(item) > 5 else 0
+            date_label = item[7] if len(item) > 7 and item[7] else (
+                item[6] if len(item) > 6 else ""
+            )
 
             try:
 
@@ -174,7 +209,10 @@ class GalleryPage(ctk.CTkFrame):
                     path,
                     thumbnail_service=self.thumbnail_service,
                     selection_callback=self.selection_changed,
-                    analysis_status=analysis_status
+                    analysis_status=analysis_status,
+                    media_type=media_type,
+                    duration_seconds=duration_seconds,
+                    date_label=date_label
                 )
 
                 row = index // 4
@@ -235,6 +273,41 @@ class GalleryPage(ctk.CTkFrame):
         self.selected_label.configure(
             text=f"Selected: {len(self.selected):,}"
         )
+
+    ########################################################
+
+    def current_filter(self):
+
+        return self.filter_map.get(
+            self.filter_var.get(),
+            "all"
+        )
+
+    ########################################################
+
+    def filter_changed(self, _value=None):
+
+        if self.loading_cards:
+            return
+
+        self.loaded = 0
+        self.selected.clear()
+        self.pending_cards.clear()
+        self.total = self.service.media_count(
+            self.current_filter()
+        )
+
+        for child in self.scroll.winfo_children():
+            child.destroy()
+
+        self.selected_label.configure(
+            text="Selected: 0"
+        )
+        self.more.configure(
+            state="normal",
+            text="Load More"
+        )
+        self.load_more()
 
     ########################################################
 

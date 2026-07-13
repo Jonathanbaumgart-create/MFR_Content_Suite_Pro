@@ -1,8 +1,11 @@
 from pathlib import Path
 import os
+from datetime import datetime, timezone
 
 from media.hash_manager import HashManager
 from services.logging_service import LoggingService
+from services.time_service import TimeService
+from services.video_metadata_service import VideoMetadataService
 
 
 logger = LoggingService.get_logger("application")
@@ -18,6 +21,7 @@ class MediaScanner:
         self.skipped_reasons = {}
         self.skipped_categories = self._empty_skip_categories()
         self.unsupported_extensions = {}
+        self.video_metadata = VideoMetadataService()
 
     IMAGE_EXTENSIONS = {
         ".jpg",
@@ -146,7 +150,8 @@ class MediaScanner:
 
             try:
 
-                size = file.stat().st_size
+                stat = file.stat()
+                size = stat.st_size
 
                 if size == 0:
                     self._record_skip(
@@ -176,13 +181,17 @@ class MediaScanner:
 
                         "sha256": None,
 
+                        "file_created_at": self._timestamp(stat.st_ctime),
+
+                        "file_modified_at": self._timestamp(stat.st_mtime),
+
                         "known_duplicate_path": True
 
                     }
 
                     continue
 
-                yield {
+                item = {
 
                     "path": str(file),
 
@@ -198,9 +207,26 @@ class MediaScanner:
 
                     "size": size,
 
-                    "sha256": HashManager.sha256(file)
+                    "sha256": HashManager.sha256(file),
+
+                    "file_created_at": self._timestamp(stat.st_ctime),
+
+                    "file_modified_at": self._timestamp(stat.st_mtime)
 
                 }
+
+                if item["type"] == "video":
+                    item.update(
+                        self._video_metadata(file)
+                    )
+                else:
+                    capture_time = self._image_capture_time(file)
+
+                    if capture_time:
+                        item["capture_time"] = capture_time
+                        item["capture_time_source"] = "image_exif"
+
+                yield item
 
             except Exception as ex:
 
@@ -294,3 +320,78 @@ class MediaScanner:
             "hidden_system": 0,
             "other": 0
         }
+
+    ###########################################################
+
+    def _timestamp(self, value):
+
+        try:
+            return datetime.fromtimestamp(
+                value,
+                tz=timezone.utc
+            ).isoformat(timespec="seconds")
+        except Exception:
+            return ""
+
+    ###########################################################
+
+    def _video_metadata(self, file):
+
+        metadata = self.video_metadata.inspect(file)
+
+        if metadata.get("error"):
+            logger.warning(
+                "Video metadata limited path=%s reason=%s",
+                file,
+                metadata.get("error")
+            )
+
+        return {
+            "duration_seconds": metadata.get("duration", 0),
+            "width": metadata.get("width", 0),
+            "height": metadata.get("height", 0),
+            "frame_rate": metadata.get("frame_rate", 0),
+            "orientation": metadata.get("orientation", "unknown"),
+            "codec": metadata.get("codec", ""),
+            "capture_time": metadata.get("capture_time", ""),
+            "capture_time_source": (
+                "video_metadata"
+                if metadata.get("capture_time")
+                else ""
+            ),
+            "thumbnail_status": metadata.get("thumbnail_status", "pending")
+        }
+
+    ###########################################################
+
+    def _image_capture_time(self, file):
+
+        try:
+            from PIL import Image
+
+            with Image.open(file) as image:
+                exif = image.getexif()
+
+            raw = (
+                exif.get(36867) or
+                exif.get(36868) or
+                exif.get(306)
+            )
+
+            if not raw:
+                return ""
+
+            parsed = datetime.strptime(
+                str(raw),
+                "%Y:%m:%d %H:%M:%S"
+            )
+            local = parsed.replace(
+                tzinfo=TimeService.local_timezone()
+            )
+
+            return local.astimezone(
+                timezone.utc
+            ).isoformat(timespec="seconds")
+
+        except Exception:
+            return ""

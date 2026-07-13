@@ -32,13 +32,16 @@ class PhotoCard(ctk.CTkFrame):
         filepath,
         thumbnail_service=None,
         selection_callback=None,
-        analysis_status=None
+        analysis_status=None,
+        media_type=None,
+        duration_seconds=0,
+        date_label=""
     ):
 
         super().__init__(
             parent,
             width=190,
-            height=245,
+            height=260,
             corner_radius=8
         )
 
@@ -47,6 +50,9 @@ class PhotoCard(ctk.CTkFrame):
         self.filename = filename
         self.filepath = filepath
         self.media_id = media_id
+        self.media_type = media_type or self._media_type_from_path()
+        self.duration_seconds = float(duration_seconds or 0)
+        self.date_label = date_label or ""
         self.analysis_status = analysis_status or "Not analyzed"
         self.selection_callback = selection_callback
         self.thumbnail_service = thumbnail_service
@@ -65,7 +71,7 @@ class PhotoCard(ctk.CTkFrame):
 
             self.preview = ctk.CTkLabel(
                 self,
-                text="VIDEO",
+                text="Loading video...",
                 width=self.IMAGE_AREA_SIZE[0],
                 height=self.IMAGE_AREA_SIZE[1]
             )
@@ -86,6 +92,20 @@ class PhotoCard(ctk.CTkFrame):
             padx=5,
             pady=(0, 4)
         )
+
+        self.video_label = None
+
+        if self.is_video():
+            self.video_label = ctk.CTkLabel(
+                self,
+                text=self.video_badge_text(),
+                font=("Segoe UI", 10, "bold"),
+                text_color="#9fb7ff"
+            )
+            self.video_label.pack(
+                padx=5,
+                pady=(0, 3)
+            )
 
         self.status_label = ctk.CTkLabel(
             self,
@@ -126,7 +146,13 @@ class PhotoCard(ctk.CTkFrame):
                 self.open_viewer
             )
 
-        if self.is_image() and self.thumbnail_service:
+        if self.video_label is not None:
+            self.video_label.bind(
+                "<Double-Button-1>",
+                self.open_viewer
+            )
+
+        if self.thumbnail_service:
             self.thumbnail_service.load_thumbnail(
                 self.filepath,
                 self.thumbnail_ready
@@ -136,9 +162,51 @@ class PhotoCard(ctk.CTkFrame):
 
     def is_image(self):
 
-        return self.filepath.lower().endswith(
+        return self.media_type == "image" or self.filepath.lower().endswith(
             tuple(self.IMAGE_EXTENSIONS)
         )
+
+    ##########################################################
+
+    def is_video(self):
+
+        return self.media_type == "video" and not self.is_image()
+
+    ##########################################################
+
+    def _media_type_from_path(self):
+
+        if self.filepath.lower().endswith(
+            tuple(self.IMAGE_EXTENSIONS)
+        ):
+            return "image"
+
+        return "video"
+
+    ##########################################################
+
+    def video_badge_text(self):
+
+        duration = self.duration_text()
+
+        if duration:
+            return f"VIDEO  {duration}"
+
+        return "VIDEO"
+
+    ##########################################################
+
+    def duration_text(self):
+
+        seconds = int(self.duration_seconds or 0)
+
+        if seconds <= 0:
+            return ""
+
+        minutes = seconds // 60
+        remainder = seconds % 60
+
+        return f"{minutes}:{remainder:02d}"
 
     ##########################################################
 

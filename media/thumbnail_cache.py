@@ -3,6 +3,7 @@ from PIL import Image, ImageOps
 import hashlib
 
 from media.image_loader import ImageLoader
+from services.video_metadata_service import VideoMetadataService
 
 
 class ThumbnailCache:
@@ -22,10 +23,13 @@ class ThumbnailCache:
         ".heic"
     }
 
+    VIDEO_EXTENSIONS = VideoMetadataService.VIDEO_EXTENSIONS
+
     def __init__(self, cache_dir=None):
 
         self.cache = Path(cache_dir) if cache_dir else Path.cwd() / "thumbnails"
         self.cache.mkdir(parents=True, exist_ok=True)
+        self.video = VideoMetadataService()
 
     ########################################################
 
@@ -35,8 +39,12 @@ class ThumbnailCache:
 
         media_path = Path(media_path)
 
-        # Skip videos for now
-        if media_path.suffix.lower() not in self.IMAGE_EXTENSIONS:
+        suffix = media_path.suffix.lower()
+
+        if (
+            suffix not in self.IMAGE_EXTENSIONS and
+            suffix not in self.VIDEO_EXTENSIONS
+        ):
             return None
 
         thumb_name = self.cache_identity(
@@ -50,6 +58,16 @@ class ThumbnailCache:
             return thumbnail
 
         try:
+
+            if suffix in self.VIDEO_EXTENSIONS:
+                if self.video.create_thumbnail(
+                    media_path,
+                    thumbnail,
+                    size=size
+                ):
+                    return thumbnail
+
+                return None
 
             with Image.open(media_path) as loaded:
                 image = ImageOps.exif_transpose(loaded)

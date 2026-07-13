@@ -64,7 +64,11 @@ class AnalysisQueueRepository:
 
         for item in media_items:
 
-            media_id, filename, path, media_type = item[:4]
+            parsed = self._media_item(item)
+            media_id = parsed["media_id"]
+            filename = parsed["filename"]
+            path = parsed["path"]
+            media_type = parsed["media_type"]
 
             cur.execute("""
             INSERT OR IGNORE INTO analysis_queue(
@@ -74,13 +78,15 @@ class AnalysisQueueRepository:
                 path,
                 media_type,
                 state,
+                priority,
+                priority_reason,
                 force,
                 provider,
                 model,
                 queued_at,
                 updated_at
             )
-            VALUES(?,?,?,?,?,?,?,?,?,?,?)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 int(session_id),
@@ -89,6 +95,8 @@ class AnalysisQueueRepository:
                 path,
                 media_type,
                 AnalysisQueueState.QUEUED,
+                parsed["priority"],
+                parsed["priority_reason"],
                 1 if force else 0,
                 provider,
                 model,
@@ -102,6 +110,29 @@ class AnalysisQueueRepository:
         self.refresh_session_counts(session_id)
 
         return inserted
+
+    ############################################################
+
+    def _media_item(self, item):
+
+        if isinstance(item, dict):
+            return {
+                "media_id": item.get("media_id") or item.get("id"),
+                "filename": item.get("filename", ""),
+                "path": item.get("path", ""),
+                "media_type": item.get("media_type", ""),
+                "priority": int(item.get("priority_score") or item.get("priority") or 0),
+                "priority_reason": item.get("priority_reason", "")
+            }
+
+        return {
+            "media_id": item[0],
+            "filename": item[1],
+            "path": item[2],
+            "media_type": item[3],
+            "priority": 0,
+            "priority_reason": ""
+        }
 
     ############################################################
 

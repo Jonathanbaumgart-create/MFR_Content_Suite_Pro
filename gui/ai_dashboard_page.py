@@ -114,7 +114,14 @@ class AIDashboardPage(ctk.CTkFrame):
             ("review_corrected", "Corrected"),
             ("review_rejected", "Rejected"),
             ("review_failed", "Review Failed"),
-            ("review_completion_percentage", "Review %")
+            ("review_completion_percentage", "Review %"),
+            ("new_media_today", "New Today"),
+            ("new_photos_today", "New Photos"),
+            ("new_videos_today", "New Videos"),
+            ("new_unanalyzed_today", "New Unanalyzed"),
+            ("new_review_required_today", "New Review"),
+            ("new_approved_today", "New Approved"),
+            ("new_failed_today", "New Failed")
         )
 
         for index, (key, label) in enumerate(metrics):
@@ -647,6 +654,28 @@ class AIDashboardPage(ctk.CTkFrame):
             padx=(0, 10)
         )
 
+        newest_button = ctk.CTkButton(
+            actions,
+            text="Analyze Newest Media",
+            command=self.analyze_newest_media
+        )
+
+        newest_button.pack(
+            side="left",
+            padx=(0, 10)
+        )
+
+        last_year_button = ctk.CTkButton(
+            actions,
+            text="Analyze Last 12 Months",
+            command=self.analyze_last_12_months
+        )
+
+        last_year_button.pack(
+            side="left",
+            padx=(0, 10)
+        )
+
         library_button = ctk.CTkButton(
             actions,
             text="Analyze Entire Library",
@@ -760,6 +789,68 @@ class AIDashboardPage(ctk.CTkFrame):
 
         self.status.configure(
             text=f"Queued {len(futures):,} library analysis jobs"
+        )
+
+    ##########################################################
+
+    def analyze_newest_media(self):
+
+        if not self.confirm_bulk_analysis():
+            return
+
+        handle = self.brain.analyze_newest_media(
+            preset="today",
+            limit=200,
+            include_photos=True,
+            include_videos=True,
+            only_unanalyzed=True,
+            include_failed=False,
+            progress_callback=self.progress_update
+        )
+
+        self.status.configure(
+            text=f"Queued {len(handle):,} newest media item(s)"
+        )
+
+    ##########################################################
+
+    def analyze_last_12_months(self):
+
+        preview = self.brain.newest_media_preview("last_12_months")
+        message = (
+            "Last 12 months preview:\n\n"
+            f"Total: {preview.get('total', 0):,}\n"
+            f"Photos: {preview.get('photos', 0):,}\n"
+            f"Videos: {preview.get('videos', 0):,}\n"
+            f"Unanalyzed: {preview.get('unanalyzed', 0):,}\n"
+            f"Review required: {preview.get('review_required', 0):,}\n"
+            f"Approved: {preview.get('approved', 0):,}\n"
+            f"Corrected: {preview.get('corrected', 0):,}\n"
+            f"Failed: {preview.get('failed', 0):,}\n\n"
+            "Queue the remaining unanalyzed media newest first?"
+        )
+
+        if not messagebox.askyesno(
+            "Analyze Last 12 Months",
+            message
+        ):
+            return
+
+        if not self.confirm_bulk_analysis():
+            return
+
+        handle = self.brain.analyze_newest_media(
+            preset="last_12_months",
+            limit=1000,
+            include_photos=True,
+            include_videos=True,
+            only_unanalyzed=True,
+            include_failed=False,
+            progress_callback=self.progress_update
+        )
+
+        self.status.configure(
+            text=f"Queued {len(handle):,} last-12-month media item(s)"
         )
 
     ##########################################################

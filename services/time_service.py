@@ -52,6 +52,9 @@ class TimeService:
             if text.endswith("Z"):
                 text = text[:-1] + "+00:00"
 
+            if text.upper().endswith(" UTC"):
+                text = text[:-4] + "+00:00"
+
             try:
                 parsed = datetime.fromisoformat(text)
             except ValueError:

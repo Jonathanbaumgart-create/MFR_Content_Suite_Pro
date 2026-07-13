@@ -2,6 +2,7 @@ import sqlite3
 from pathlib import Path
 import json
 import re
+from datetime import datetime, time, timedelta, timezone
 
 from database.analysis_queue_repository import AnalysisQueueRepository
 from database.analysis_queue_schema import (
@@ -93,6 +94,8 @@ class DatabaseManager:
             filesize INTEGER,
 
             sha256 TEXT UNIQUE,
+
+            first_seen_at TEXT,
 
             date_added TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 
@@ -197,6 +200,52 @@ class DatabaseManager:
             reviewed_at TEXT,
 
             reviewer_notes TEXT
+
+        )
+
+        """)
+
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS video_intelligence(
+
+            media_id INTEGER PRIMARY KEY,
+
+            duration_seconds REAL DEFAULT 0,
+
+            analyzed_frame_count INTEGER DEFAULT 0,
+
+            frame_timestamps TEXT,
+
+            people_observed TEXT,
+
+            apparatus_observed TEXT,
+
+            equipment_observed TEXT,
+
+            activities_observed TEXT,
+
+            settings_observed TEXT,
+
+            visible_text TEXT,
+
+            uncertain_observations TEXT,
+
+            likely_content_category TEXT,
+
+            confidence REAL DEFAULT 0,
+
+            review_state TEXT,
+
+            provider TEXT,
+
+            model TEXT,
+
+            analysis_version TEXT,
+
+            raw_frame_outputs TEXT,
+
+            generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 
         )
 
@@ -1085,6 +1134,8 @@ class DatabaseManager:
 
         """)
 
+        self._ensure_media_columns(cur)
+        self._ensure_analysis_queue_columns(cur)
         self._ensure_ai_analysis_columns(cur)
         self._ensure_media_intelligence_columns(cur)
         self._ensure_fire_service_intelligence_columns(cur)
@@ -1191,6 +1242,13 @@ class DatabaseManager:
 
         cur = conn.cursor()
 
+        first_seen_at = (
+            media.get("first_seen_at") or
+            media.get("discovered_at") or
+            media.get("imported_at") or
+            TimeService.utc_now_iso()
+        )
+
         cur.execute("""
 
         INSERT OR IGNORE INTO media(
@@ -1205,11 +1263,37 @@ class DatabaseManager:
 
             filesize,
 
-            sha256
+            sha256,
+
+            first_seen_at,
+
+            date_added,
+
+            file_created_at,
+
+            file_modified_at,
+
+            capture_time,
+
+            capture_time_source,
+
+            duration_seconds,
+
+            width,
+
+            height,
+
+            frame_rate,
+
+            orientation,
+
+            codec,
+
+            thumbnail_status
 
         )
 
-        VALUES(?,?,?,?,?,?)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 
         """,
 
@@ -1225,7 +1309,33 @@ class DatabaseManager:
 
             media["size"],
 
-            media["sha256"]
+            media["sha256"],
+
+            first_seen_at,
+
+            first_seen_at,
+
+            media.get("file_created_at", ""),
+
+            media.get("file_modified_at", ""),
+
+            media.get("capture_time", ""),
+
+            media.get("capture_time_source", ""),
+
+            self._to_float(media.get("duration_seconds")),
+
+            self._to_int(media.get("width")),
+
+            self._to_int(media.get("height")),
+
+            self._to_float(media.get("frame_rate")),
+
+            media.get("orientation", ""),
+
+            media.get("codec", ""),
+
+            media.get("thumbnail_status", "")
 
         ))
 
@@ -1312,6 +1422,86 @@ class DatabaseManager:
         conn.close()
 
         return row
+
+    ############################################################
+
+    def get_media_details(self, media_id):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute("""
+        SELECT *
+        FROM media
+        WHERE id=?
+        """, (self._to_int(media_id),))
+        row = cur.fetchone()
+        conn.close()
+
+        if row is None:
+            return None
+
+        return {
+            "id": row["id"],
+            "filename": row["filename"] or "",
+            "path": row["path"] or "",
+            "extension": row["extension"] or "",
+            "media_type": row["media_type"] or "",
+            "filesize": row["filesize"] or 0,
+            "first_seen_at": row["first_seen_at"] or row["date_added"] or "",
+            "date_added": row["first_seen_at"] or row["date_added"] or "",
+            "legacy_date_added": row["date_added"] or "",
+            "file_created_at": row["file_created_at"] or "",
+            "file_modified_at": row["file_modified_at"] or "",
+            "capture_time": row["capture_time"] or "",
+            "capture_time_source": row["capture_time_source"] or "",
+            "duration_seconds": row["duration_seconds"] or 0,
+            "width": row["width"] or 0,
+            "height": row["height"] or 0,
+            "frame_rate": row["frame_rate"] or 0,
+            "orientation": row["orientation"] or "",
+            "codec": row["codec"] or "",
+            "thumbnail_status": row["thumbnail_status"] or ""
+        }
+
+    ############################################################
+
+    def update_media_video_metadata(self, media_id, metadata):
+
+        conn = self.connection()
+        cur = conn.cursor()
+        cur.execute("""
+        UPDATE media
+        SET
+            duration_seconds=?,
+            width=?,
+            height=?,
+            frame_rate=?,
+            orientation=?,
+            codec=?,
+            capture_time=?,
+            capture_time_source=?,
+            thumbnail_status=?
+        WHERE id=?
+        """,
+        (
+            self._to_float(metadata.get("duration")),
+            self._to_int(metadata.get("width")),
+            self._to_int(metadata.get("height")),
+            self._to_float(metadata.get("frame_rate")),
+            metadata.get("orientation", ""),
+            metadata.get("codec", ""),
+            metadata.get("capture_time", ""),
+            (
+                "video_metadata"
+                if metadata.get("capture_time")
+                else ""
+            ),
+            metadata.get("thumbnail_status", ""),
+            self._to_int(media_id)
+        ))
+        conn.commit()
+        conn.close()
 
     ############################################################
 
@@ -1423,14 +1613,15 @@ class DatabaseManager:
 
     ############################################################
 
-    def get_media_page(self, limit, offset=0):
+    def get_media_page(self, limit, offset=0, filter_key="all"):
 
         conn = self.connection()
         conn.row_factory = sqlite3.Row
 
         cur = conn.cursor()
+        where, params, order_by = self._gallery_filter_clause(filter_key)
 
-        cur.execute("""
+        cur.execute(f"""
 
         SELECT
 
@@ -1441,6 +1632,12 @@ class DatabaseManager:
             media.path,
 
             media.media_type,
+
+            media.duration_seconds,
+
+            COALESCE(media.first_seen_at, media.date_added) AS date_added,
+
+            media.capture_time,
 
             ai_analysis.provider,
 
@@ -1488,19 +1685,19 @@ class DatabaseManager:
         ) latest_queue
         ON latest_queue.media_id=media.id
 
-        ORDER BY media.filename
+        {where}
+
+        ORDER BY {order_by}
 
         LIMIT ? OFFSET ?
 
         """,
 
-        (
-
+        tuple(params + [
             limit,
 
             offset
-
-        ))
+        ]))
 
         rows = [
             (
@@ -1508,7 +1705,10 @@ class DatabaseManager:
                 row["filename"],
                 row["path"],
                 row["media_type"],
-                self._media_analysis_status_from_row(row)
+                self._media_analysis_status_from_row(row),
+                row["duration_seconds"] or 0,
+                row["date_added"] or "",
+                row["capture_time"] or ""
             )
             for row in cur.fetchall()
         ]
@@ -1569,19 +1769,170 @@ class DatabaseManager:
 
     ############################################################
 
-    def media_count(self):
+    def media_count(self, filter_key="all"):
 
         conn = self.connection()
 
         cur = conn.cursor()
+        where, params, _order_by = self._gallery_filter_clause(filter_key)
 
-        cur.execute("SELECT COUNT(*) FROM media")
+        cur.execute(
+            f"""
+            SELECT COUNT(*)
+            FROM media
+            LEFT JOIN ai_analysis
+            ON ai_analysis.media_id=media.id
+            {where}
+            """,
+            tuple(params)
+        )
 
         count = cur.fetchone()[0]
 
         conn.close()
 
         return count
+
+    ############################################################
+
+    def _gallery_filter_clause(self, filter_key):
+
+        filter_key = str(filter_key or "all").lower()
+        clauses = []
+        params = []
+        order_by = "media.filename"
+        added_expr = self._media_added_timestamp_expr()
+
+        if filter_key == "photos":
+            clauses.append("media.media_type='image'")
+
+        elif filter_key == "videos":
+            clauses.append("media.media_type='video'")
+
+        elif filter_key in ("new_today", "added_today"):
+            start, end = self._local_day_utc_bounds()
+            clauses.append(
+                f"""
+                datetime({added_expr}) >= datetime(?)
+                AND datetime({added_expr}) < datetime(?)
+                """
+            )
+            params.extend([start, end])
+            order_by = f"{added_expr} DESC, media.filename"
+
+        elif filter_key == "captured_today":
+            start, end = self._local_day_utc_bounds()
+            capture_expr = self._media_timestamp_expr("media.capture_time")
+            clauses.append(
+                f"""
+                datetime({capture_expr}) >= datetime(?)
+                AND datetime({capture_expr}) < datetime(?)
+                """
+            )
+            params.extend([start, end])
+            order_by = f"{capture_expr} DESC, media.filename"
+
+        elif filter_key == "last_7_days":
+            clauses.append(
+                f"datetime({added_expr}) >= datetime('now', '-7 days')"
+            )
+            order_by = f"{added_expr} DESC, media.filename"
+
+        elif filter_key == "last_30_days":
+            clauses.append(
+                f"datetime({added_expr}) >= datetime('now', '-30 days')"
+            )
+            order_by = f"{added_expr} DESC, media.filename"
+
+        elif filter_key == "last_12_months":
+            clauses.append(
+                f"datetime({added_expr}) >= datetime('now', '-365 days')"
+            )
+            order_by = f"{added_expr} DESC, media.filename"
+
+        elif filter_key == "unanalyzed":
+            clauses.append("ai_analysis.media_id IS NULL")
+
+        elif filter_key == "review_required":
+            clauses.append(
+                """
+                (
+                    ai_analysis.review_status='review_required'
+                    OR ai_analysis.trust_state='unreviewed_real'
+                )
+                """
+            )
+            order_by = "ai_analysis.last_analyzed DESC, media.filename"
+
+        elif filter_key == "approved":
+            clauses.append(
+                """
+                (
+                    ai_analysis.review_status='approved'
+                    OR ai_analysis.trust_state='approved_real'
+                )
+                """
+            )
+            order_by = "ai_analysis.reviewed_at DESC, media.filename"
+
+        elif filter_key == "failed":
+            clauses.append(
+                """
+                (
+                    ai_analysis.failure_reason IS NOT NULL
+                    AND ai_analysis.failure_reason!=''
+                )
+                """
+            )
+            order_by = "ai_analysis.last_analyzed DESC, media.filename"
+
+        where = ""
+
+        if clauses:
+            where = "WHERE " + " AND ".join(clauses)
+
+        return where, params, order_by
+
+    ############################################################
+
+    def _local_day_utc_bounds(self, date_value=None):
+
+        local_zone = TimeService.local_timezone()
+        local_now = TimeService.to_local(
+            TimeService.utc_now_iso()
+        )
+        day = date_value or local_now.date()
+        local_start = datetime.combine(
+            day,
+            time.min,
+            tzinfo=local_zone
+        )
+        local_end = local_start + timedelta(days=1)
+        utc_start = local_start.astimezone(timezone.utc)
+        utc_end = local_end.astimezone(timezone.utc)
+
+        return (
+            utc_start.strftime("%Y-%m-%d %H:%M:%S"),
+            utc_end.strftime("%Y-%m-%d %H:%M:%S")
+        )
+
+    ############################################################
+
+    def _media_added_timestamp_expr(self):
+
+        return self._media_timestamp_expr(
+            "COALESCE(media.first_seen_at, media.date_added)"
+        )
+
+    ############################################################
+
+    def _media_timestamp_expr(self, field):
+
+        return (
+            "REPLACE(REPLACE(REPLACE("
+            f"{field}, "
+            "'T', ' '), '+00:00', ''), ' UTC', '')"
+        )
 
     ############################################################
 
@@ -2513,6 +2864,192 @@ class DatabaseManager:
 
     ############################################################
 
+    def get_priority_media_rows(
+        self,
+        limit=1000,
+        since_days=None,
+        include_photos=True,
+        include_videos=True,
+        only_unanalyzed=True,
+        include_failed=False,
+        force=False
+    ):
+
+        media_types = []
+
+        if include_photos:
+            media_types.append("image")
+
+        if include_videos:
+            media_types.append("video")
+
+        if not media_types:
+            return []
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        placeholders = ",".join("?" for _ in media_types)
+        clauses = [
+            f"media.media_type IN ({placeholders})"
+        ]
+        params = list(media_types)
+
+        if since_days is not None:
+            added_expr = self._media_added_timestamp_expr()
+            capture_expr = self._media_timestamp_expr("media.capture_time")
+            clauses.append(
+                f"""
+                (
+                    datetime({added_expr}) >= datetime('now', ?)
+                    OR datetime({capture_expr}) >= datetime('now', ?)
+                )
+                """
+            )
+            window = f"-{int(since_days)} days"
+            params.extend([window, window])
+
+        if only_unanalyzed:
+            clauses.append(
+                """
+                (
+                    ai_analysis.media_id IS NULL
+                    OR ai_analysis.failure_reason IS NOT NULL
+                    AND ai_analysis.failure_reason!=''
+                )
+                """
+            )
+
+        if not include_failed:
+            clauses.append(
+                """
+                (
+                    ai_analysis.failure_reason IS NULL
+                    OR ai_analysis.failure_reason=''
+                )
+                """
+            )
+
+        if not force:
+            clauses.append(
+                """
+                (
+                    ai_analysis.trust_state IS NULL
+                    OR ai_analysis.trust_state=''
+                    OR ai_analysis.trust_state NOT IN ('approved_real', 'corrected_real')
+                )
+                """
+            )
+
+        sql = f"""
+        SELECT
+            media.id,
+            media.filename,
+            media.path,
+            media.media_type,
+            COALESCE(media.first_seen_at, media.date_added) AS date_added,
+            media.date_added AS legacy_date_added,
+            media.first_seen_at,
+            media.file_created_at,
+            media.file_modified_at,
+            media.capture_time,
+            media.capture_time_source,
+            media.duration_seconds,
+            media.width,
+            media.height,
+            media.frame_rate,
+            media.orientation,
+            media.codec,
+            media.thumbnail_status,
+            ai_analysis.provider,
+            ai_analysis.model,
+            ai_analysis.failure_reason,
+            ai_analysis.trust_state,
+            ai_analysis.review_status
+        FROM media
+        LEFT JOIN ai_analysis
+        ON ai_analysis.media_id=media.id
+        WHERE {' AND '.join(clauses)}
+        ORDER BY
+            COALESCE(
+                media.capture_time,
+                media.first_seen_at,
+                media.date_added,
+                media.file_modified_at,
+                media.file_created_at
+            ) DESC,
+            media.id DESC
+        LIMIT ?
+        """
+        params.append(self._to_int(limit))
+        cur.execute(sql, tuple(params))
+        rows = [
+            dict(row)
+            for row in cur.fetchall()
+        ]
+        conn.close()
+
+        return rows
+
+    ############################################################
+
+    def recent_media_counts(self, since_days=None):
+
+        conn = self.connection()
+        cur = conn.cursor()
+        clauses = []
+        params = []
+
+        if since_days is not None:
+            added_expr = self._media_added_timestamp_expr()
+            capture_expr = self._media_timestamp_expr("media.capture_time")
+            clauses.append(
+                f"""
+                (
+                    datetime({added_expr}) >= datetime('now', ?)
+                    OR datetime({capture_expr}) >= datetime('now', ?)
+                )
+                """
+            )
+            window = f"-{int(since_days)} days"
+            params.extend([window, window])
+
+        where = (
+            "WHERE " + " AND ".join(clauses)
+            if clauses
+            else ""
+        )
+        cur.execute(f"""
+        SELECT
+            COUNT(*),
+            SUM(CASE WHEN media.media_type='image' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN media.media_type='video' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN ai_analysis.media_id IS NULL THEN 1 ELSE 0 END),
+            SUM(CASE WHEN ai_analysis.review_status='review_required' OR ai_analysis.trust_state='unreviewed_real' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN ai_analysis.review_status='approved' OR ai_analysis.trust_state='approved_real' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN ai_analysis.review_status='corrected' OR ai_analysis.trust_state='corrected_real' THEN 1 ELSE 0 END),
+            SUM(CASE WHEN ai_analysis.failure_reason IS NOT NULL AND ai_analysis.failure_reason!='' THEN 1 ELSE 0 END)
+        FROM media
+        LEFT JOIN ai_analysis
+        ON ai_analysis.media_id=media.id
+        {where}
+        """, tuple(params))
+        row = cur.fetchone() or (0, 0, 0, 0, 0, 0, 0, 0)
+        conn.close()
+
+        return {
+            "total": row[0] or 0,
+            "photos": row[1] or 0,
+            "videos": row[2] or 0,
+            "unanalyzed": row[3] or 0,
+            "review_required": row[4] or 0,
+            "approved": row[5] or 0,
+            "corrected": row[6] or 0,
+            "failed": row[7] or 0
+        }
+
+    ############################################################
+
     def analysis_review_metrics(self):
 
         conn = self.connection()
@@ -3073,6 +3610,117 @@ class DatabaseManager:
         conn.close()
 
         return count or 0
+
+    ############################################################
+
+    def save_video_intelligence(self, media_id, intelligence):
+
+        conn = self.connection()
+        cur = conn.cursor()
+        cur.execute("""
+
+        INSERT OR REPLACE INTO video_intelligence(
+
+            media_id,
+            duration_seconds,
+            analyzed_frame_count,
+            frame_timestamps,
+            people_observed,
+            apparatus_observed,
+            equipment_observed,
+            activities_observed,
+            settings_observed,
+            visible_text,
+            uncertain_observations,
+            likely_content_category,
+            confidence,
+            review_state,
+            provider,
+            model,
+            analysis_version,
+            raw_frame_outputs,
+            generated_at
+
+        )
+
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+
+        """,
+        (
+            self._to_int(media_id),
+            self._to_float(intelligence.get("duration_seconds")),
+            self._to_int(intelligence.get("analyzed_frame_count")),
+            self._to_json(intelligence.get("frame_timestamps")),
+            self._to_json(intelligence.get("people_observed")),
+            self._to_json(intelligence.get("apparatus_observed")),
+            self._to_json(intelligence.get("equipment_observed")),
+            self._to_json(intelligence.get("activities_observed")),
+            self._to_json(intelligence.get("settings_observed")),
+            self._to_json(intelligence.get("visible_text")),
+            self._to_json(intelligence.get("uncertain_observations")),
+            intelligence.get("likely_content_category", ""),
+            self._to_float(intelligence.get("confidence")),
+            intelligence.get("review_state", ""),
+            intelligence.get("provider", ""),
+            intelligence.get("model", ""),
+            intelligence.get("analysis_version", ""),
+            self._to_json(intelligence.get("raw_frame_outputs")),
+            TimeService.utc_now_iso()
+        ))
+        conn.commit()
+        conn.close()
+
+    ############################################################
+
+    def get_video_intelligence(self, media_id):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute("""
+        SELECT *
+        FROM video_intelligence
+        WHERE media_id=?
+        """, (self._to_int(media_id),))
+        row = cur.fetchone()
+        conn.close()
+
+        if row is None:
+            return None
+
+        return {
+            "media_id": row["media_id"],
+            "duration_seconds": row["duration_seconds"] or 0,
+            "analyzed_frame_count": row["analyzed_frame_count"] or 0,
+            "frame_timestamps": self._from_json(row["frame_timestamps"]),
+            "people_observed": self._from_json(row["people_observed"]),
+            "apparatus_observed": self._from_json(row["apparatus_observed"]),
+            "equipment_observed": self._from_json(row["equipment_observed"]),
+            "activities_observed": self._from_json(row["activities_observed"]),
+            "settings_observed": self._from_json(row["settings_observed"]),
+            "visible_text": self._from_json(row["visible_text"]),
+            "uncertain_observations": self._from_json(row["uncertain_observations"]),
+            "likely_content_category": row["likely_content_category"] or "",
+            "confidence": row["confidence"] or 0,
+            "review_state": row["review_state"] or "",
+            "provider": row["provider"] or "",
+            "model": row["model"] or "",
+            "analysis_version": row["analysis_version"] or "",
+            "raw_frame_outputs": self._from_json(row["raw_frame_outputs"]),
+            "generated_at": row["generated_at"] or ""
+        }
+
+    ############################################################
+
+    def video_intelligence_count(self):
+
+        conn = self.connection()
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM video_intelligence")
+        count = cur.fetchone()[0] or 0
+        conn.close()
+
+        return count
 
     ############################################################
 
@@ -8161,6 +8809,84 @@ class DatabaseManager:
 
     ############################################################
 
+    def _ensure_media_columns(self, cur):
+
+        cur.execute("PRAGMA table_info(media)")
+
+        columns = {
+            row[1]
+            for row in cur.fetchall()
+        }
+
+        additions = {
+            "file_created_at": "TEXT",
+            "file_modified_at": "TEXT",
+            "first_seen_at": "TEXT",
+            "capture_time": "TEXT",
+            "capture_time_source": "TEXT",
+            "duration_seconds": "REAL DEFAULT 0",
+            "width": "INTEGER DEFAULT 0",
+            "height": "INTEGER DEFAULT 0",
+            "frame_rate": "REAL DEFAULT 0",
+            "orientation": "TEXT",
+            "codec": "TEXT",
+            "thumbnail_status": "TEXT"
+        }
+
+        for name, definition in additions.items():
+
+            if name in columns:
+                continue
+
+            cur.execute(
+                f"ALTER TABLE media ADD COLUMN {name} {definition}"
+            )
+
+            logger.info(
+                "Added media column %s",
+                name
+            )
+
+        cur.execute("""
+        UPDATE media
+        SET first_seen_at=date_added
+        WHERE
+            (first_seen_at IS NULL OR first_seen_at='')
+            AND date_added IS NOT NULL
+            AND date_added!=''
+        """)
+
+    ############################################################
+
+    def _ensure_analysis_queue_columns(self, cur):
+
+        cur.execute("PRAGMA table_info(analysis_queue)")
+
+        columns = {
+            row[1]
+            for row in cur.fetchall()
+        }
+
+        additions = {
+            "priority_reason": "TEXT"
+        }
+
+        for name, definition in additions.items():
+
+            if name in columns:
+                continue
+
+            cur.execute(
+                f"ALTER TABLE analysis_queue ADD COLUMN {name} {definition}"
+            )
+
+            logger.info(
+                "Added analysis_queue column %s",
+                name
+            )
+
+    ############################################################
+
     def _ensure_ai_analysis_columns(self, cur):
 
         cur.execute("PRAGMA table_info(ai_analysis)")
@@ -8360,6 +9086,12 @@ class DatabaseManager:
             "CREATE INDEX IF NOT EXISTS idx_media_filename ON media(filename)",
             "CREATE INDEX IF NOT EXISTS idx_media_type ON media(media_type)",
             "CREATE INDEX IF NOT EXISTS idx_media_path ON media(path)",
+            "CREATE INDEX IF NOT EXISTS idx_media_first_seen ON media(first_seen_at)",
+            "CREATE INDEX IF NOT EXISTS idx_media_date_added ON media(date_added)",
+            "CREATE INDEX IF NOT EXISTS idx_media_capture_time ON media(capture_time)",
+            "CREATE INDEX IF NOT EXISTS idx_media_file_modified ON media(file_modified_at)",
+            "CREATE INDEX IF NOT EXISTS idx_video_intelligence_media ON video_intelligence(media_id)",
+            "CREATE INDEX IF NOT EXISTS idx_video_intelligence_review ON video_intelligence(review_state)",
             "CREATE INDEX IF NOT EXISTS idx_ai_model ON ai_analysis(model)",
             "CREATE INDEX IF NOT EXISTS idx_ai_provider ON ai_analysis(provider)",
             "CREATE INDEX IF NOT EXISTS idx_ai_last_analyzed ON ai_analysis(last_analyzed)",

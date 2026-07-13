@@ -36,6 +36,7 @@ def create_analysis_queue_tables(cur):
         media_type TEXT,
         state TEXT,
         priority INTEGER DEFAULT 0,
+        priority_reason TEXT,
         attempts INTEGER DEFAULT 0,
         force INTEGER DEFAULT 0,
         provider TEXT,

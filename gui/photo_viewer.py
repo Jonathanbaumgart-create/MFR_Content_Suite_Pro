@@ -1,8 +1,10 @@
 import customtkinter as ctk
 import threading
+import os
 
 from media.image_loader import ImageLoader
 from media.image_dimensions import ImageDimensions
+from media.thumbnail_cache import ThumbnailCache
 from services.brain_service import BrainService
 from services.editorial_comparison_service import EditorialComparisonService
 from services.human_feedback_service import HumanFeedbackService
@@ -37,6 +39,7 @@ class PhotoViewer(ctk.CTkToplevel):
         self.review = AnalysisReviewService()
         self.editorial = EditorialComparisonService()
         self.analysis = None
+        self.media_details = None
         self.intelligence = None
         self.fire_service_intelligence = None
         self.effective_intelligence = None
@@ -45,8 +48,11 @@ class PhotoViewer(ctk.CTkToplevel):
         self.image_load_token = 0
         self.resize_after_id = None
         self.image_panel_size = (1, 1)
+        self.thumbnail_cache = ThumbnailCache()
+        self.is_video = self._is_video_path(filepath)
 
         self.build_ui()
+        self.media_details = self.brain.db.get_media_details(media_id)
         self.load_source_image_async()
         self.load_analysis()
 
@@ -87,7 +93,11 @@ class PhotoViewer(ctk.CTkToplevel):
 
         self.preview = ctk.CTkLabel(
             self.image_frame,
-            text="Loading image..."
+            text=(
+                "Loading video preview..."
+                if self.is_video
+                else "Loading image..."
+            )
         )
 
         self.preview.pack(
@@ -96,6 +106,20 @@ class PhotoViewer(ctk.CTkToplevel):
             padx=20,
             pady=20
         )
+
+        if self.is_video:
+            self.system_player_button = ctk.CTkButton(
+                self.image_frame,
+                text="Open Video in System Player",
+                command=self.open_system_player
+            )
+            self.system_player_button.pack(
+                anchor="e",
+                padx=20,
+                pady=(0, 12)
+            )
+        else:
+            self.system_player_button = None
 
         self.image_frame.bind(
             "<Configure>",
@@ -154,7 +178,11 @@ class PhotoViewer(ctk.CTkToplevel):
 
         self.analyze_button = ctk.CTkButton(
             ai,
-            text="Analyze Photo",
+            text=(
+                "Analyze Video Metadata"
+                if self.is_video
+                else "Analyze Photo"
+            ),
             command=self.analyze_photo
         )
 
@@ -301,9 +329,21 @@ class PhotoViewer(ctk.CTkToplevel):
     def load_source_image_worker(self, token):
 
         try:
-            image = ImageLoader.load_pil_image(
-                self.filepath
-            )
+            if self.is_video:
+                thumbnail = self.thumbnail_cache.get_thumbnail(
+                    self.filepath
+                )
+
+                if thumbnail is None:
+                    image = None
+                else:
+                    image = ImageLoader.load_pil_image(
+                        thumbnail
+                    )
+            else:
+                image = ImageLoader.load_pil_image(
+                    self.filepath
+                )
             error = None
 
         except Exception as ex:
@@ -332,7 +372,20 @@ class PhotoViewer(ctk.CTkToplevel):
         if error is not None:
             self.preview.configure(
                 image=None,
-                text=f"Unable to open image:\n{error}"
+                text=(
+                    f"Unable to open video preview:\n{error}"
+                    if self.is_video
+                    else f"Unable to open image:\n{error}"
+                )
+            )
+            self.source_image = None
+            self.display_image = None
+            return
+
+        if image is None and self.is_video:
+            self.preview.configure(
+                image=None,
+                text=self.video_metadata_text()
             )
             self.source_image = None
             self.display_image = None
@@ -416,6 +469,8 @@ class PhotoViewer(ctk.CTkToplevel):
         analysis = self.brain.get_analysis(self.media_id)
 
         if analysis is None:
+            if self.is_video:
+                self.show_video_metadata_only()
             return
 
         self.show_analysis(analysis)
@@ -535,6 +590,16 @@ class PhotoViewer(ctk.CTkToplevel):
                 ] + intelligence_lines
             )
 
+        video_lines = self.video_intelligence_lines()
+
+        if video_lines:
+            lines.extend(
+                [
+                    "",
+                    "Video Intelligence"
+                ] + video_lines
+            )
+
         communications_lines = self.communications_intelligence_lines()
 
         if communications_lines:
@@ -589,6 +654,139 @@ class PhotoViewer(ctk.CTkToplevel):
         self.analysis_text.delete("1.0", "end")
         self.analysis_text.insert("1.0", "\n".join(lines))
         self.analysis_text.configure(state="disabled")
+
+    ##########################################################
+
+    def show_video_metadata_only(self):
+
+        details = self.media_details or {}
+        self.status.configure(
+            text="Status: Video metadata available"
+        )
+        self.analysis_text.configure(state="normal")
+        self.analysis_text.delete("1.0", "end")
+        self.analysis_text.insert(
+            "end",
+            self.video_metadata_text(details)
+        )
+        self.analysis_text.configure(state="disabled")
+
+    ##########################################################
+
+    def video_metadata_text(self, details=None):
+
+        details = details or self.media_details or {}
+        duration = self.duration_text(
+            details.get("duration_seconds", 0)
+        )
+        dimensions = self.dimensions_text(details)
+        lines = [
+            "Video Preview",
+            "",
+            f"Duration: {duration or 'Unknown'}",
+            f"Dimensions: {dimensions}",
+            f"Frame rate: {details.get('frame_rate', 0) or 'Unknown'}",
+            f"Orientation: {details.get('orientation', '') or 'Unknown'}",
+            f"Codec: {details.get('codec', '') or 'Unknown'}",
+            f"Imported: {TimeService.format_local(details.get('date_added', ''))}",
+            "",
+            "Video analysis is staged and requires human review before publication."
+        ]
+
+        return "\n".join(lines)
+
+    ##########################################################
+
+    def video_intelligence_lines(self):
+
+        if not self.is_video:
+            return []
+
+        details = self.media_details or {}
+
+        try:
+            video = self.brain.db.get_video_intelligence(
+                self.media_id
+            )
+        except Exception:
+            video = None
+
+        lines = [
+            f"Duration: {self.duration_text(details.get('duration_seconds', 0)) or 'Unknown'}",
+            f"Orientation: {details.get('orientation', '') or 'Unknown'}",
+            f"Dimensions: {self.dimensions_text(details)}",
+            f"Codec: {details.get('codec', '') or 'Unknown'}"
+        ]
+
+        if video:
+            lines.extend(
+                [
+                    f"Analyzed Frames: {video.get('analyzed_frame_count', 0)}",
+                    "Frame Timestamps: " + self.format_list(
+                        video.get("frame_timestamps")
+                    ),
+                    f"Likely Category: {video.get('likely_content_category', '')}",
+                    f"Review State: {video.get('review_state', '')}",
+                    "Uncertain Observations: " + self.format_list(
+                        video.get("uncertain_observations")
+                    )
+                ]
+            )
+        else:
+            lines.append(
+                "Review State: metadata available, not analyzed"
+            )
+
+        lines.append(
+            "Publishing Note: review footage manually before using as a Reel or short-form video."
+        )
+
+        return lines
+
+    ##########################################################
+
+    def duration_text(self, seconds):
+
+        seconds = int(float(seconds or 0))
+
+        if seconds <= 0:
+            return ""
+
+        minutes = seconds // 60
+        remainder = seconds % 60
+
+        return f"{minutes}:{remainder:02d}"
+
+    ##########################################################
+
+    def dimensions_text(self, details):
+
+        width = int(details.get("width") or 0)
+        height = int(details.get("height") or 0)
+
+        if width and height:
+            return f"{width} x {height}"
+
+        return "Unknown"
+
+    ##########################################################
+
+    def open_system_player(self):
+
+        try:
+            os.startfile(self.filepath)
+        except Exception as ex:
+            self.preview.configure(
+                text=f"Unable to open system player:\n{ex}"
+            )
+
+    ##########################################################
+
+    def _is_video_path(self, path):
+
+        return str(path).lower().endswith(
+            tuple(ThumbnailCache.VIDEO_EXTENSIONS)
+        )
 
     ##########################################################
 
