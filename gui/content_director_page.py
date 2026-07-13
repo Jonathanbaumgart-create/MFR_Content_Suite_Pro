@@ -8,6 +8,7 @@ from gui.photo_viewer import PhotoViewer
 from services.communications_director import CommunicationsDirector
 from services.communications_memory_service import CommunicationsMemoryService
 from services.communications_reasoning_service import CommunicationsReasoningService
+from services.communication_package_service import CommunicationPackageService
 from services.content_generation_service import ContentGenerationService
 from services.editorial_comparison_service import EditorialComparisonService
 from services.logging_service import LoggingService
@@ -27,6 +28,7 @@ class ContentDirectorPage(ctk.CTkFrame):
         self.reasoning_service = CommunicationsReasoningService(
             director=self.director
         )
+        self.communication_package_service = CommunicationPackageService()
         self.content_generation_service = ContentGenerationService()
         self.editorial_comparison_service = EditorialComparisonService()
         self.memory_service = CommunicationsMemoryService()
@@ -36,6 +38,8 @@ class ContentDirectorPage(ctk.CTkFrame):
         self.brief_cache = None
         self.package_cache = {}
         self.package_jobs = {}
+        self.package_preview_cache = {}
+        self.package_preview_jobs = {}
         self.strategy_cache = {}
         self.strategy_jobs = {}
         self.strategy_views = set()
@@ -1134,6 +1138,10 @@ class ContentDirectorPage(ctk.CTkFrame):
                 lambda: self.dismiss_strategy(opportunity, selected)
             ),
             (
+                "Package Preview",
+                lambda: self.generate_package_preview(opportunity)
+            ),
+            (
                 "Generate Communication Package",
                 lambda: self.generate_strategy_package(parent, opportunity)
             )
@@ -1143,9 +1151,9 @@ class ContentDirectorPage(ctk.CTkFrame):
             button = ctk.CTkButton(
                 controls,
                 text=label,
-                width=175,
-                command=command
-            )
+            width=175,
+            command=command
+        )
             button.pack(
                 side="left",
                 padx=(0, 8),
@@ -1169,6 +1177,144 @@ class ContentDirectorPage(ctk.CTkFrame):
                 opportunity,
                 start_row=7
             )
+
+    ##########################################################
+
+    def generate_package_preview(self, opportunity):
+
+        key = self.package_cache_key(opportunity)
+
+        if key in self.package_preview_cache:
+            self.show_package_preview(
+                self.package_preview_cache[key]
+            )
+            return
+
+        if key in self.package_preview_jobs:
+            return
+
+        self.status.configure(
+            text="Preparing package preview..."
+        )
+        future = self.executor.submit(
+            self.communication_package_service.generate_package,
+            opportunity,
+            "Facebook"
+        )
+        self.package_preview_jobs[key] = future
+        future.add_done_callback(
+            lambda item: self.enqueue_ui(
+                self.finish_package_preview,
+                key,
+                item
+            )
+        )
+
+    ##########################################################
+
+    def finish_package_preview(self, key, future):
+
+        if self._destroyed:
+            return
+
+        self.package_preview_jobs.pop(
+            key,
+            None
+        )
+
+        try:
+            package = future.result()
+        except Exception as ex:
+            logger.error(
+                "Communication package preview failed",
+                exc_info=(type(ex), ex, ex.__traceback__)
+            )
+            self.status.configure(
+                text=f"Package preview error: {ex}"
+            )
+            return
+
+        self.package_preview_cache[key] = package
+        self.status.configure(
+            text="Package preview ready."
+        )
+        self.show_package_preview(package)
+
+    ##########################################################
+
+    def show_package_preview(self, package):
+
+        window = ctk.CTkToplevel(self)
+        window.title("Communication Package Preview")
+        window.geometry("900x720")
+        window.transient(self.winfo_toplevel())
+        window.lift()
+
+        textbox = ctk.CTkTextbox(
+            window,
+            wrap="word"
+        )
+        textbox.pack(
+            fill="both",
+            expand=True,
+            padx=16,
+            pady=(16, 8)
+        )
+        textbox.insert(
+            "1.0",
+            self.package_preview_text(package)
+        )
+        textbox.configure(state="disabled")
+
+        ctk.CTkButton(
+            window,
+            text="Close",
+            command=window.destroy
+        ).pack(
+            anchor="e",
+            padx=16,
+            pady=(0, 16)
+        )
+
+    ##########################################################
+
+    def package_preview_text(self, package):
+
+        strategy = package.get("writing_strategy", {}) or {}
+        publishing = package.get("publishing_strategy", {}) or {}
+        media = package.get("media_package", {}) or {}
+        scoring = package.get("package_scoring", {}) or {}
+
+        return "\n\n".join(
+            [
+                "Top Story\n" + package.get("headline", ""),
+                "Audience\n" + self.format_values(package.get("audience", [])),
+                "Trust Level\n" + package.get("trust_label", ""),
+                "Platforms\n" + self.format_values(package.get("recommended_platforms", [])),
+                "Publishing Strategy\n" + publishing.get("decision_note", ""),
+                "Writing Strategy\n" + "\n".join(
+                    [
+                        f"Purpose: {strategy.get('purpose', '')}",
+                        f"Tone: {strategy.get('tone', '')}",
+                        f"Length: {strategy.get('length', '')}",
+                        f"CTA: {strategy.get('call_to_action_strategy', '')}",
+                        f"Visual: {strategy.get('visual_strategy', '')}",
+                        f"Notes: {strategy.get('platform_notes', '')}"
+                    ]
+                ),
+                "Supporting Media\n" + "\n".join(
+                    [
+                        "Primary photo: " + (media.get("primary_photo", {}).get("filename") or "None"),
+                        "Primary video: " + (media.get("primary_video", {}).get("filename") or "None"),
+                        "Gallery photos: " + self.media_names(media.get("gallery_photos", [])),
+                        "Gallery videos: " + self.media_names(media.get("gallery_videos", []))
+                    ]
+                ),
+                "Suggested Hashtags\n" + " ".join(package.get("suggested_hashtags", [])),
+                "Suggested CTA\n" + package.get("suggested_cta", ""),
+                "Package Score\n" + str(scoring)
+            ]
+        )
 
     ##########################################################
 
@@ -1956,6 +2102,31 @@ class ContentDirectorPage(ctk.CTkFrame):
             self.format_label(value)
             for value in values[:6]
         )
+
+    ##########################################################
+
+    def format_values(self, values):
+
+        if not values:
+            return "None"
+
+        return ", ".join(
+            self.format_label(value)
+            for value in values[:6]
+        )
+
+    ##########################################################
+
+    def media_names(self, media):
+
+        if not media:
+            return "None"
+
+        return ", ".join(
+            item.get("filename", "")
+            for item in media[:5]
+            if item.get("filename")
+        ) or "None"
 
     ##########################################################
 

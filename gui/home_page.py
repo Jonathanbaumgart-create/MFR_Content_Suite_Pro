@@ -2,6 +2,7 @@ import customtkinter as ctk
 import time
 
 from core.app_context import context
+from services.communication_package_service import CommunicationPackageService
 from services.communications_officer_service import CommunicationsOfficerService
 from services.logging_service import LoggingService
 from services.time_service import TimeService
@@ -17,7 +18,9 @@ class HomePage(ctk.CTkFrame):
         super().__init__(parent)
 
         self.service = CommunicationsOfficerService()
+        self.package_service = CommunicationPackageService()
         self.future = None
+        self.package_future = None
         self.brief = None
         self._refresh_after_id = None
         self._destroyed = False
@@ -309,6 +312,168 @@ class HomePage(ctk.CTkFrame):
         self.add_section(
             "Top Story: " + story.get("title", ""),
             lines
+        )
+        self.render_top_story_package_action(story)
+
+    ##########################################################
+
+    def render_top_story_package_action(self, story):
+
+        frame = ctk.CTkFrame(
+            self.content,
+            corner_radius=8
+        )
+        frame.pack(
+            fill="x",
+            padx=10,
+            pady=(0, 8)
+        )
+
+        label = ctk.CTkLabel(
+            frame,
+            text="Prepare a complete communication package from this Top Story.",
+            wraplength=850,
+            justify="left"
+        )
+        label.pack(
+            side="left",
+            padx=15,
+            pady=12
+        )
+
+        button = ctk.CTkButton(
+            frame,
+            text="Generate Package",
+            width=170,
+            command=lambda item=story: self.request_communication_package(item)
+        )
+        button.pack(
+            side="right",
+            padx=15,
+            pady=12
+        )
+
+    ##########################################################
+
+    def request_communication_package(self, story):
+
+        if self.package_future and not self.package_future.done():
+            return
+
+        self.status.configure(
+            text="Preparing communication package preview..."
+        )
+        self.package_future = context.job_manager.submit(
+            self.package_service.generate_package,
+            story,
+            package_type="Facebook"
+        )
+        self.after(150, self.check_package_future)
+
+    ##########################################################
+
+    def check_package_future(self):
+
+        if self._destroyed:
+            return
+
+        if self.package_future is None:
+            return
+
+        if not self.package_future.done():
+            self.after(150, self.check_package_future)
+            return
+
+        try:
+            package = self.package_future.result()
+        except Exception as ex:
+            logger.error(
+                "Communication package preview failed",
+                exc_info=(type(ex), ex, ex.__traceback__)
+            )
+            self.status.configure(
+                text=f"Package preview error: {ex}"
+            )
+            return
+
+        self.status.configure(
+            text="Communication package preview ready."
+        )
+        self.show_package_preview(package)
+
+    ##########################################################
+
+    def show_package_preview(self, package):
+
+        window = ctk.CTkToplevel(self)
+        window.title("Communication Package Preview")
+        window.geometry("900x720")
+        window.transient(self.winfo_toplevel())
+        window.lift()
+
+        textbox = ctk.CTkTextbox(
+            window,
+            wrap="word"
+        )
+        textbox.pack(
+            fill="both",
+            expand=True,
+            padx=16,
+            pady=(16, 8)
+        )
+        textbox.insert(
+            "1.0",
+            self.package_preview_text(package)
+        )
+        textbox.configure(state="disabled")
+
+        ctk.CTkButton(
+            window,
+            text="Close",
+            command=window.destroy
+        ).pack(
+            anchor="e",
+            padx=16,
+            pady=(0, 16)
+        )
+
+    ##########################################################
+
+    def package_preview_text(self, package):
+
+        strategy = package.get("writing_strategy", {}) or {}
+        media = package.get("media_package", {}) or {}
+        scoring = package.get("package_scoring", {}) or {}
+
+        return "\n\n".join(
+            [
+                "Top Story\n" + package.get("headline", ""),
+                "Audience\n" + self.format_list(package.get("audience", [])),
+                "Trust Level\n" + package.get("trust_label", ""),
+                "Platforms\n" + self.format_list(package.get("recommended_platforms", [])),
+                "Publishing Strategy\n" + str(package.get("publishing_strategy", {}).get("decision_note", "")),
+                "Writing Strategy\n" + "\n".join(
+                    [
+                        f"Purpose: {strategy.get('purpose', '')}",
+                        f"Tone: {strategy.get('tone', '')}",
+                        f"Length: {strategy.get('length', '')}",
+                        f"CTA: {strategy.get('call_to_action_strategy', '')}",
+                        f"Visual: {strategy.get('visual_strategy', '')}",
+                        f"Notes: {strategy.get('platform_notes', '')}"
+                    ]
+                ),
+                "Supporting Media\n" + "\n".join(
+                    [
+                        "Primary photo: " + (media.get("primary_photo", {}).get("filename") or "None"),
+                        "Primary video: " + (media.get("primary_video", {}).get("filename") or "None"),
+                        "Gallery photos: " + self.media_summary(media.get("gallery_photos", [])),
+                        "Gallery videos: " + self.media_summary(media.get("gallery_videos", []))
+                    ]
+                ),
+                "Suggested Hashtags\n" + " ".join(package.get("suggested_hashtags", [])),
+                "Suggested CTA\n" + package.get("suggested_cta", ""),
+                "Package Score\n" + str(scoring)
+            ]
         )
 
     ##########################################################
