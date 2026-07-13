@@ -1,4 +1,5 @@
 import customtkinter as ctk
+import time
 
 from core.app_context import context
 from services.communications_officer_service import CommunicationsOfficerService
@@ -204,6 +205,7 @@ class HomePage(ctk.CTkFrame):
 
     def render_brief(self):
 
+        render_started = time.perf_counter()
         self.clear_content()
 
         if not self.brief:
@@ -228,6 +230,14 @@ class HomePage(ctk.CTkFrame):
         self.render_new_media()
         self.render_videos_awaiting_review()
         self.render_memory_status()
+        profile = getattr(self.service, "last_metrics", {}).setdefault(
+            "profile",
+            {}
+        )
+        profile["tk_render_seconds"] = round(
+            time.perf_counter() - render_started,
+            3
+        )
 
     ##########################################################
 
@@ -244,6 +254,7 @@ class HomePage(ctk.CTkFrame):
                 (
                     f"{index}. {item.get('title', '')} - "
                     f"{item.get('confidence', 0)}% confidence - "
+                    f"{item.get('trust_label', 'Trust state unknown')} - "
                     f"{item.get('why_today_matters', '')}"
                 )
             )
@@ -269,6 +280,8 @@ class HomePage(ctk.CTkFrame):
             "Why today: " + story.get("why_today_matters", ""),
             "Why the public would care: " + story.get("why_public_would_care", ""),
             "Why it should outperform: " + story.get("why_it_should_outperform", ""),
+            "Trust: " + story.get("trust_label", "Trust state unknown"),
+            story.get("trust_summary", ""),
             "Platforms: " + self.format_list(story.get("recommended_platforms", [])),
             "Estimated audience: " + self.format_list(story.get("estimated_audience", [])),
             (
@@ -310,6 +323,7 @@ class HomePage(ctk.CTkFrame):
                 (
                     f"{story.get('title', '')}: "
                     f"{story.get('confidence', 0)}% confidence. "
+                    f"{story.get('trust_label', 'Trust state unknown')}. "
                     f"{story.get('why_it_should_outperform', '')}"
                 )
             )
@@ -333,8 +347,12 @@ class HomePage(ctk.CTkFrame):
             f"Corrected media: {summary.get('corrected_media_count', 0):,}",
             f"Failed analysis: {summary.get('failed_analysis_count', 0):,}",
             (
-                "Analyzed since last session window: "
+                "Analyzed since last Home session: "
                 f"{summary.get('media_analyzed_since_last_session', 0):,}"
+            ),
+            (
+                "Session source: " +
+                self.format_label(summary.get("media_analyzed_since_source", ""))
             )
         ]
 

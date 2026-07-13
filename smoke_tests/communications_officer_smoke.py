@@ -208,7 +208,7 @@ def main():
             db = DatabaseManager()
             seed(db)
             service = CommunicationsOfficerService(database=db)
-            brief = service.generate()
+            brief = service.generate(force=True)
 
             assert brief["title"] == "AI Communications Officer Morning Brief", brief
             assert brief["summary"]["new_media_added_yesterday"] >= 3, brief
@@ -223,6 +223,12 @@ def main():
             assert opportunities, brief
             top = opportunities[0]
             assert top["uses_reviewed_media"], top
+            assert top["trust_level"] in (
+                "reviewed",
+                "reviewed_with_unreviewed_support"
+            ), top
+            assert top["trust_label"], top
+            assert top["trust_summary"], top
             assert top["why_today_matters"], top
             assert top["why_public_would_care"], top
             assert top["why_it_should_outperform"], top
@@ -248,6 +254,22 @@ def main():
             assert brief["highest_confidence_editorial_recommendation"], brief
             assert brief["recommended_media_package"], brief
             assert service.last_metrics["ran_on_main_thread"] is True
+            assert service.last_metrics["editorial_metrics"]["context"] == "morning_brief"
+            assert service.last_metrics["editorial_metrics"]["candidate_limit"] == service.MORNING_BRIEF_CANDIDATE_LIMIT
+            assert service.last_metrics["editorial_metrics"]["returned_count"] <= service.MORNING_BRIEF_RECOMMENDATION_LIMIT
+            assert "profile" in service.last_metrics, service.last_metrics
+            assert service.last_metrics["profile"]["total_service_seconds"] >= 0
+
+            second = service.generate(force=True)
+            assert second["session"]["previous_completed_at"], second
+            assert (
+                second["summary"]["media_analyzed_since_source"] ==
+                "previous_completed_home_session"
+            ), second
+
+            cached = service.generate()
+            assert cached["session"]["session_id"] == second["session"]["session_id"], cached
+            assert service.last_metrics["cache_hit"] is True, service.last_metrics
 
         finally:
             os.chdir(original)

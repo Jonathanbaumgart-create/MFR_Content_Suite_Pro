@@ -33,7 +33,13 @@ class EditorialRecommendationService:
 
     ############################################################
 
-    def generate_recommendations(self, limit=DEFAULT_LIMIT, as_of=None):
+    def generate_recommendations(
+        self,
+        limit=DEFAULT_LIMIT,
+        as_of=None,
+        candidate_limit=None,
+        context="default"
+    ):
 
         started = time.perf_counter()
         limit = max(0, min(int(limit or self.DEFAULT_LIMIT), 10))
@@ -42,9 +48,11 @@ class EditorialRecommendationService:
         logger.info(
             (
                 "Editorial recommendation generation started limit=%s "
-                "scoring_version=%s main_thread=%s"
+                "candidate_limit=%s context=%s scoring_version=%s main_thread=%s"
             ),
             limit,
+            candidate_limit,
+            context,
             self.scoring.SCORING_VERSION,
             ran_on_main_thread
         )
@@ -57,14 +65,18 @@ class EditorialRecommendationService:
                 "candidate_count": 0,
                 "returned_count": 0,
                 "ran_on_main_thread": ran_on_main_thread,
-                "scoring_version": self.scoring.SCORING_VERSION
+                "scoring_version": self.scoring.SCORING_VERSION,
+                "candidate_limit": candidate_limit,
+                "context": context
             }
             return []
 
         try:
             candidate_started = time.perf_counter()
             candidates = self.candidates.build_candidates(
-                as_of=as_of
+                as_of=as_of,
+                limit=candidate_limit,
+                context=context
             )
             candidate_seconds = round(
                 time.perf_counter() - candidate_started,
@@ -83,6 +95,8 @@ class EditorialRecommendationService:
                 "returned_count": 0,
                 "ran_on_main_thread": ran_on_main_thread,
                 "scoring_version": self.scoring.SCORING_VERSION,
+                "candidate_limit": candidate_limit,
+                "context": context,
                 "error": str(ex)
             }
             return []
@@ -145,7 +159,9 @@ class EditorialRecommendationService:
             "confidence_min": min(confidence_values) if confidence_values else 0,
             "confidence_max": max(confidence_values) if confidence_values else 0,
             "ran_on_main_thread": ran_on_main_thread,
-            "scoring_version": self.scoring.SCORING_VERSION
+            "scoring_version": self.scoring.SCORING_VERSION,
+            "candidate_limit": candidate_limit,
+            "context": context
         }
 
         logger.info(

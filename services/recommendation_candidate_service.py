@@ -796,7 +796,7 @@ class RecommendationCandidateService:
 
     ############################################################
 
-    def build_candidates(self, as_of=None, limit=None):
+    def build_candidates(self, as_of=None, limit=None, context="default"):
 
         started = time.perf_counter()
         timings = {}
@@ -804,6 +804,7 @@ class RecommendationCandidateService:
             int(limit or self.MAX_CANDIDATES),
             self.MAX_CANDIDATES
         )
+        self._graph_term_cache = {}
         step = time.perf_counter()
         snapshot = self.context_engine.snapshot(as_of)
         timings["context_seconds"] = round(time.perf_counter() - step, 3)
@@ -927,7 +928,9 @@ class RecommendationCandidateService:
             "media_sample_count": len(media_rows),
             "candidate_count": len(profiles),
             "topic_candidate_count": len(topic_profiles),
-            "limit": limit
+            "limit": limit,
+            "context": context,
+            "graph_cache_terms": len(getattr(self, "_graph_term_cache", {}))
         }
         logger.info(
             (
@@ -1323,31 +1326,49 @@ class RecommendationCandidateService:
         if not terms:
             return set()
 
-        try:
-            context = self.graph.reasoning_context(list(terms)[:40])
-        except Exception:
-            return set()
+        cache = getattr(self, "_graph_term_cache", None)
+        if cache is None:
+            cache = {}
+            self._graph_term_cache = cache
 
         values = []
+        ordered_terms = [
+            term
+            for term in sorted(terms)
+            if term
+        ][:40]
 
-        for key in (
-            "operational_skills",
-            "communications_intent",
-            "campaigns"
-        ):
-            values.extend(context.get(key) or [])
+        for term in ordered_terms:
+            if term not in cache:
+                try:
+                    context = self.graph.reasoning_context([term])
+                except Exception:
+                    context = {}
 
-        for rows in context.get("expanded_terms", {}).values():
-            values.extend(
-                row.get("name", "")
-                for row in rows
-            )
+                term_values = []
 
-        return {
-            self._token(value)
-            for value in values
-            if self._token(value)
-        }
+                for key in (
+                    "operational_skills",
+                    "communications_intent",
+                    "campaigns"
+                ):
+                    term_values.extend(context.get(key) or [])
+
+                for rows in context.get("expanded_terms", {}).values():
+                    term_values.extend(
+                        row.get("name", "")
+                        for row in rows
+                    )
+
+                cache[term] = {
+                    self._token(value)
+                    for value in term_values
+                    if self._token(value)
+                }
+
+            values.extend(cache.get(term, set()))
+
+        return set(values)
 
     ############################################################
 

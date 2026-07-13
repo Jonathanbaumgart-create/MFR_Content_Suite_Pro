@@ -476,6 +476,32 @@ class DatabaseManager:
         """)
 
         ########################################################
+        # Home / Morning Brief Sessions
+        ########################################################
+
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS home_sessions(
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            started_at TEXT,
+
+            completed_at TEXT,
+
+            status TEXT,
+
+            duration_seconds REAL DEFAULT 0,
+
+            summary_json TEXT,
+
+            metrics_json TEXT
+
+        )
+
+        """)
+
+        ########################################################
         # Recommendation Feedback
         ########################################################
 
@@ -4761,6 +4787,166 @@ class DatabaseManager:
             "corrected_media_count": corrected,
             "failed_analysis_count": failed,
             "videos_awaiting_review": videos_awaiting_review,
+            "communications_memory_posts": memory_posts,
+            "communications_memory_latest_post": latest_post,
+            "recommendation_history_count": recommendation_history
+        }
+
+    ############################################################
+
+    def create_home_session(self, started_at=None):
+
+        started_at = started_at or TimeService.utc_now_iso()
+        conn = self.connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+        INSERT INTO home_sessions(
+            started_at,
+            status
+        )
+        VALUES(?,?)
+        """, (
+            started_at,
+            "running"
+        ))
+
+        session_id = cur.lastrowid
+        conn.commit()
+        conn.close()
+
+        return session_id
+
+    ############################################################
+
+    def complete_home_session(
+        self,
+        session_id,
+        status="completed",
+        completed_at=None,
+        duration_seconds=0,
+        summary=None,
+        metrics=None
+    ):
+
+        conn = self.connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+        UPDATE home_sessions
+        SET completed_at=?,
+            status=?,
+            duration_seconds=?,
+            summary_json=?,
+            metrics_json=?
+        WHERE id=?
+        """, (
+            completed_at or TimeService.utc_now_iso(),
+            status,
+            self._to_float(duration_seconds),
+            self._to_json(summary or {}),
+            self._to_json(metrics or {}),
+            self._to_int(session_id)
+        ))
+
+        conn.commit()
+        conn.close()
+
+    ############################################################
+
+    def latest_completed_home_session(self, before_session_id=None):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        params = []
+        where = """
+        WHERE status='completed'
+        AND completed_at IS NOT NULL
+        AND completed_at!=''
+        """
+
+        if before_session_id:
+            where += " AND id < ?"
+            params.append(self._to_int(before_session_id))
+
+        cur.execute(f"""
+        SELECT *
+        FROM home_sessions
+        {where}
+        ORDER BY datetime(REPLACE(REPLACE(completed_at, 'T', ' '), '+00:00', '')) DESC,
+                 id DESC
+        LIMIT 1
+        """, tuple(params))
+
+        row = cur.fetchone()
+        conn.close()
+
+        if not row:
+            return {}
+
+        return {
+            "id": row["id"],
+            "started_at": row["started_at"] or "",
+            "completed_at": row["completed_at"] or "",
+            "status": row["status"] or "",
+            "duration_seconds": row["duration_seconds"] or 0,
+            "summary": self._from_json(row["summary_json"]),
+            "metrics": self._from_json(row["metrics_json"])
+        }
+
+    ############################################################
+
+    def media_analyzed_count_since(self, since_utc=None):
+
+        since = since_utc or "1970-01-01T00:00:00+00:00"
+        conn = self.connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+        SELECT COUNT(*)
+        FROM ai_analysis
+        WHERE datetime(REPLACE(REPLACE(last_analyzed, 'T', ' '), '+00:00', '')) >= datetime(?)
+        """, (since,))
+
+        count = cur.fetchone()[0] or 0
+        conn.close()
+
+        return count
+
+    ############################################################
+
+    def communications_memory_metrics(self):
+
+        conn = self.connection()
+        cur = conn.cursor()
+
+        cur.execute("SELECT COUNT(*) FROM social_posts")
+        memory_posts = cur.fetchone()[0] or 0
+
+        cur.execute("""
+        SELECT MAX(post_date)
+        FROM social_posts
+        WHERE post_date IS NOT NULL
+        AND post_date!=''
+        """)
+        latest_post = cur.fetchone()[0] or ""
+
+        if not latest_post:
+            cur.execute("""
+            SELECT MAX(published_at)
+            FROM communication_deliveries
+            WHERE published_at IS NOT NULL
+            AND published_at!=''
+            """)
+            latest_post = cur.fetchone()[0] or ""
+
+        cur.execute("SELECT COUNT(*) FROM recommendation_history")
+        recommendation_history = cur.fetchone()[0] or 0
+
+        conn.close()
+
+        return {
             "communications_memory_posts": memory_posts,
             "communications_memory_latest_post": latest_post,
             "recommendation_history_count": recommendation_history
@@ -9422,6 +9608,9 @@ class DatabaseManager:
             "CREATE INDEX IF NOT EXISTS idx_recommendation_history_media ON recommendation_history(media_id)",
             "CREATE INDEX IF NOT EXISTS idx_recommendation_history_date ON recommendation_history(recommendation_date)",
             "CREATE INDEX IF NOT EXISTS idx_recommendation_history_opportunity ON recommendation_history(opportunity)",
+            "CREATE INDEX IF NOT EXISTS idx_home_sessions_status ON home_sessions(status)",
+            "CREATE INDEX IF NOT EXISTS idx_home_sessions_completed ON home_sessions(completed_at)",
+            "CREATE INDEX IF NOT EXISTS idx_home_sessions_started ON home_sessions(started_at)",
             "CREATE INDEX IF NOT EXISTS idx_recommendation_feedback_rec ON recommendation_feedback(recommendation_id)",
             "CREATE INDEX IF NOT EXISTS idx_recommendation_feedback_media ON recommendation_feedback(media_id)",
             "CREATE INDEX IF NOT EXISTS idx_recommendation_feedback_type ON recommendation_feedback(feedback_type)",

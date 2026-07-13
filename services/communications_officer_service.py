@@ -17,7 +17,10 @@ logger = LoggingService.get_logger("content")
 class CommunicationsOfficerService:
 
     RECOMMENDATION_LIMIT = 10
+    MORNING_BRIEF_RECOMMENDATION_LIMIT = 5
+    MORNING_BRIEF_CANDIDATE_LIMIT = 160
     PACKAGE_ASSET_LIMIT = 20
+    CACHE_TTL_SECONDS = 300
 
     def __init__(
         self,
@@ -42,50 +45,160 @@ class CommunicationsOfficerService:
             database=self.db
         )
         self.last_metrics = {}
+        self._brief_cache = None
 
     ############################################################
 
-    def generate(self, now=None):
+    def generate(self, now=None, force=False):
 
         started = perf_time.perf_counter()
         ran_on_main_thread = threading.current_thread() is threading.main_thread()
         now = now or TimeService.utc_now()
         local_now = TimeService.to_local(now) or now
+        cached = self._cached_brief(local_now)
+
+        if cached and not force:
+            self.last_metrics = {
+                **cached.get("_metrics", {}),
+                "cache_hit": True,
+                "total_seconds": round(perf_time.perf_counter() - started, 3),
+                "ran_on_main_thread": ran_on_main_thread
+            }
+            return cached["brief"]
+
         yesterday_start, yesterday_end = self._previous_local_day_bounds(
             local_now
         )
         generated_at = TimeService.utc_now_iso()
+        profile = {}
+        session_id = None
+        session_started_at = TimeService.utc_now_iso()
+        previous_session = {}
+        since_source = "no_previous_home_session_yesterday_fallback"
 
-        metrics = self.db.communications_officer_metrics(
-            since_utc=yesterday_start.isoformat(timespec="seconds")
-        )
-        metrics["new_media_added_yesterday"] = self.db.media_added_count_between(
-            yesterday_start.isoformat(timespec="seconds"),
-            yesterday_end.isoformat(timespec="seconds")
-        )
-        memory_status = self._memory_status(metrics)
-        priority_snapshot = self.priority.preview("today")
+        try:
+            step = perf_time.perf_counter()
+            session_id = self.db.create_home_session(session_started_at)
+            previous_session = self.db.latest_completed_home_session(
+                before_session_id=session_id
+            )
+            profile["home_session_lookup_seconds"] = round(
+                perf_time.perf_counter() - step,
+                3
+            )
 
-        editorial_recommendations = self.editorial.generate_recommendations(
-            limit=self.RECOMMENDATION_LIMIT,
-            as_of=local_now
-        )
-        opportunities = self._rank_opportunities(
-            editorial_recommendations,
-            memory_status,
-            priority_snapshot
-        )
+            since_utc = yesterday_start.isoformat(timespec="seconds")
 
-        top_story = opportunities[0] if opportunities else self._empty_story()
-        secondary = opportunities[1:4]
+            if previous_session.get("completed_at"):
+                since_utc = previous_session["completed_at"]
+                since_source = "previous_completed_home_session"
 
-        brief = {
+            step = perf_time.perf_counter()
+            metrics = self.db.communications_officer_metrics(
+                since_utc=since_utc
+            )
+            profile["communications_metrics_query_seconds"] = round(
+                perf_time.perf_counter() - step,
+                3
+            )
+
+            step = perf_time.perf_counter()
+            metrics["media_analyzed_since"] = self.db.media_analyzed_count_since(
+                since_utc
+            )
+            profile["analyzed_since_session_query_seconds"] = round(
+                perf_time.perf_counter() - step,
+                3
+            )
+
+            step = perf_time.perf_counter()
+            metrics["new_media_added_yesterday"] = self.db.media_added_count_between(
+                yesterday_start.isoformat(timespec="seconds"),
+                yesterday_end.isoformat(timespec="seconds")
+            )
+            profile["yesterday_media_query_seconds"] = round(
+                perf_time.perf_counter() - step,
+                3
+            )
+
+            step = perf_time.perf_counter()
+            metrics.update(self.db.communications_memory_metrics())
+            memory_status = self._memory_status(metrics)
+            profile["communications_memory_query_seconds"] = round(
+                perf_time.perf_counter() - step,
+                3
+            )
+
+            step = perf_time.perf_counter()
+            priority_snapshot = self.priority.preview("today")
+            profile["media_priority_query_seconds"] = round(
+                perf_time.perf_counter() - step,
+                3
+            )
+
+            step = perf_time.perf_counter()
+            editorial_recommendations = self.editorial.generate_recommendations(
+                limit=self.MORNING_BRIEF_RECOMMENDATION_LIMIT,
+                candidate_limit=self.MORNING_BRIEF_CANDIDATE_LIMIT,
+                context="morning_brief",
+                as_of=local_now
+            )
+            editorial_seconds = round(perf_time.perf_counter() - step, 3)
+            editorial_metrics = getattr(self.editorial, "last_metrics", {})
+            profile["editorial_recommendation_seconds"] = editorial_seconds
+            profile["editorial_candidate_generation_seconds"] = editorial_metrics.get(
+                "candidate_seconds",
+                0
+            )
+            profile["editorial_scoring_seconds"] = editorial_metrics.get(
+                "scoring_seconds",
+                0
+            )
+            profile["editorial_diversity_pruning_count"] = editorial_metrics.get(
+                "diversity_pruned_count",
+                0
+            )
+
+            step = perf_time.perf_counter()
+            self._active_profile = profile
+            try:
+                opportunities = self._rank_opportunities(
+                    editorial_recommendations,
+                    memory_status,
+                    priority_snapshot
+                )
+            finally:
+                self._active_profile = None
+            profile["media_package_lookup_seconds"] = round(
+                perf_time.perf_counter() - step,
+                3
+            )
+            profile.setdefault("department_knowledge_lookup_seconds", 0)
+
+            step = perf_time.perf_counter()
+            top_story = opportunities[0] if opportunities else self._empty_story()
+            secondary = opportunities[1:4]
+
+            profile["home_dto_construction_seconds"] = round(
+                perf_time.perf_counter() - step,
+                3
+            )
+
+            brief = {
             "title": "AI Communications Officer Morning Brief",
             "generated_at": generated_at,
             "current_date": local_now.strftime("%A, %B %d, %Y"),
+            "session": {
+                "session_id": session_id,
+                "started_at": session_started_at,
+                "previous_completed_at": previous_session.get("completed_at", ""),
+                "analyzed_since_source": since_source,
+                "analyzed_since_utc": since_utc
+            },
             "summary": {
                 "new_media_added_yesterday": metrics["new_media_added_yesterday"],
                 "media_analyzed_since_last_session": metrics["media_analyzed_since"],
+                "media_analyzed_since_source": since_source,
                 "review_queue_size": metrics["review_queue_size"],
                 "approved_media_count": metrics["approved_media_count"],
                 "corrected_media_count": metrics["corrected_media_count"],
@@ -137,16 +250,47 @@ class CommunicationsOfficerService:
                 metrics,
                 memory_status
             )
-        }
+            }
 
-        elapsed = round(perf_time.perf_counter() - started, 3)
-        self.last_metrics = {
-            "total_seconds": elapsed,
-            "recommendation_count": len(editorial_recommendations),
-            "opportunity_count": len(opportunities),
-            "ran_on_main_thread": ran_on_main_thread,
-            "editorial_metrics": getattr(self.editorial, "last_metrics", {})
-        }
+            elapsed = round(perf_time.perf_counter() - started, 3)
+            profile["total_service_seconds"] = elapsed
+            profile["tk_render_seconds"] = 0
+            self.last_metrics = {
+                "total_seconds": elapsed,
+                "cache_hit": False,
+                "recommendation_count": len(editorial_recommendations),
+                "opportunity_count": len(opportunities),
+                "ran_on_main_thread": ran_on_main_thread,
+                "editorial_metrics": editorial_metrics,
+                "profile": profile,
+                "session_id": session_id
+            }
+            self.db.complete_home_session(
+                session_id,
+                status="completed",
+                completed_at=TimeService.utc_now_iso(),
+                duration_seconds=elapsed,
+                summary=brief.get("summary", {}),
+                metrics=self.last_metrics
+            )
+            self._brief_cache = {
+                "local_date": local_now.date().isoformat(),
+                "created_at": perf_time.perf_counter(),
+                "brief": brief,
+                "_metrics": self.last_metrics
+            }
+
+        except Exception:
+            elapsed = round(perf_time.perf_counter() - started, 3)
+            if session_id:
+                self.db.complete_home_session(
+                    session_id,
+                    status="failed",
+                    completed_at=TimeService.utc_now_iso(),
+                    duration_seconds=elapsed,
+                    metrics={"profile": profile}
+                )
+            raise
 
         logger.info(
             (
@@ -160,6 +304,25 @@ class CommunicationsOfficerService:
         )
 
         return brief
+
+    ############################################################
+
+    def _cached_brief(self, local_now):
+
+        cache = self._brief_cache or {}
+
+        if not cache:
+            return None
+
+        if cache.get("local_date") != local_now.date().isoformat():
+            return None
+
+        age = perf_time.perf_counter() - cache.get("created_at", 0)
+
+        if age > self.CACHE_TTL_SECONDS:
+            return None
+
+        return cache
 
     ############################################################
 
@@ -231,6 +394,33 @@ class CommunicationsOfficerService:
         if not selected_assets:
             return None
 
+        approved_count = sum(
+            1
+            for asset in selected_assets
+            if (
+                asset.get("trust_state") == "approved_real"
+                or asset.get("review_status") == "approved"
+            )
+        )
+        corrected_count = sum(
+            1
+            for asset in selected_assets
+            if (
+                asset.get("trust_state") == "corrected_real"
+                or asset.get("review_status") == "corrected"
+            )
+        )
+        unreviewed_count = sum(
+            1
+            for asset in selected_assets
+            if not self._is_reviewed(asset)
+        )
+        trust_level = self._trust_level(
+            approved_count,
+            corrected_count,
+            unreviewed_count
+        )
+
         package = self._media_package(
             recommendation,
             selected_assets
@@ -294,11 +484,20 @@ class CommunicationsOfficerService:
                 memory_status,
                 priority_snapshot
             ),
+            "trust_level": trust_level,
+            "trust_label": self._trust_label(trust_level),
+            "trust_summary": self._trust_summary(
+                approved_count,
+                corrected_count,
+                unreviewed_count
+            ),
             "uses_reviewed_media": bool(reviewed_assets),
             "timing_active": timing["active"],
             "timing_reason": timing["reason"],
             "reviewed_media_count": len(reviewed_assets),
-            "unreviewed_media_count": max(0, len(selected_assets) - len(reviewed_assets))
+            "approved_media_count": approved_count,
+            "corrected_media_count": corrected_count,
+            "unreviewed_media_count": unreviewed_count
         }
 
     ############################################################
@@ -367,6 +566,50 @@ class CommunicationsOfficerService:
             "content_tags": asset.get("content_tags", [])[:6],
             "recommended_uses": asset.get("recommended_uses", [])[:5]
         }
+
+    ############################################################
+
+    def _trust_level(self, approved_count, corrected_count, unreviewed_count):
+
+        if approved_count or corrected_count:
+            if unreviewed_count:
+                return "reviewed_with_unreviewed_support"
+
+            return "reviewed"
+
+        if unreviewed_count:
+            return "fallback_unreviewed"
+
+        return "unknown"
+
+    def _trust_label(self, trust_level):
+
+        labels = {
+            "reviewed": "Reviewed evidence",
+            "reviewed_with_unreviewed_support": "Reviewed evidence with limited unreviewed support",
+            "fallback_unreviewed": "Fallback: unreviewed evidence",
+            "unknown": "Trust state unknown"
+        }
+
+        return labels.get(trust_level, labels["unknown"])
+
+    def _trust_summary(self, approved_count, corrected_count, unreviewed_count):
+
+        parts = []
+
+        if approved_count:
+            parts.append(f"{approved_count} approved")
+
+        if corrected_count:
+            parts.append(f"{corrected_count} corrected")
+
+        if unreviewed_count:
+            parts.append(f"{unreviewed_count} unreviewed")
+
+        if not parts:
+            return "No trust-reviewed media in this package."
+
+        return "Package evidence: " + ", ".join(parts) + "."
 
     ############################################################
 
@@ -655,7 +898,18 @@ class CommunicationsOfficerService:
             return None
 
         for table in ("programs", "annual_events"):
-            for item in self.knowledge.items(table):
+            lookup_started = perf_time.perf_counter()
+            items = self.knowledge.items(table)
+            profile = getattr(self, "_active_profile", None)
+
+            if profile is not None:
+                profile["department_knowledge_lookup_seconds"] = round(
+                    profile.get("department_knowledge_lookup_seconds", 0) +
+                    (perf_time.perf_counter() - lookup_started),
+                    3
+                )
+
+            for item in items:
                 name = item.get("name", "")
 
                 if not name:
