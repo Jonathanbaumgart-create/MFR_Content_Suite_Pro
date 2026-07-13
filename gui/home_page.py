@@ -3,6 +3,7 @@ import time
 
 from core.app_context import context
 from services.communication_package_service import CommunicationPackageService
+from services.communications_intelligence_service import CommunicationsIntelligenceService
 from services.communications_officer_service import CommunicationsOfficerService
 from services.content_generation_service import ContentGenerationService
 from services.logging_service import LoggingService
@@ -21,9 +22,12 @@ class HomePage(ctk.CTkFrame):
         self.service = CommunicationsOfficerService()
         self.package_service = CommunicationPackageService()
         self.content_generation_service = ContentGenerationService()
+        self.communications_intelligence_service = CommunicationsIntelligenceService()
         self.future = None
         self.package_future = None
         self.content_future = None
+        self.communications_intelligence_future = None
+        self.communications_intelligence_profile = None
         self.brief = None
         self._refresh_after_id = None
         self._destroyed = False
@@ -122,6 +126,8 @@ class HomePage(ctk.CTkFrame):
         self.future = context.job_manager.submit(
             self.service.generate
         )
+        self.communications_intelligence_future = None
+        self.communications_intelligence_profile = None
 
         logger.info("Communications Officer Morning Brief refresh queued")
         self.after(150, self.check_brief_future)
@@ -236,6 +242,7 @@ class HomePage(ctk.CTkFrame):
         self.render_new_media()
         self.render_videos_awaiting_review()
         self.render_memory_status()
+        self.render_communications_intelligence_status()
         profile = getattr(self.service, "last_metrics", {}).setdefault(
             "profile",
             {}
@@ -745,6 +752,100 @@ class HomePage(ctk.CTkFrame):
             "Communications Memory Status",
             lines
         )
+
+    ##########################################################
+
+    def render_communications_intelligence_status(self):
+
+        profile = self.communications_intelligence_profile or {}
+
+        if profile:
+            lines = [
+                (
+                    "Learning from approved communications: "
+                    f"{profile.get('approved_communication_count', 0):,}"
+                ),
+                (
+                    "Approved edit learning samples: "
+                    f"{profile.get('approved_edit_count', 0):,}"
+                ),
+                (
+                    "Department voice confidence: "
+                    f"{profile.get('learning_confidence', 0)}%"
+                ),
+                (
+                    "Voice: " +
+                    (profile.get("department_voice", "") or "Insufficient history")
+                ),
+                (
+                    "Last updated: " +
+                    (
+                        TimeService.format_local(
+                            profile.get("last_profile_update", "")
+                        ) or
+                        profile.get("last_profile_update", "") or
+                        "Not built yet"
+                    )
+                )
+            ]
+        else:
+            lines = [
+                "Preparing Department Communications Profile...",
+                "Home remains usable while communication intelligence loads."
+            ]
+
+        self.add_section(
+            "Communications Intelligence Status",
+            lines
+        )
+
+        if profile or self.communications_intelligence_future:
+            return
+
+        self.communications_intelligence_future = context.job_manager.submit(
+            self.communications_intelligence_service.profile
+        )
+        self.after(150, self.check_communications_intelligence_future)
+
+    ##########################################################
+
+    def check_communications_intelligence_future(self):
+
+        if self._destroyed:
+            return
+
+        if self.communications_intelligence_future is None:
+            return
+
+        if not self.communications_intelligence_future.done():
+            self.after(150, self.check_communications_intelligence_future)
+            return
+
+        try:
+            self.communications_intelligence_profile = (
+                self.communications_intelligence_future.result()
+            )
+
+        except Exception as ex:
+            logger.error(
+                "Communications Intelligence status failed",
+                exc_info=(
+                    type(ex),
+                    ex,
+                    ex.__traceback__
+                )
+            )
+            self.communications_intelligence_profile = {
+                "department_voice": f"Unavailable: {ex}",
+                "learning_confidence": 0,
+                "approved_communication_count": 0,
+                "approved_edit_count": 0
+            }
+
+        self.communications_intelligence_future = None
+
+        if self.brief:
+            self.render_brief()
 
     ##########################################################
 

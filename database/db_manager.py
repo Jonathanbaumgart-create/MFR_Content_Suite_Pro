@@ -1043,6 +1043,56 @@ class DatabaseManager:
 
         """)
 
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS communications_intelligence_profiles(
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            profile_type TEXT,
+
+            profile_key TEXT,
+
+            version TEXT,
+
+            generated_at TEXT,
+
+            sample_count INTEGER DEFAULT 0,
+
+            confidence INTEGER DEFAULT 0,
+
+            profile_json TEXT,
+
+            source_summary_json TEXT
+
+        )
+
+        """)
+
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS communication_edit_learning(
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            platform TEXT,
+
+            original_text TEXT,
+
+            final_text TEXT,
+
+            change_summary_json TEXT,
+
+            source TEXT,
+
+            approved INTEGER DEFAULT 1,
+
+            created_at TEXT
+
+        )
+
+        """)
+
         create_analysis_queue_tables(cur)
         create_communication_tables(cur)
 
@@ -7923,6 +7973,153 @@ class DatabaseManager:
 
     ############################################################
 
+    def save_communications_intelligence_profile(self, profile):
+
+        conn = self.connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+        INSERT INTO communications_intelligence_profiles(
+            profile_type,
+            profile_key,
+            version,
+            generated_at,
+            sample_count,
+            confidence,
+            profile_json,
+            source_summary_json
+        )
+        VALUES(?,?,?,?,?,?,?,?)
+        """, (
+            profile.get("profile_type", "department"),
+            profile.get("profile_key", "morden_fire_rescue"),
+            profile.get("version", ""),
+            profile.get("generated_at", TimeService.utc_now_iso()),
+            self._to_int(profile.get("sample_count")),
+            self._to_int(profile.get("confidence")),
+            self._to_json(profile.get("profile", {})),
+            self._to_json(profile.get("source_summary", {}))
+        ))
+
+        profile_id = cur.lastrowid
+        conn.commit()
+        conn.close()
+
+        return profile_id
+
+    ############################################################
+
+    def latest_communications_intelligence_profile(
+        self,
+        profile_type="department",
+        profile_key="morden_fire_rescue"
+    ):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+
+        cur.execute("""
+        SELECT *
+        FROM communications_intelligence_profiles
+        WHERE profile_type=?
+        AND profile_key=?
+        ORDER BY datetime(REPLACE(REPLACE(generated_at, 'T', ' '), '+00:00', '')) DESC,
+                 id DESC
+        LIMIT 1
+        """, (
+            profile_type,
+            profile_key
+        ))
+
+        row = cur.fetchone()
+        conn.close()
+
+        if not row:
+            return {}
+
+        return {
+            "id": row["id"],
+            "profile_type": row["profile_type"] or "",
+            "profile_key": row["profile_key"] or "",
+            "version": row["version"] or "",
+            "generated_at": row["generated_at"] or "",
+            "sample_count": row["sample_count"] or 0,
+            "confidence": row["confidence"] or 0,
+            "profile": self._from_json(row["profile_json"]),
+            "source_summary": self._from_json(row["source_summary_json"])
+        }
+
+    ############################################################
+
+    def save_communication_edit_learning(self, edit):
+
+        conn = self.connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+        INSERT INTO communication_edit_learning(
+            platform,
+            original_text,
+            final_text,
+            change_summary_json,
+            source,
+            approved,
+            created_at
+        )
+        VALUES(?,?,?,?,?,?,?)
+        """, (
+            edit.get("platform", ""),
+            edit.get("original_text", ""),
+            edit.get("final_text", ""),
+            self._to_json(edit.get("change_summary", {})),
+            edit.get("source", ""),
+            self._to_int(edit.get("approved", 1)),
+            edit.get("created_at", TimeService.utc_now_iso())
+        ))
+
+        edit_id = cur.lastrowid
+        conn.commit()
+        conn.close()
+
+        return edit_id
+
+    ############################################################
+
+    def communication_edit_learning_samples(self, limit=500):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+
+        cur.execute("""
+        SELECT *
+        FROM communication_edit_learning
+        WHERE approved=1
+        ORDER BY datetime(REPLACE(REPLACE(created_at, 'T', ' '), '+00:00', '')) DESC,
+                 id DESC
+        LIMIT ?
+        """, (self._to_int(limit),))
+
+        rows = cur.fetchall()
+        conn.close()
+
+        return [
+            {
+                "id": row["id"],
+                "platform": row["platform"] or "",
+                "original_text": row["original_text"] or "",
+                "final_text": row["final_text"] or "",
+                "change_summary": self._from_json(row["change_summary_json"]),
+                "source": row["source"] or "",
+                "approved": row["approved"] or 0,
+                "created_at": row["created_at"] or ""
+            }
+            for row in rows
+        ]
+
+    ############################################################
+
     def media_usage_summary(self, media_id):
 
         conn = self.connection()
@@ -9659,6 +9856,10 @@ class DatabaseManager:
             "CREATE INDEX IF NOT EXISTS idx_media_usage_post ON media_usage(post_id)",
             "CREATE INDEX IF NOT EXISTS idx_media_usage_used_at ON media_usage(used_at)",
             "CREATE INDEX IF NOT EXISTS idx_writing_patterns_post ON writing_patterns(post_id)",
+            "CREATE INDEX IF NOT EXISTS idx_comm_intel_profile_key ON communications_intelligence_profiles(profile_type, profile_key)",
+            "CREATE INDEX IF NOT EXISTS idx_comm_intel_profile_generated ON communications_intelligence_profiles(generated_at)",
+            "CREATE INDEX IF NOT EXISTS idx_comm_edit_learning_platform ON communication_edit_learning(platform)",
+            "CREATE INDEX IF NOT EXISTS idx_comm_edit_learning_created ON communication_edit_learning(created_at)",
             "CREATE INDEX IF NOT EXISTS idx_hashtags_tag ON hashtags(tag)",
             "CREATE INDEX IF NOT EXISTS idx_hashtags_use_count ON hashtags(use_count)",
         ) + analysis_queue_indexes() + communication_indexes()

@@ -1597,10 +1597,16 @@ class ContentDirectorPage(ctk.CTkFrame):
             "Word Counts",
             str(package.get("word_counts", {}))
         )
+        self.add_caption_line(
+            parent,
+            start_row + 9,
+            "Department Voice Match",
+            self.department_voice_match_text(package)
+        )
         controls = self.render_copy_controls(
             parent,
             package,
-            start_row + 9
+            start_row + 10
         )
         preview_button = ctk.CTkButton(
             controls,
@@ -1616,7 +1622,49 @@ class ContentDirectorPage(ctk.CTkFrame):
             pady=(0, 6)
         )
 
-        return start_row + 10
+        return start_row + 11
+
+    ##########################################################
+
+    def department_voice_match_text(self, package, platform=None):
+
+        matches = package.get("department_voice_match", {}) or {}
+
+        if platform:
+            matches = {
+                platform: matches.get(platform, {})
+            }
+
+        lines = []
+
+        for key, item in matches.items():
+            if not item:
+                continue
+
+            reasons = " ".join(item.get("reasons", [])[:2])
+            lines.append(
+                (
+                    f"{self.format_label(key)}: "
+                    f"{item.get('score', 0)}% "
+                    f"({reasons or 'No detailed voice signal yet.'})"
+                )
+            )
+
+        if not lines:
+            return "Department voice match has insufficient approved history."
+
+        intelligence = package.get("communications_intelligence", {}) or {}
+
+        if intelligence.get("sample_count", 0):
+            lines.append(
+                (
+                    "Profile samples: "
+                    f"{intelligence.get('sample_count', 0):,}; "
+                    f"confidence {intelligence.get('learning_confidence', 0)}%."
+                )
+            )
+
+        return "\n".join(lines)
 
     ##########################################################
 
@@ -1751,7 +1799,14 @@ class ContentDirectorPage(ctk.CTkFrame):
                             "Reading time: " +
                             str(output.get("estimated_reading_time", ""))
                         ),
-                        "Notes: " + output.get("notes", "")
+                        "Notes: " + output.get("notes", ""),
+                        (
+                            "Department Voice Match: " +
+                            self.department_voice_match_text(
+                                package,
+                                platform
+                            )
+                        )
                     ]
                 )
             )

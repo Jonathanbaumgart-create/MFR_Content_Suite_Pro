@@ -1,6 +1,7 @@
 import time
 
 from core.app_context import context
+from services.communications_intelligence_service import CommunicationsIntelligenceService
 from services.context_engine import ContextEngine
 from services.communications_memory_service import CommunicationsMemoryService
 from services.editorial_review_service import EditorialReviewService
@@ -136,6 +137,11 @@ class ContentGenerationService:
         self.writing = writing_service or WritingService()
         self.memory = memory_service or CommunicationsMemoryService(
             database=self.db
+        )
+        self.communications_intelligence = CommunicationsIntelligenceService(
+            database=self.db,
+            memory_service=self.memory,
+            knowledge_service=self.knowledge
         )
         self.human_feedback = HumanFeedbackService(
             database=self.db
@@ -371,6 +377,9 @@ class ContentGenerationService:
             package,
             include_mock=include_mock
         )
+        source["communications_intelligence"] = (
+            self.communications_intelligence.profile()
+        )
         outputs = {}
 
         for platform in platforms:
@@ -403,6 +412,17 @@ class ContentGenerationService:
             },
             "generation_timestamp": TimeService.utc_now_iso(),
             "generation_version": self.GENERATION_VERSION,
+            "communications_intelligence": self._profile_summary(
+                source.get("communications_intelligence", {})
+            ),
+            "department_voice_match": {
+                platform: self.communications_intelligence.voice_match(
+                    output.get("copy_text", ""),
+                    platform,
+                    profile=source.get("communications_intelligence", {})
+                )
+                for platform, output in outputs.items()
+            },
             "internal_warning": self._internal_warning(package),
             "writing_provider": "deterministic",
             "writing_model": self.GENERATION_VERSION,
@@ -433,6 +453,9 @@ class ContentGenerationService:
         package = dict(generated_package or {})
         source_package = package.get("source_package", {})
         source = self._package_source(source_package)
+        source["communications_intelligence"] = (
+            self.communications_intelligence.profile()
+        )
         output = self._platform_output(
             platform,
             source_package,
@@ -449,6 +472,16 @@ class ContentGenerationService:
         )
         package.setdefault("estimated_reading_time", {})[platform] = self._reading_time(
             package["word_counts"][platform]
+        )
+        package.setdefault("department_voice_match", {})[platform] = (
+            self.communications_intelligence.voice_match(
+                output.get("copy_text", ""),
+                platform,
+                profile=source.get("communications_intelligence", {})
+            )
+        )
+        package["communications_intelligence"] = self._profile_summary(
+            source.get("communications_intelligence", {})
         )
         package["generation_timestamp"] = TimeService.utc_now_iso()
         package["generation_version"] = self.GENERATION_VERSION
@@ -536,6 +569,10 @@ class ContentGenerationService:
             output["word_count"]
         )
         output["platform"] = platform
+        output["department_voice_guidance"] = self._voice_guidance(
+            platform,
+            source
+        )
 
         return output
 
@@ -544,8 +581,17 @@ class ContentGenerationService:
         headline = package.get("headline", "")
         story = self._story(package)
         today = package.get("why_today_matters", "")
-        cta = package.get("suggested_cta", "")
-        hashtags = self._hashtags_for(package, "facebook")
+        cta = self._profile_cta(
+            package.get("suggested_cta", ""),
+            package,
+            source,
+            "facebook"
+        )
+        hashtags = self._profile_hashtags(
+            package,
+            source,
+            "facebook"
+        )
         emoji = "🚒" if variant == "standard" else "🔥"
         text = "\n\n".join(
             self._clean_lines(
@@ -564,7 +610,11 @@ class ContentGenerationService:
             "copy_text": text,
             "hashtags": hashtags,
             "cta": cta,
-            "notes": "Community storytelling, moderate length, conversation-oriented."
+            "notes": self._notes_with_voice(
+                "Community storytelling, moderate length, conversation-oriented.",
+                platform="facebook",
+                source=source
+            )
         }
 
     def _instagram_output(self, package, source, variant="standard"):
@@ -572,8 +622,17 @@ class ContentGenerationService:
         media = source.get("media", [])
         visual = self._visual_line(media)
         story = self._story(package)
-        cta = package.get("suggested_cta", "")
-        hashtags = self._hashtags_for(package, "instagram")
+        cta = self._profile_cta(
+            package.get("suggested_cta", ""),
+            package,
+            source,
+            "instagram"
+        )
+        hashtags = self._profile_hashtags(
+            package,
+            source,
+            "instagram"
+        )
         text = "\n\n".join(
             self._clean_lines(
                 [
@@ -591,7 +650,11 @@ class ContentGenerationService:
             "copy_text": text,
             "hashtags": hashtags,
             "cta": cta,
-            "notes": "Visual-first caption with platform-appropriate hashtags."
+            "notes": self._notes_with_voice(
+                "Visual-first caption with platform-appropriate hashtags.",
+                platform="instagram",
+                source=source
+            )
         }
 
     def _linkedin_output(self, package, source, variant="standard"):
@@ -599,7 +662,12 @@ class ContentGenerationService:
         headline = package.get("headline", "")
         story = self._story(package)
         audience = ", ".join(package.get("audience", [])[:2])
-        cta = package.get("suggested_cta", "")
+        cta = self._profile_cta(
+            package.get("suggested_cta", ""),
+            package,
+            source,
+            "linkedin"
+        )
         text = "\n\n".join(
             self._clean_lines(
                 [
@@ -610,7 +678,7 @@ class ContentGenerationService:
                         f"volunteerism, emergency services readiness, and service to {audience or 'the community'}."
                     ),
                     cta,
-                    " ".join(self._hashtags_for(package, "linkedin")[:3])
+                    " ".join(self._profile_hashtags(package, source, "linkedin")[:3])
                 ]
             )
         )
@@ -618,9 +686,13 @@ class ContentGenerationService:
         return {
             "title": "LinkedIn Post",
             "copy_text": text,
-            "hashtags": self._hashtags_for(package, "linkedin")[:3],
+            "hashtags": self._profile_hashtags(package, source, "linkedin")[:3],
             "cta": cta,
-            "notes": "Professional post focused on leadership and public service."
+            "notes": self._notes_with_voice(
+                "Professional post focused on leadership and public service.",
+                platform="linkedin",
+                source=source
+            )
         }
 
     def _website_output(self, package, source, variant="standard"):
@@ -628,7 +700,12 @@ class ContentGenerationService:
         headline = package.get("headline", "")
         story = self._story(package)
         evidence = self._evidence_summary(package)
-        cta = package.get("suggested_cta", "")
+        cta = self._profile_cta(
+            package.get("suggested_cta", ""),
+            package,
+            source,
+            "website"
+        )
         text = "\n\n".join(
             self._clean_lines(
                 [
@@ -650,7 +727,11 @@ class ContentGenerationService:
             "copy_text": text,
             "hashtags": [],
             "cta": cta,
-            "notes": "SEO-friendly headings and readable paragraphs."
+            "notes": self._notes_with_voice(
+                "SEO-friendly headings and readable paragraphs.",
+                platform="website",
+                source=source
+            )
         }
 
     def _news_release_output(self, package, source, variant="standard"):
@@ -673,13 +754,22 @@ class ContentGenerationService:
             "copy_text": text,
             "hashtags": [],
             "cta": "For more information, follow official Morden Fire & Rescue updates.",
-            "notes": "Journalistic structure with dateline and placeholders."
+            "notes": self._notes_with_voice(
+                "Journalistic structure with dateline and placeholders.",
+                platform="news_release",
+                source=source
+            )
         }
 
     def _newsletter_output(self, package, source, variant="standard"):
 
         story = self._story(package)
-        cta = package.get("suggested_cta", "")
+        cta = self._profile_cta(
+            package.get("suggested_cta", ""),
+            package,
+            source,
+            "newsletter"
+        )
         text = "\n\n".join(
             self._clean_lines(
                 [
@@ -699,8 +789,126 @@ class ContentGenerationService:
             "copy_text": text,
             "hashtags": [],
             "cta": cta,
-            "notes": "Friendly community summary."
+            "notes": self._notes_with_voice(
+                "Friendly community summary.",
+                platform="newsletter",
+                source=source
+            )
         }
+
+    ############################################################
+
+    def _profile_summary(self, profile):
+
+        return {
+            "sample_count": profile.get("sample_count", 0),
+            "learning_confidence": profile.get("learning_confidence", 0),
+            "department_voice": profile.get("department_voice", ""),
+            "profile_freshness": profile.get("profile_freshness", ""),
+            "last_profile_update": profile.get("last_profile_update", ""),
+            "explainability": profile.get("explainability", {})
+        }
+
+    def _voice_guidance(self, platform, source):
+
+        profile = source.get("communications_intelligence", {}) or {}
+        platform_profile = (
+            profile.get("platform_profiles", {}) or {}
+        ).get(platform, {})
+
+        if not platform_profile or not platform_profile.get("sample_count"):
+            return "Insufficient approved communications history for this platform."
+
+        return (
+            f"Department voice: {profile.get('department_voice', '')} "
+            f"{self.format_platform(platform)} profile is based on "
+            f"{platform_profile.get('sample_count', 0)} approved communications; "
+            f"average emojis {platform_profile.get('average_emojis', 0)}, "
+            f"average hashtags {platform_profile.get('average_hashtags', 0)}."
+        )
+
+    def _notes_with_voice(self, note, platform, source):
+
+        guidance = self._voice_guidance(platform, source)
+
+        if guidance:
+            return f"{note} {guidance}"
+
+        return note
+
+    def format_platform(self, platform):
+
+        return str(platform or "").replace("_", " ").title()
+
+    def _profile_cta(self, current, package, source, platform):
+
+        current = str(current or "").strip()
+        profile = source.get("communications_intelligence", {}) or {}
+        campaign_profile = self._matching_campaign_profile(
+            package,
+            profile
+        )
+        common = campaign_profile.get("common_ctas", []) or []
+
+        if not common:
+            return current
+
+        generic = (
+            "stay connected with morden fire & rescue",
+            "for more information, follow official"
+        )
+
+        if current and not any(item in current.lower() for item in generic):
+            return current
+
+        learned = str(common[0] or "").strip()
+
+        if not learned or self._word_count(learned) > 18:
+            return current
+
+        return learned
+
+    def _matching_campaign_profile(self, package, profile):
+
+        text = " ".join(
+            str(package.get(key, ""))
+            for key in (
+                "headline",
+                "primary_story",
+                "editorial_angle",
+                "why_today_matters"
+            )
+        ).lower()
+
+        for name, campaign in (
+            profile.get("campaign_profiles", {}) or {}
+        ).items():
+            if campaign.get("sample_count", 0) <= 0:
+                continue
+
+            if name.lower() in text:
+                return campaign
+
+        return {}
+
+    def _profile_hashtags(self, package, source, platform):
+
+        hashtags = self._hashtags_for(
+            package,
+            platform
+        )
+        profile = source.get("communications_intelligence", {}) or {}
+        platform_profile = (
+            profile.get("platform_profiles", {}) or {}
+        ).get(platform, {})
+        average = platform_profile.get("average_hashtags", 0)
+
+        if not average:
+            return hashtags
+
+        target = max(1, min(5, round(average)))
+
+        return hashtags[:target]
 
     ############################################################
 
