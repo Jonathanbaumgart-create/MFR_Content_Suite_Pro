@@ -1216,6 +1216,7 @@ class DatabaseManager:
         self._ensure_media_intelligence_columns(cur)
         self._ensure_fire_service_intelligence_columns(cur)
         self._ensure_knowledge_columns(cur)
+        self._ensure_communication_columns(cur)
         self._ensure_indexes(cur)
 
         conn.commit()
@@ -4807,6 +4808,12 @@ class DatabaseManager:
         cur.execute("SELECT COUNT(*) FROM social_posts")
         memory_posts = cur.fetchone()[0] or 0
 
+        cur.execute("SELECT COUNT(*) FROM communication_records")
+        communication_records = cur.fetchone()[0] or 0
+
+        cur.execute("SELECT COUNT(*) FROM communication_deliveries")
+        communication_deliveries = cur.fetchone()[0] or 0
+
         cur.execute("""
         SELECT MAX(post_date)
         FROM social_posts
@@ -4823,6 +4830,25 @@ class DatabaseManager:
             AND published_at!=''
             """)
             latest_post = cur.fetchone()[0] or ""
+
+        cur.execute("""
+        SELECT MIN(original_date), MAX(original_date)
+        FROM communication_records
+        WHERE original_date IS NOT NULL
+        AND original_date!=''
+        """)
+        first_last = cur.fetchone()
+        first_communication = first_last[0] if first_last else ""
+        latest_communication = first_last[1] if first_last else ""
+
+        cur.execute("""
+        SELECT COUNT(*)
+        FROM communication_deliveries
+        WHERE engagement_metrics IS NOT NULL
+        AND engagement_metrics!=''
+        AND engagement_metrics!='{}'
+        """)
+        engagement_available = cur.fetchone()[0] or 0
 
         cur.execute("SELECT COUNT(*) FROM recommendation_history")
         recommendation_history = cur.fetchone()[0] or 0
@@ -4974,6 +5000,12 @@ class DatabaseManager:
         cur.execute("SELECT COUNT(*) FROM social_posts")
         memory_posts = cur.fetchone()[0] or 0
 
+        cur.execute("SELECT COUNT(*) FROM communication_records")
+        communication_records = cur.fetchone()[0] or 0
+
+        cur.execute("SELECT COUNT(*) FROM communication_deliveries")
+        communication_deliveries = cur.fetchone()[0] or 0
+
         cur.execute("""
         SELECT MAX(post_date)
         FROM social_posts
@@ -4991,14 +5023,39 @@ class DatabaseManager:
             """)
             latest_post = cur.fetchone()[0] or ""
 
+        cur.execute("""
+        SELECT MIN(original_date), MAX(original_date)
+        FROM communication_records
+        WHERE original_date IS NOT NULL
+        AND original_date!=''
+        """)
+        first_last = cur.fetchone()
+        first_communication = first_last[0] if first_last else ""
+        latest_communication = first_last[1] if first_last else ""
+
+        cur.execute("""
+        SELECT COUNT(*)
+        FROM communication_deliveries
+        WHERE engagement_metrics IS NOT NULL
+        AND engagement_metrics!=''
+        AND engagement_metrics!='{}'
+        """)
+        engagement_available = cur.fetchone()[0] or ""
+
         cur.execute("SELECT COUNT(*) FROM recommendation_history")
         recommendation_history = cur.fetchone()[0] or 0
 
         conn.close()
 
         return {
-            "communications_memory_posts": memory_posts,
+            "communications_memory_posts": memory_posts + communication_records,
+            "communications_memory_legacy_posts": memory_posts,
+            "historical_communications_imported": communication_records,
+            "communication_deliveries": communication_deliveries,
             "communications_memory_latest_post": latest_post,
+            "communications_memory_first_post": first_communication,
+            "communications_memory_latest_communication": latest_communication,
+            "communications_memory_engagement_records": engagement_available,
             "recommendation_history_count": recommendation_history
         }
 
@@ -8437,6 +8494,64 @@ class DatabaseManager:
 
         return self._communication_repository().save_communication_import_run(summary)
 
+    def create_communication_import_run(self, summary):
+
+        return self._communication_repository().create_communication_import_run(summary)
+
+    def update_communication_import_run(self, import_run_id, summary):
+
+        return self._communication_repository().update_communication_import_run(
+            import_run_id,
+            summary
+        )
+
+    def save_communication_import_item(self, item):
+
+        return self._communication_repository().save_communication_import_item(item)
+
+    def save_communication_duplicate_review(self, item):
+
+        return self._communication_repository().save_communication_duplicate_review(item)
+
+    def save_communication_media_reference(self, item):
+
+        return self._communication_repository().save_communication_media_reference(item)
+
+    def communication_duplicate_candidate(
+        self,
+        normalized_text,
+        date_prefix,
+        source_identifier="",
+        platform_post_id=""
+    ):
+
+        return self._communication_repository().communication_duplicate_candidate(
+            normalized_text,
+            date_prefix,
+            source_identifier,
+            platform_post_id
+        )
+
+    def communication_has_delivery_platform(self, communication_id, platform):
+
+        return self._communication_repository().communication_has_delivery_platform(
+            communication_id,
+            platform
+        )
+
+    def rollback_communication_import_run(self, import_run_id):
+
+        return self._communication_repository().rollback_communication_import_run(
+            import_run_id
+        )
+
+    def update_communication_intelligence_review(self, communication_id, updates):
+
+        return self._communication_repository().update_communication_intelligence_review(
+            communication_id,
+            updates
+        )
+
     def communication_records(self, limit=100, search_text=""):
 
         return self._communication_repository().communication_records(limit, search_text)
@@ -9759,6 +9874,98 @@ class DatabaseManager:
                     table,
                     name
                 )
+
+    ############################################################
+
+    def _ensure_communication_columns(self, cur):
+
+        additions = {
+            "communication_records": {
+                "original_date_text": "TEXT",
+                "normalized_date_utc": "TEXT",
+                "source_file": "TEXT",
+                "import_run_id": "INTEGER DEFAULT 0",
+                "raw_record_json": "TEXT",
+                "raw_engagement_json": "TEXT",
+                "attachment_references_json": "TEXT",
+                "original_platform": "TEXT",
+                "import_status": "TEXT DEFAULT 'active'"
+            },
+            "communication_deliveries": {
+                "source_file": "TEXT",
+                "import_run_id": "INTEGER DEFAULT 0",
+                "attachment_references_json": "TEXT",
+                "media_matches_json": "TEXT",
+                "match_confidence": "INTEGER DEFAULT 0",
+                "original_platform": "TEXT"
+            },
+            "communication_editorial_intelligence": {
+                "review_status": "TEXT DEFAULT 'needs_review'",
+                "reviewer_notes": "TEXT",
+                "reviewed_at": "TEXT"
+            }
+        }
+
+        for table, columns_to_add in additions.items():
+            cur.execute(f"PRAGMA table_info({table})")
+            columns = {
+                row[1]
+                for row in cur.fetchall()
+            }
+
+            for name, definition in columns_to_add.items():
+                if name in columns:
+                    continue
+
+                cur.execute(
+                    f"ALTER TABLE {table} ADD COLUMN {name} {definition}"
+                )
+
+                logger.info(
+                    "Added %s column %s",
+                    table,
+                    name
+                )
+
+        cur.executescript("""
+        CREATE TABLE IF NOT EXISTS communication_import_items(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            import_run_id INTEGER,
+            communication_id INTEGER,
+            delivery_id INTEGER,
+            action TEXT,
+            reason TEXT,
+            details_json TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS communication_duplicate_reviews(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            import_run_id INTEGER,
+            candidate_hash TEXT,
+            incoming_summary TEXT,
+            existing_communication_id INTEGER DEFAULT 0,
+            duplicate_type TEXT,
+            confidence INTEGER DEFAULT 0,
+            reason TEXT,
+            status TEXT DEFAULT 'needs_review',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS communication_media_references(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            import_run_id INTEGER,
+            communication_id INTEGER,
+            delivery_id INTEGER,
+            reference_text TEXT,
+            source_relative_path TEXT,
+            matched_media_id INTEGER DEFAULT 0,
+            match_confidence INTEGER DEFAULT 0,
+            match_reason TEXT,
+            status TEXT DEFAULT 'unmatched',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
 
     ############################################################
 

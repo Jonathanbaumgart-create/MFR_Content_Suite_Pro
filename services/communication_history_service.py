@@ -135,9 +135,12 @@ class CommunicationHistoryService:
 
     def _post_shape(self, row):
 
+        deliveries = row.get("deliveries") or []
+        first_delivery = deliveries[0] if deliveries else {}
+
         return {
             "id": row.get("communication_id"),
-            "platform": "",
+            "platform": first_delivery.get("platform", ""),
             "post_date": row.get("original_date", "")[:10],
             "post_time": row.get("original_date", "")[11:19],
             "headline": row.get("title", ""),
@@ -151,6 +154,8 @@ class CommunicationHistoryService:
             "season": ", ".join(row.get("seasonal_relevance") or []),
             "context": row.get("communication_purpose", ""),
             "source": row.get("source_type", ""),
+            "imported": str(row.get("source_type", "")).startswith("imported_historical"),
+            "imported_historical": str(row.get("source_type", "")).startswith("imported_historical"),
             "topics": row.get("topics", []),
             "programs": row.get("programs", []),
             "campaigns": row.get("campaigns", []),

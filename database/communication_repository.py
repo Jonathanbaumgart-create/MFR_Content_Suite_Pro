@@ -35,23 +35,41 @@ class CommunicationRepository:
             original_text,
             summary,
             original_date,
+            original_date_text,
+            normalized_date_utc,
             source_type,
             source_identifier,
             imported_from,
+            source_file,
+            import_run_id,
+            raw_record_json,
+            raw_engagement_json,
+            attachment_references_json,
+            original_platform,
+            import_status,
             imported_at,
             content_hash,
             notes
         )
-        VALUES(?,?,?,?,?,?,?,?,?,?)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             record.get("title", ""),
             record.get("original_text", ""),
             record.get("summary", ""),
             record.get("original_date", ""),
+            record.get("original_date_text", ""),
+            record.get("normalized_date_utc", record.get("original_date", "")),
             record.get("source_type", ""),
             record.get("source_identifier", ""),
             record.get("imported_from", ""),
+            record.get("source_file", record.get("imported_from", "")),
+            self._to_int(record.get("import_run_id")),
+            self._to_json(record.get("raw_record", {})),
+            self._to_json(record.get("raw_engagement", {})),
+            self._to_json(record.get("attachment_references", [])),
+            record.get("original_platform", ""),
+            record.get("import_status", "active"),
             record.get("imported_at", ""),
             record.get("content_hash", ""),
             record.get("notes", "")
@@ -84,10 +102,16 @@ class CommunicationRepository:
             photo_count,
             video_count,
             engagement_metrics,
+            source_file,
+            import_run_id,
+            attachment_references_json,
+            media_matches_json,
+            match_confidence,
+            original_platform,
             imported_at,
             delivery_hash
         )
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             self._to_int(delivery.get("communication_id")),
@@ -100,6 +124,12 @@ class CommunicationRepository:
             self._to_int(delivery.get("photo_count")),
             self._to_int(delivery.get("video_count")),
             self._to_json(delivery.get("engagement_metrics") or {}),
+            delivery.get("source_file", ""),
+            self._to_int(delivery.get("import_run_id")),
+            self._to_json(delivery.get("attachment_references", [])),
+            self._to_json(delivery.get("media_matches", [])),
+            self._to_int(delivery.get("match_confidence")),
+            delivery.get("original_platform", delivery.get("platform", "")),
             delivery.get("imported_at", ""),
             delivery.get("delivery_hash", "")
         ))
@@ -504,9 +534,9 @@ class CommunicationRepository:
             self._to_int(summary.get("deliveries_inserted")),
             self._to_int(summary.get("duplicates_skipped")),
             self._to_int(summary.get("records_failed")),
-            self._to_json(summary.get("campaigns_detected", [])),
-            self._to_json(summary.get("programs_detected", [])),
-            self._to_json(summary.get("topics_extracted", [])),
+            self._to_json(self._json_list(summary.get("campaigns_detected", []))),
+            self._to_json(self._json_list(summary.get("programs_detected", []))),
+            self._to_json(self._json_list(summary.get("topics_extracted", []))),
             self._to_json(summary.get("warnings", [])),
             summary.get("status", ""),
             float(summary.get("duration_seconds") or 0)
@@ -517,6 +547,383 @@ class CommunicationRepository:
         conn.close()
 
         return import_run_id
+
+    def create_communication_import_run(self, summary):
+
+        return self.save_communication_import_run(
+            {
+                **summary,
+                "completed_at": summary.get("completed_at", ""),
+                "records_processed": summary.get("records_processed", 0),
+                "records_inserted": summary.get("records_inserted", 0),
+                "deliveries_inserted": summary.get("deliveries_inserted", 0),
+                "duplicates_skipped": summary.get("duplicates_skipped", 0),
+                "records_failed": summary.get("records_failed", 0),
+                "campaigns_detected": summary.get("campaigns_detected", []),
+                "programs_detected": summary.get("programs_detected", []),
+                "topics_extracted": summary.get("topics_extracted", []),
+                "warnings": summary.get("warnings", []),
+                "status": summary.get("status", "running"),
+                "duration_seconds": summary.get("duration_seconds", 0)
+            }
+        )
+
+    def update_communication_import_run(self, import_run_id, summary):
+
+        conn = self.database.connection()
+        cur = conn.cursor()
+        cur.execute("""
+        UPDATE communication_import_runs
+        SET completed_at=?,
+            records_processed=?,
+            records_inserted=?,
+            deliveries_inserted=?,
+            duplicates_skipped=?,
+            records_failed=?,
+            campaigns_detected=?,
+            programs_detected=?,
+            topics_extracted=?,
+            warnings=?,
+            status=?,
+            duration_seconds=?
+        WHERE import_run_id=?
+        """,
+        (
+            summary.get("completed_at", ""),
+            self._to_int(summary.get("records_processed")),
+            self._to_int(summary.get("records_inserted")),
+            self._to_int(summary.get("deliveries_inserted")),
+            self._to_int(summary.get("duplicates_skipped")),
+            self._to_int(summary.get("records_failed")),
+            self._to_json(self._json_list(summary.get("campaigns_detected", []))),
+            self._to_json(self._json_list(summary.get("programs_detected", []))),
+            self._to_json(self._json_list(summary.get("topics_extracted", []))),
+            self._to_json(summary.get("warnings", [])),
+            summary.get("status", ""),
+            float(summary.get("duration_seconds") or 0),
+            self._to_int(import_run_id)
+        ))
+        conn.commit()
+        conn.close()
+
+    def save_communication_import_item(self, item):
+
+        conn = self.database.connection()
+        cur = conn.cursor()
+        cur.execute("""
+        INSERT INTO communication_import_items(
+            import_run_id,
+            communication_id,
+            delivery_id,
+            action,
+            reason,
+            details_json
+        )
+        VALUES(?,?,?,?,?,?)
+        """,
+        (
+            self._to_int(item.get("import_run_id")),
+            self._to_int(item.get("communication_id")),
+            self._to_int(item.get("delivery_id")),
+            item.get("action", ""),
+            item.get("reason", ""),
+            self._to_json(item.get("details", {}))
+        ))
+        item_id = cur.lastrowid
+        conn.commit()
+        conn.close()
+
+        return item_id
+
+    def save_communication_duplicate_review(self, item):
+
+        conn = self.database.connection()
+        cur = conn.cursor()
+        cur.execute("""
+        INSERT INTO communication_duplicate_reviews(
+            import_run_id,
+            candidate_hash,
+            incoming_summary,
+            existing_communication_id,
+            duplicate_type,
+            confidence,
+            reason,
+            status
+        )
+        VALUES(?,?,?,?,?,?,?,?)
+        """,
+        (
+            self._to_int(item.get("import_run_id")),
+            item.get("candidate_hash", ""),
+            item.get("incoming_summary", ""),
+            self._to_int(item.get("existing_communication_id")),
+            item.get("duplicate_type", ""),
+            self._to_int(item.get("confidence")),
+            item.get("reason", ""),
+            item.get("status", "needs_review")
+        ))
+        review_id = cur.lastrowid
+        conn.commit()
+        conn.close()
+
+        return review_id
+
+    def save_communication_media_reference(self, item):
+
+        conn = self.database.connection()
+        cur = conn.cursor()
+        cur.execute("""
+        INSERT INTO communication_media_references(
+            import_run_id,
+            communication_id,
+            delivery_id,
+            reference_text,
+            source_relative_path,
+            matched_media_id,
+            match_confidence,
+            match_reason,
+            status
+        )
+        VALUES(?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            self._to_int(item.get("import_run_id")),
+            self._to_int(item.get("communication_id")),
+            self._to_int(item.get("delivery_id")),
+            item.get("reference_text", ""),
+            item.get("source_relative_path", ""),
+            self._to_int(item.get("matched_media_id")),
+            self._to_int(item.get("match_confidence")),
+            item.get("match_reason", ""),
+            item.get("status", "unmatched")
+        ))
+        reference_id = cur.lastrowid
+        conn.commit()
+        conn.close()
+
+        return reference_id
+
+    def communication_duplicate_candidate(self, normalized_text, date_prefix, source_identifier="", platform_post_id=""):
+
+        conn = self.database.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        result = {}
+
+        if source_identifier:
+            cur.execute("""
+            SELECT communication_id, title, source_identifier
+            FROM communication_records
+            WHERE source_identifier=?
+            LIMIT 1
+            """, (source_identifier,))
+            row = cur.fetchone()
+
+            if row:
+                result = {
+                    "duplicate_type": "source_identifier",
+                    "communication_id": row["communication_id"],
+                    "confidence": 100,
+                    "reason": "Exact source identifier already exists."
+                }
+
+        if not result and platform_post_id:
+            cur.execute("""
+            SELECT communication_id
+            FROM communication_deliveries
+            WHERE platform_post_id=?
+            LIMIT 1
+            """, (platform_post_id,))
+            row = cur.fetchone()
+
+            if row:
+                result = {
+                    "duplicate_type": "platform_post_id",
+                    "communication_id": row["communication_id"],
+                    "confidence": 100,
+                    "reason": "Exact platform post ID already exists."
+                }
+
+        if not result and normalized_text:
+            cur.execute("""
+            SELECT communication_id, original_text, original_date
+            FROM communication_records
+            WHERE substr(original_date, 1, 10)=?
+            ORDER BY communication_id DESC
+            LIMIT 100
+            """, (date_prefix,))
+            rows = cur.fetchall()
+
+            incoming_compact = self._compact(normalized_text)
+            incoming_plain = self._plain(normalized_text)
+
+            for row in rows:
+                existing_plain = self._plain(row["original_text"] or "")
+                existing_compact = self._compact(row["original_text"] or "")
+
+                if incoming_plain == existing_plain:
+                    result = {
+                        "duplicate_type": "normalized_text_date",
+                        "communication_id": row["communication_id"],
+                        "confidence": 98,
+                        "reason": "Exact normalized text and date already exist."
+                    }
+                    break
+
+                if incoming_compact == existing_compact:
+                    result = {
+                        "duplicate_type": "punctuation_or_whitespace",
+                        "communication_id": row["communication_id"],
+                        "confidence": 92,
+                        "reason": "Only punctuation or whitespace differs."
+                    }
+                    break
+
+                similarity = self._similarity(
+                    incoming_plain,
+                    existing_plain
+                )
+
+                if similarity >= 0.55:
+                    result = {
+                        "duplicate_type": "probable_text_date",
+                        "communication_id": row["communication_id"],
+                        "confidence": 80,
+                        "reason": "Similar text on the same date requires review."
+                    }
+                    break
+
+        conn.close()
+
+        return result
+
+    def communication_has_delivery_platform(self, communication_id, platform):
+
+        conn = self.database.connection()
+        cur = conn.cursor()
+        cur.execute("""
+        SELECT COUNT(*)
+        FROM communication_deliveries
+        WHERE communication_id=?
+        AND lower(platform)=lower(?)
+        """,
+        (
+            self._to_int(communication_id),
+            platform or ""
+        ))
+        count = cur.fetchone()[0] or 0
+        conn.close()
+
+        return count > 0
+
+    def rollback_communication_import_run(self, import_run_id):
+
+        import_run_id = self._to_int(import_run_id)
+        conn = self.database.connection()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT communication_id FROM communication_records WHERE import_run_id=?",
+            (import_run_id,)
+        )
+        communication_ids = [
+            row[0]
+            for row in cur.fetchall()
+        ]
+
+        if not communication_ids:
+            conn.close()
+            return {
+                "import_run_id": import_run_id,
+                "communications_removed": 0,
+                "deliveries_removed": 0,
+                "status": "nothing_to_rollback"
+            }
+
+        placeholders = ",".join("?" for _value in communication_ids)
+        params = tuple(communication_ids)
+        removed = {}
+
+        for table in (
+            "communication_media_references",
+            "communication_intelligence_corrections",
+            "communication_editorial_intelligence",
+            "communication_campaign_links",
+            "communication_program_links",
+            "communication_topic_links",
+            "communication_outcomes"
+        ):
+            cur.execute(
+                f"DELETE FROM {table} WHERE communication_id IN ({placeholders})",
+                params
+            )
+            removed[table] = cur.rowcount
+
+        cur.execute(
+            "DELETE FROM communication_deliveries WHERE import_run_id=?",
+            (import_run_id,)
+        )
+        deliveries_removed = cur.rowcount
+        cur.execute(
+            "DELETE FROM communication_records WHERE import_run_id=?",
+            (import_run_id,)
+        )
+        communications_removed = cur.rowcount
+        cur.execute(
+            "DELETE FROM communication_import_items WHERE import_run_id=?",
+            (import_run_id,)
+        )
+        cur.execute(
+            "DELETE FROM communication_duplicate_reviews WHERE import_run_id=?",
+            (import_run_id,)
+        )
+        cur.execute("""
+        UPDATE communication_import_runs
+        SET status='rolled_back'
+        WHERE import_run_id=?
+        """, (import_run_id,))
+        conn.commit()
+        conn.close()
+
+        return {
+            "import_run_id": import_run_id,
+            "communications_removed": communications_removed,
+            "deliveries_removed": deliveries_removed,
+            "details": removed,
+            "status": "rolled_back"
+        }
+
+    def update_communication_intelligence_review(self, communication_id, updates):
+
+        conn = self.database.connection()
+        cur = conn.cursor()
+        fields = []
+        values = []
+
+        for field in (
+            "review_status",
+            "reviewer_notes",
+            "reviewed_at"
+        ):
+            if field not in updates:
+                continue
+
+            fields.append(f"{field}=?")
+            values.append(updates.get(field, ""))
+
+        if fields:
+            values.append(self._to_int(communication_id))
+            cur.execute(
+                f"""
+                UPDATE communication_editorial_intelligence
+                SET {', '.join(fields)}
+                WHERE communication_id=?
+                AND active=1
+                """,
+                tuple(values)
+            )
+
+        conn.commit()
+        conn.close()
 
     ############################################################
 
@@ -680,12 +1087,23 @@ class CommunicationRepository:
             self._to_int(communication_id),
         ))
         corrections = cur.fetchall()
+        cur.execute("""
+        SELECT *
+        FROM communication_deliveries
+        WHERE communication_id=?
+        ORDER BY published_at DESC, delivery_id DESC
+        """,
+        (
+            self._to_int(communication_id),
+        ))
+        deliveries = cur.fetchall()
         conn.close()
 
         return self._effective_communication_from_rows(
             record,
             intelligence,
-            corrections
+            corrections,
+            deliveries
         )
 
     def effective_communication_memory(self, limit=500):
@@ -731,6 +1149,14 @@ class CommunicationRepository:
         """,
         tuple(communication_ids))
         correction_rows = cur.fetchall()
+        cur.execute(f"""
+        SELECT *
+        FROM communication_deliveries
+        WHERE communication_id IN ({placeholders})
+        ORDER BY published_at DESC, delivery_id DESC
+        """,
+        tuple(communication_ids))
+        delivery_rows = cur.fetchall()
         conn.close()
 
         intelligence_by_id = {}
@@ -749,11 +1175,20 @@ class CommunicationRepository:
                 []
             ).append(row)
 
+        deliveries_by_id = {}
+
+        for row in delivery_rows:
+            deliveries_by_id.setdefault(
+                row["communication_id"],
+                []
+            ).append(row)
+
         return [
             self._effective_communication_from_rows(
                 record,
                 intelligence_by_id.get(record["communication_id"]),
-                corrections_by_id.get(record["communication_id"], [])
+                corrections_by_id.get(record["communication_id"], []),
+                deliveries_by_id.get(record["communication_id"], [])
             )
             for record in record_rows
         ]
@@ -920,10 +1355,14 @@ class CommunicationRepository:
             "generated_at": row["generated_at"] or ""
         }
 
-    def _effective_communication_from_rows(self, record, intelligence=None, corrections=None):
+    def _effective_communication_from_rows(self, record, intelligence=None, corrections=None, deliveries=None):
 
         effective = self._communication_record_from_row(record)
         effective["source_layer"] = "raw"
+        effective["deliveries"] = [
+            self._communication_delivery_from_row(delivery)
+            for delivery in deliveries or []
+        ]
 
         if intelligence:
             effective.update(
@@ -1015,3 +1454,32 @@ class CommunicationRepository:
     def _to_int(self, value):
 
         return self.database._to_int(value)
+
+    def _json_list(self, value):
+
+        if isinstance(value, set):
+            return sorted(value)
+
+        return value
+
+    def _plain(self, value):
+
+        return " ".join(str(value or "").lower().split())
+
+    def _compact(self, value):
+
+        return "".join(
+            character
+            for character in self._plain(value)
+            if character.isalnum()
+        )
+
+    def _similarity(self, left, right):
+
+        left_words = set(str(left or "").split())
+        right_words = set(str(right or "").split())
+
+        if not left_words or not right_words:
+            return 0
+
+        return len(left_words & right_words) / len(left_words | right_words)

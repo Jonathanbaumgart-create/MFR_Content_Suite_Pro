@@ -23,6 +23,8 @@ class CommunicationsMemoryPage(ctk.CTkFrame):
         )
         self.future = None
         self.import_progress = None
+        self.pending_import_path = ""
+        self.pending_preview = None
         self._destroyed = False
 
         self.build_page()
@@ -63,7 +65,7 @@ class CommunicationsMemoryPage(ctk.CTkFrame):
 
         import_button = ctk.CTkButton(
             header,
-            text="Import CSV/JSON",
+            text="Import Communications",
             command=self.choose_import
         )
 
@@ -128,16 +130,124 @@ class CommunicationsMemoryPage(ctk.CTkFrame):
             return
 
         self.status.configure(
+            text="Inspecting communication import source..."
+        )
+
+        self.future = context.job_manager.submit(
+            self.importer.preview_file,
+            path
+        )
+        self.pending_import_path = path
+        logger.info(
+            "Communications memory import preview queued path=%s",
+            path
+        )
+        self.after(150, self.check_preview)
+
+    ##########################################################
+
+    def check_preview(self):
+
+        if self._destroyed or self.future is None:
+            return
+
+        if not self.future.done():
+            self.after(150, self.check_preview)
+            return
+
+        try:
+            self.pending_preview = self.future.result()
+
+        except Exception as ex:
+            logger.error(
+                "Communications memory import preview failed",
+                exc_info=(
+                    type(ex),
+                    ex,
+                    ex.__traceback__
+                )
+            )
+            self.status.configure(
+                text=f"Import preview failed: {ex}"
+            )
+            return
+
+        self.future = None
+        self.status.configure(
+            text="Import preview ready."
+        )
+        self.show_import_preview()
+
+    ##########################################################
+
+    def show_import_preview(self):
+
+        preview = self.pending_preview or {}
+        window = ctk.CTkToplevel(self)
+        window.title("Communication Import Preview")
+        window.geometry("950x720")
+        window.transient(self.winfo_toplevel())
+        window.lift()
+
+        body = ctk.CTkTextbox(
+            window,
+            wrap="word"
+        )
+        body.pack(
+            fill="both",
+            expand=True,
+            padx=16,
+            pady=(16, 8)
+        )
+        body.insert(
+            "1.0",
+            self.import_preview_text(preview)
+        )
+        body.configure(state="disabled")
+
+        controls = ctk.CTkFrame(
+            window,
+            fg_color="transparent"
+        )
+        controls.pack(
+            fill="x",
+            padx=16,
+            pady=(0, 16)
+        )
+
+        ctk.CTkButton(
+            controls,
+            text="Start Import",
+            command=lambda: self.start_import_from_preview(window)
+        ).pack(
+            side="left",
+            padx=(0, 8)
+        )
+        ctk.CTkButton(
+            controls,
+            text="Close",
+            command=window.destroy
+        ).pack(
+            side="right"
+        )
+
+    ##########################################################
+
+    def start_import_from_preview(self, window):
+
+        window.destroy()
+
+        self.status.configure(
             text="Importing communications memory..."
         )
         self.future = context.job_manager.submit(
             self.importer.import_file,
-            path,
+            self.pending_import_path,
             progress_callback=self._on_import_progress
         )
         logger.info(
             "Communications memory import queued path=%s",
-            path
+            self.pending_import_path
         )
         self.after(150, self.check_import)
 
@@ -327,6 +437,32 @@ class CommunicationsMemoryPage(ctk.CTkFrame):
 
         self.section(
             row,
+            "Import Runs",
+            [
+                (
+                    f"Run {item['import_run_id']}: {item['status']} | "
+                    f"{item['records_processed']} processed | "
+                    f"{item['records_inserted']} inserted | "
+                    f"{item['duplicates_skipped']} duplicates"
+                )
+                for item in self.import_runs()
+            ] or ["No import runs yet."]
+        )
+        row += 1
+
+        self.section(
+            row,
+            "Intelligence Review",
+            [
+                "Imported communication intelligence is saved as automated analysis.",
+                "Corrections are additive and preserve raw imported records.",
+                "Use bounded imports and review warnings before production import."
+            ]
+        )
+        row += 1
+
+        self.section(
+            row,
             "Import History",
             [
                 (
@@ -337,6 +473,64 @@ class CommunicationsMemoryPage(ctk.CTkFrame):
                 for post in posts
             ] or ["No posts imported yet."]
         )
+
+    ##########################################################
+
+    def import_preview_text(self, preview):
+
+        samples = preview.get("sample_normalized_records", [])
+        lines = [
+            "Source type: " + preview.get("source_type", ""),
+            "Confidence: " + str(preview.get("confidence", 0)),
+            (
+                "Record count estimate: " +
+                f"{preview.get('record_count_estimate', 0):,}"
+            ),
+            "Detected fields: " + ", ".join(preview.get("detected_fields", [])),
+            "Mapped fields: " + str(preview.get("mapped_fields", {})),
+            (
+                "Potential duplicates: "
+                f"{preview.get('potential_duplicate_count', 0):,}"
+            ),
+            (
+                "Probable duplicates needing review: "
+                f"{preview.get('probable_duplicate_count', 0):,}"
+            ),
+            f"Invalid records: {preview.get('invalid_record_count', 0):,}",
+            f"Warnings: {preview.get('warning_count', 0):,}",
+            "",
+            "Samples"
+        ]
+
+        for index, sample in enumerate(samples[:5], start=1):
+            lines.extend(
+                [
+                    "",
+                    f"{index}. {sample.get('sample_title', '')}",
+                    "Date: " + sample.get("sample_date", ""),
+                    "Platform: " + sample.get("sample_platform", ""),
+                    "Campaign: " + ", ".join(sample.get("campaign", [])),
+                    "Program: " + ", ".join(sample.get("program", [])),
+                    "Topics: " + ", ".join(sample.get("topics", [])),
+                    "Media references: " + ", ".join(sample.get("media_references", [])),
+                    "Text: " + sample.get("sample_text", "")[:400]
+                ]
+            )
+
+        if preview.get("warnings"):
+            lines.extend(["", "Warnings"])
+            lines.extend(preview.get("warnings", [])[:20])
+
+        return "\n".join(lines)
+
+    ##########################################################
+
+    def import_runs(self):
+
+        try:
+            return context.database.communication_import_runs(limit=10)
+        except Exception:
+            return []
 
     ##########################################################
 

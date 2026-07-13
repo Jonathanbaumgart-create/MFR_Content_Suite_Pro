@@ -7,9 +7,18 @@ def create_communication_tables(cur):
         original_text TEXT,
         summary TEXT,
         original_date TEXT,
+        original_date_text TEXT,
+        normalized_date_utc TEXT,
         source_type TEXT,
         source_identifier TEXT,
         imported_from TEXT,
+        source_file TEXT,
+        import_run_id INTEGER DEFAULT 0,
+        raw_record_json TEXT,
+        raw_engagement_json TEXT,
+        attachment_references_json TEXT,
+        original_platform TEXT,
+        import_status TEXT DEFAULT 'active',
         imported_at TEXT,
         content_hash TEXT UNIQUE,
         notes TEXT,
@@ -28,6 +37,12 @@ def create_communication_tables(cur):
         photo_count INTEGER DEFAULT 0,
         video_count INTEGER DEFAULT 0,
         engagement_metrics TEXT,
+        source_file TEXT,
+        import_run_id INTEGER DEFAULT 0,
+        attachment_references_json TEXT,
+        media_matches_json TEXT,
+        match_confidence INTEGER DEFAULT 0,
+        original_platform TEXT,
         imported_at TEXT,
         delivery_hash TEXT UNIQUE
     );
@@ -56,6 +71,9 @@ def create_communication_tables(cur):
         source_signals TEXT,
         analysis_version TEXT,
         generated_at TEXT,
+        review_status TEXT DEFAULT 'needs_review',
+        reviewer_notes TEXT,
+        reviewed_at TEXT,
         active INTEGER DEFAULT 1
     );
 
@@ -169,6 +187,44 @@ def create_communication_tables(cur):
         status TEXT,
         duration_seconds REAL DEFAULT 0
     );
+
+    CREATE TABLE IF NOT EXISTS communication_import_items(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        import_run_id INTEGER,
+        communication_id INTEGER,
+        delivery_id INTEGER,
+        action TEXT,
+        reason TEXT,
+        details_json TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS communication_duplicate_reviews(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        import_run_id INTEGER,
+        candidate_hash TEXT,
+        incoming_summary TEXT,
+        existing_communication_id INTEGER DEFAULT 0,
+        duplicate_type TEXT,
+        confidence INTEGER DEFAULT 0,
+        reason TEXT,
+        status TEXT DEFAULT 'needs_review',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS communication_media_references(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        import_run_id INTEGER,
+        communication_id INTEGER,
+        delivery_id INTEGER,
+        reference_text TEXT,
+        source_relative_path TEXT,
+        matched_media_id INTEGER DEFAULT 0,
+        match_confidence INTEGER DEFAULT 0,
+        match_reason TEXT,
+        status TEXT DEFAULT 'unmatched',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
     """)
 
 
@@ -176,9 +232,12 @@ def communication_indexes():
 
     return (
         "CREATE INDEX IF NOT EXISTS idx_comm_records_date ON communication_records(original_date)",
+        "CREATE INDEX IF NOT EXISTS idx_comm_records_import_run ON communication_records(import_run_id)",
+        "CREATE INDEX IF NOT EXISTS idx_comm_records_source_file ON communication_records(source_file)",
         "CREATE INDEX IF NOT EXISTS idx_comm_records_hash ON communication_records(content_hash)",
         "CREATE INDEX IF NOT EXISTS idx_comm_records_source ON communication_records(source_identifier)",
         "CREATE INDEX IF NOT EXISTS idx_comm_deliveries_comm ON communication_deliveries(communication_id)",
+        "CREATE INDEX IF NOT EXISTS idx_comm_deliveries_import_run ON communication_deliveries(import_run_id)",
         "CREATE INDEX IF NOT EXISTS idx_comm_deliveries_platform ON communication_deliveries(platform)",
         "CREATE INDEX IF NOT EXISTS idx_comm_deliveries_published ON communication_deliveries(published_at)",
         "CREATE INDEX IF NOT EXISTS idx_comm_deliveries_post_id ON communication_deliveries(platform_post_id)",
@@ -197,5 +256,9 @@ def communication_indexes():
         "CREATE INDEX IF NOT EXISTS idx_comm_topic_links_topic ON communication_topic_links(topic)",
         "CREATE INDEX IF NOT EXISTS idx_comm_topic_links_comm ON communication_topic_links(communication_id)",
         "CREATE INDEX IF NOT EXISTS idx_comm_outcomes_comm ON communication_outcomes(communication_id)",
-        "CREATE INDEX IF NOT EXISTS idx_comm_import_runs_started ON communication_import_runs(started_at)"
+        "CREATE INDEX IF NOT EXISTS idx_comm_import_runs_started ON communication_import_runs(started_at)",
+        "CREATE INDEX IF NOT EXISTS idx_comm_import_items_run ON communication_import_items(import_run_id)",
+        "CREATE INDEX IF NOT EXISTS idx_comm_duplicate_reviews_run ON communication_duplicate_reviews(import_run_id)",
+        "CREATE INDEX IF NOT EXISTS idx_comm_media_refs_run ON communication_media_references(import_run_id)",
+        "CREATE INDEX IF NOT EXISTS idx_comm_media_refs_comm ON communication_media_references(communication_id)"
     )

@@ -735,12 +735,29 @@ class HomePage(ctk.CTkFrame):
             "Status: " + memory.get("status", ""),
             f"Stored posts: {memory.get('total_posts', 0):,}",
             (
+                "Historical communications imported: "
+                f"{memory.get('historical_communications_imported', 0):,}"
+            ),
+            f"Deliveries: {memory.get('communication_deliveries', 0):,}",
+            (
                 "Latest post: " +
                 (
                     TimeService.format_local(memory.get("latest_post", ""))
                     or memory.get("latest_post", "")
                     or "Unknown"
                 )
+            ),
+            (
+                "Oldest communication: " +
+                (
+                    TimeService.format_local(memory.get("first_post", ""))
+                    or memory.get("first_post", "")
+                    or "Unknown"
+                )
+            ),
+            (
+                "Engagement records: "
+                f"{memory.get('engagement_records', 0):,}"
             ),
             (
                 "Recommendation history: "

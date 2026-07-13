@@ -317,12 +317,14 @@ def main():
 
             assert progress_updates, progress_updates
             assert summary["records_processed"] == 14, summary
-            assert summary["records_inserted"] == 10, summary
-            assert summary["deliveries_inserted"] == 12, summary
-            assert summary["duplicates_skipped"] == 3, summary
-            assert summary["records_failed"] == 1, summary
+            assert summary["records_inserted"] == 9, summary
+            assert summary["linked_as_delivery"] == 2, summary
+            assert summary["deliveries_inserted"] == 11, summary
+            assert summary["duplicates_skipped"] == 1, summary
+            assert summary["records_failed"] == 2, summary
             assert summary["records_processed"] == (
                 summary["records_inserted"] +
+                summary["linked_as_delivery"] +
                 summary["duplicates_skipped"] +
                 summary["records_failed"]
             ), summary
@@ -336,16 +338,18 @@ def main():
             repeat = importer.import_file(csv_path)
             assert repeat["records_inserted"] == 0, repeat
             assert repeat["deliveries_inserted"] == 0, repeat
-            assert repeat["duplicates_skipped"] == 13, repeat
+            assert repeat["duplicates_skipped"] == 12, repeat
+            assert repeat["records_failed"] == 2, repeat
 
             json_started = time.perf_counter()
             json_summary = importer.import_file(json_path)
             json_elapsed = time.perf_counter() - json_started
             assert json_summary["records_processed"] == 5, json_summary
             assert json_summary["records_inserted"] == 1, json_summary
-            assert json_summary["deliveries_inserted"] == 3, json_summary
-            assert json_summary["duplicates_skipped"] == 3, json_summary
-            assert json_summary["records_failed"] == 1, json_summary
+            assert json_summary["deliveries_inserted"] == 2, json_summary
+            assert json_summary["linked_as_delivery"] == 1, json_summary
+            assert json_summary["duplicates_skipped"] == 1, json_summary
+            assert json_summary["records_failed"] == 2, json_summary
             assert "Volunteer Recruitment" in json_summary["campaigns_detected"], json_summary
             assert "Recruit Academy" in json_summary["programs_detected"], json_summary
 
@@ -354,8 +358,8 @@ def main():
             assert empty["records_inserted"] == 0, empty
 
             engine = db.communication_memory_engine_summary()
-            assert engine["records"] == 11, engine
-            assert engine["deliveries"] == 15, engine
+            assert engine["records"] == 10, engine
+            assert engine["deliveries"] == 13, engine
             assert engine["campaigns"] >= 4, engine
             assert engine["programs"] >= 4, engine
             assert engine["topics"] >= 8, engine
@@ -454,7 +458,8 @@ def main():
             posts = memory.search("", limit=10)
             assert posts and posts[0].get("topics") is not None, posts
             stats = memory.statistics()
-            assert stats["communication_records"] == 11, stats
+            assert stats["communication_records"] == 10, stats
+            assert stats["communication_deliveries"] == 13, stats
             assert stats["engine"]["memory_available"], stats
             assert len(posts) <= 10, posts
             memory_profile = candidate._memory_profile(profile, posts)

@@ -639,7 +639,21 @@ class CommunicationsOfficerService:
         return {
             "status": status,
             "total_posts": metrics.get("communications_memory_posts", 0),
+            "historical_communications_imported": metrics.get(
+                "historical_communications_imported",
+                0
+            ),
+            "communication_deliveries": metrics.get("communication_deliveries", 0),
             "latest_post": latest,
+            "first_post": metrics.get("communications_memory_first_post", ""),
+            "latest_communication": metrics.get(
+                "communications_memory_latest_communication",
+                latest
+            ),
+            "engagement_records": metrics.get(
+                "communications_memory_engagement_records",
+                0
+            ),
             "days_since_latest_post": days_since,
             "recommendation_history_count": metrics.get(
                 "recommendation_history_count",
