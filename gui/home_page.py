@@ -6,6 +6,7 @@ from services.communication_package_service import CommunicationPackageService
 from services.communications_intelligence_service import CommunicationsIntelligenceService
 from services.communications_officer_service import CommunicationsOfficerService
 from services.content_generation_service import ContentGenerationService
+from services.decision_explainability_service import DecisionExplainabilityService
 from services.logging_service import LoggingService
 from services.time_service import TimeService
 
@@ -22,10 +23,12 @@ class HomePage(ctk.CTkFrame):
         self.service = CommunicationsOfficerService()
         self.package_service = CommunicationPackageService()
         self.content_generation_service = ContentGenerationService()
+        self.explainability_service = DecisionExplainabilityService()
         self.communications_intelligence_service = CommunicationsIntelligenceService()
         self.future = None
         self.package_future = None
         self.content_future = None
+        self.explanation_future = None
         self.communications_intelligence_future = None
         self.communications_intelligence_profile = None
         self.brief = None
@@ -363,6 +366,21 @@ class HomePage(ctk.CTkFrame):
             pady=12
         )
 
+        why_button = ctk.CTkButton(
+            frame,
+            text="Why This?",
+            width=120,
+            command=lambda item=story: self.request_decision_explanation(
+                item,
+                "recommendation"
+            )
+        )
+        why_button.pack(
+            side="right",
+            padx=(0, 8),
+            pady=12
+        )
+
     ##########################################################
 
     def request_communication_package(self, story):
@@ -449,6 +467,18 @@ class HomePage(ctk.CTkFrame):
 
         ctk.CTkButton(
             window,
+            text="Decision Audit",
+            command=lambda item=package: self.show_decision_audit(
+                item.get("decision_audit", {})
+            )
+        ).pack(
+            anchor="e",
+            padx=16,
+            pady=(0, 8)
+        )
+
+        ctk.CTkButton(
+            window,
             text="Close",
             command=window.destroy
         ).pack(
@@ -492,7 +522,113 @@ class HomePage(ctk.CTkFrame):
                 ),
                 "Suggested Hashtags\n" + " ".join(package.get("suggested_hashtags", [])),
                 "Suggested CTA\n" + package.get("suggested_cta", ""),
-                "Package Score\n" + str(scoring)
+                "Package Score\n" + str(scoring),
+                "Decision Audit\n" + self.decision_audit_summary(
+                    package.get("decision_audit", {})
+                )
+            ]
+        )
+
+    ##########################################################
+
+    def request_decision_explanation(self, subject, decision_type="recommendation"):
+
+        if self.explanation_future and not self.explanation_future.done():
+            return
+
+        alternatives = []
+
+        if decision_type == "recommendation" and self.brief:
+            alternatives = [
+                item for item in self.brief.get("top_three_communication_opportunities", [])
+                if item is not subject
+            ]
+
+        self.status.configure(text="Preparing decision explanation...")
+        self.explanation_future = context.job_manager.submit(
+            self.explainability_service.explain_recommendation,
+            subject,
+            alternatives
+        )
+        self.after(120, self.check_explanation_future)
+
+    ##########################################################
+
+    def check_explanation_future(self):
+
+        if self._destroyed or self.explanation_future is None:
+            return
+
+        if not self.explanation_future.done():
+            self.after(120, self.check_explanation_future)
+            return
+
+        try:
+            explanation = self.explanation_future.result()
+        except Exception as ex:
+            logger.error(
+                "Decision explanation failed",
+                exc_info=(type(ex), ex, ex.__traceback__)
+            )
+            self.status.configure(text=f"Decision explanation error: {ex}")
+            self.explanation_future = None
+            return
+
+        self.explanation_future = None
+        self.status.configure(text="Decision explanation ready.")
+        self.show_decision_audit(explanation)
+
+    ##########################################################
+
+    def show_decision_audit(self, explanation):
+
+        explanation = explanation or {}
+        window = ctk.CTkToplevel(self)
+        window.title("Decision Audit")
+        window.geometry("900x720")
+        window.transient(self.winfo_toplevel())
+        window.lift()
+
+        textbox = ctk.CTkTextbox(
+            window,
+            wrap="word"
+        )
+        textbox.pack(
+            fill="both",
+            expand=True,
+            padx=16,
+            pady=(16, 8)
+        )
+        textbox.insert(
+            "1.0",
+            self.explainability_service.format_explanation_text(explanation)
+        )
+        textbox.configure(state="disabled")
+
+        ctk.CTkButton(
+            window,
+            text="Close",
+            command=window.destroy
+        ).pack(
+            anchor="e",
+            padx=16,
+            pady=(0, 16)
+        )
+
+    ##########################################################
+
+    def decision_audit_summary(self, explanation):
+
+        if not explanation:
+            return "No decision audit is attached yet."
+
+        return "\n".join(
+            [
+                "Why selected: " + self.format_list(
+                    explanation.get("why_selected", [])[:3]
+                ),
+                "Evidence count: " + str(explanation.get("evidence_count", 0)),
+                "Trust: " + explanation.get("trust_label", "")
             ]
         )
 
@@ -619,6 +755,13 @@ class HomePage(ctk.CTkFrame):
             command=lambda: self.copy_generated_text(
                 package,
                 selected["platform"]
+            )
+        ).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(
+            footer,
+            text="Decision Audit",
+            command=lambda item=package: self.show_decision_audit(
+                item.get("generated_content_audit", {})
             )
         ).pack(side="left", padx=(0, 8))
         ctk.CTkButton(
@@ -992,6 +1135,22 @@ class HomePage(ctk.CTkFrame):
             sticky="e",
             padx=12,
             pady=10
+        )
+
+        ctk.CTkButton(
+            card,
+            text="Why?",
+            width=120,
+            command=lambda item=recommendation: self.request_decision_explanation(
+                item,
+                "recommendation"
+            )
+        ).grid(
+            row=2,
+            column=1,
+            sticky="e",
+            padx=12,
+            pady=(0, 10)
         )
 
     ##########################################################

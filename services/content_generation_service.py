@@ -4,6 +4,7 @@ from core.app_context import context
 from services.communications_intelligence_service import CommunicationsIntelligenceService
 from services.context_engine import ContextEngine
 from services.communications_memory_service import CommunicationsMemoryService
+from services.decision_explainability_service import DecisionExplainabilityService
 from services.editorial_review_service import EditorialReviewService
 from services.human_feedback_service import HumanFeedbackService
 from services.knowledge_service import KnowledgeService
@@ -145,6 +146,10 @@ class ContentGenerationService:
         )
         self.human_feedback = HumanFeedbackService(
             database=self.db
+        )
+        self.explainability = DecisionExplainabilityService(
+            database=self.db,
+            memory_service=self.memory
         )
         self.editorial_review = (
             editorial_review_service or EditorialReviewService()
@@ -433,6 +438,12 @@ class ContentGenerationService:
                 "platform_count": len(outputs)
             }
         }
+        generated["generated_content_audit"] = (
+            self.explainability.audit_generated_content(
+                generated,
+                persist=False
+            )
+        )
         logger.info(
             "Generated multi-platform content package platforms=%s elapsed=%s",
             len(outputs),
@@ -485,6 +496,13 @@ class ContentGenerationService:
         )
         package["generation_timestamp"] = TimeService.utc_now_iso()
         package["generation_version"] = self.GENERATION_VERSION
+        package["generated_content_audit"] = (
+            self.explainability.audit_generated_content(
+                package,
+                platform=platform,
+                persist=False
+            )
+        )
 
         return package
 

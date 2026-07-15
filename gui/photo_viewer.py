@@ -6,6 +6,7 @@ from media.image_loader import ImageLoader
 from media.image_dimensions import ImageDimensions
 from media.thumbnail_cache import ThumbnailCache
 from services.brain_service import BrainService
+from services.decision_explainability_service import DecisionExplainabilityService
 from services.editorial_comparison_service import EditorialComparisonService
 from services.human_feedback_service import HumanFeedbackService
 from services.analysis_review_service import AnalysisReviewService
@@ -38,6 +39,7 @@ class PhotoViewer(ctk.CTkToplevel):
         self.feedback = HumanFeedbackService()
         self.review = AnalysisReviewService()
         self.editorial = EditorialComparisonService()
+        self.explainability = DecisionExplainabilityService()
         self.analysis = None
         self.media_details = None
         self.intelligence = None
@@ -638,6 +640,16 @@ class PhotoViewer(ctk.CTkToplevel):
                     "",
                     "Analysis Review"
                 ] + review_lines
+            )
+
+        why_selected_lines = self.why_selected_lines()
+
+        if why_selected_lines:
+            lines.extend(
+                [
+                    "",
+                    "Why Selected"
+                ] + why_selected_lines
             )
 
         editorial_lines = self.editorial_strategy_lines()
@@ -1260,6 +1272,41 @@ class PhotoViewer(ctk.CTkToplevel):
         ]
 
         return lines
+
+    ##########################################################
+
+    def why_selected_lines(self):
+
+        try:
+            explanation = self.explainability.explain_media_selection(
+                self.media_id,
+                persist=False
+            )
+        except Exception:
+            return []
+
+        if not explanation:
+            return []
+
+        lines = [
+            f"Trust: {explanation.get('trust_label', '')}",
+            f"Communications score: {explanation.get('decision_score', 0)}"
+        ]
+        lines.extend(
+            explanation.get("why_selected", [])[:3]
+        )
+
+        limitations = explanation.get("limiting_factors", [])[:2]
+
+        if limitations:
+            lines.append(
+                "Limits: " + self.format_list(limitations)
+            )
+
+        return [
+            line for line in lines
+            if str(line or "").strip()
+        ]
 
     ##########################################################
 

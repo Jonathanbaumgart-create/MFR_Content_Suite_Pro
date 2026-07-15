@@ -1,6 +1,7 @@
 import time
 
 from core.app_context import context
+from services.decision_explainability_service import DecisionExplainabilityService
 from services.logging_service import LoggingService
 from services.time_service import TimeService
 
@@ -74,6 +75,9 @@ class CommunicationPackageService:
     def __init__(self, database=None):
 
         self.db = database or context.database
+        self.explainability = DecisionExplainabilityService(
+            database=self.db
+        )
         self.last_metrics = {}
 
     ############################################################
@@ -161,6 +165,12 @@ class CommunicationPackageService:
             "generated_at": TimeService.utc_now_iso(),
             "source": "stored_recommendation_intelligence"
         }
+
+        package["decision_audit"] = self.explainability.audit_package(
+            package,
+            recommendation=recommendation,
+            persist=False
+        )
 
         self.last_metrics = {
             "total_seconds": round(time.perf_counter() - started, 3),

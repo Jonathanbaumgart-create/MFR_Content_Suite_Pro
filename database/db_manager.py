@@ -502,6 +502,44 @@ class DatabaseManager:
         """)
 
         ########################################################
+        # Decision Explainability / Audit Trail
+        ########################################################
+
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS decision_audit_history(
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            decision_id TEXT,
+
+            decision_type TEXT,
+
+            subject_type TEXT,
+
+            subject_id TEXT,
+
+            headline TEXT,
+
+            decision_score REAL DEFAULT 0,
+
+            confidence_score REAL DEFAULT 0,
+
+            trust_label TEXT,
+
+            rank INTEGER DEFAULT 0,
+
+            snapshot_json TEXT,
+
+            generated_at TEXT,
+
+            explanation_version TEXT
+
+        )
+
+        """)
+
+        ########################################################
         # Recommendation Feedback
         ########################################################
 
@@ -5281,6 +5319,163 @@ class DatabaseManager:
 
     ############################################################
 
+    def save_decision_audit_snapshot(self, snapshot):
+
+        snapshot = snapshot or {}
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        INSERT INTO decision_audit_history(
+
+            decision_id,
+
+            decision_type,
+
+            subject_type,
+
+            subject_id,
+
+            headline,
+
+            decision_score,
+
+            confidence_score,
+
+            trust_label,
+
+            rank,
+
+            snapshot_json,
+
+            generated_at,
+
+            explanation_version
+
+        )
+
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+
+        """,
+
+        (
+            snapshot.get("decision_id", ""),
+            snapshot.get("decision_type", ""),
+            snapshot.get("subject_type", ""),
+            str(snapshot.get("subject_id", "")),
+            snapshot.get("headline", ""),
+            self._to_float(snapshot.get("decision_score")),
+            self._to_float(snapshot.get("confidence_score")),
+            snapshot.get("trust_label", ""),
+            self._to_int(snapshot.get("rank")),
+            self._to_json(snapshot),
+            snapshot.get("generated_at") or TimeService.utc_now_iso(),
+            snapshot.get("explanation_version", "")
+        ))
+
+        conn.commit()
+
+        conn.close()
+
+    ############################################################
+
+    def recent_decision_audit_snapshots(
+        self,
+        decision_id=None,
+        decision_type=None,
+        subject_id=None,
+        limit=10
+    ):
+
+        clauses = []
+        params = []
+
+        if decision_id:
+            clauses.append("decision_id=?")
+            params.append(decision_id)
+
+        if decision_type:
+            clauses.append("decision_type=?")
+            params.append(decision_type)
+
+        if subject_id:
+            clauses.append("subject_id=?")
+            params.append(str(subject_id))
+
+        where = ""
+
+        if clauses:
+            where = "WHERE " + " AND ".join(clauses)
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute(
+            f"""
+            SELECT *
+            FROM decision_audit_history
+            {where}
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            tuple(params + [self._to_int(limit) or 10])
+        )
+        rows = cur.fetchall()
+        conn.close()
+
+        result = []
+
+        for row in rows:
+            result.append({
+                "id": row["id"],
+                "decision_id": row["decision_id"] or "",
+                "decision_type": row["decision_type"] or "",
+                "subject_type": row["subject_type"] or "",
+                "subject_id": row["subject_id"] or "",
+                "headline": row["headline"] or "",
+                "decision_score": row["decision_score"] or 0,
+                "confidence_score": row["confidence_score"] or 0,
+                "trust_label": row["trust_label"] or "",
+                "rank": row["rank"] or 0,
+                "snapshot": self._from_json(row["snapshot_json"]),
+                "generated_at": row["generated_at"] or "",
+                "explanation_version": row["explanation_version"] or ""
+            })
+
+        return result
+
+    ############################################################
+
+    def prune_decision_audit_history(self, keep_latest=5000):
+
+        conn = self.connection()
+
+        cur = conn.cursor()
+
+        cur.execute("""
+
+        DELETE FROM decision_audit_history
+        WHERE id NOT IN (
+            SELECT id
+            FROM decision_audit_history
+            ORDER BY id DESC
+            LIMIT ?
+        )
+
+        """,
+
+        (
+            self._to_int(keep_latest) or 5000,
+        ))
+
+        conn.commit()
+
+        conn.close()
+
+    ############################################################
+
     def save_recommendation_feedback(self, feedback):
 
         conn = self.connection()
@@ -10015,6 +10210,9 @@ class DatabaseManager:
             "CREATE INDEX IF NOT EXISTS idx_home_sessions_status ON home_sessions(status)",
             "CREATE INDEX IF NOT EXISTS idx_home_sessions_completed ON home_sessions(completed_at)",
             "CREATE INDEX IF NOT EXISTS idx_home_sessions_started ON home_sessions(started_at)",
+            "CREATE INDEX IF NOT EXISTS idx_decision_audit_decision ON decision_audit_history(decision_id)",
+            "CREATE INDEX IF NOT EXISTS idx_decision_audit_type_subject ON decision_audit_history(decision_type, subject_id)",
+            "CREATE INDEX IF NOT EXISTS idx_decision_audit_generated ON decision_audit_history(generated_at)",
             "CREATE INDEX IF NOT EXISTS idx_recommendation_feedback_rec ON recommendation_feedback(recommendation_id)",
             "CREATE INDEX IF NOT EXISTS idx_recommendation_feedback_media ON recommendation_feedback(media_id)",
             "CREATE INDEX IF NOT EXISTS idx_recommendation_feedback_type ON recommendation_feedback(feedback_type)",

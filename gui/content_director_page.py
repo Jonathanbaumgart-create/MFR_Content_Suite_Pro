@@ -10,6 +10,7 @@ from services.communications_memory_service import CommunicationsMemoryService
 from services.communications_reasoning_service import CommunicationsReasoningService
 from services.communication_package_service import CommunicationPackageService
 from services.content_generation_service import ContentGenerationService
+from services.decision_explainability_service import DecisionExplainabilityService
 from services.editorial_comparison_service import EditorialComparisonService
 from services.logging_service import LoggingService
 from services.thumbnail_service import ThumbnailService
@@ -30,6 +31,7 @@ class ContentDirectorPage(ctk.CTkFrame):
         )
         self.communication_package_service = CommunicationPackageService()
         self.content_generation_service = ContentGenerationService()
+        self.explainability_service = DecisionExplainabilityService()
         self.editorial_comparison_service = EditorialComparisonService()
         self.memory_service = CommunicationsMemoryService()
         self.thumbnail_service = ThumbnailService()
@@ -1267,6 +1269,44 @@ class ContentDirectorPage(ctk.CTkFrame):
 
         ctk.CTkButton(
             window,
+            text="Why This Package?",
+            command=lambda item=package: self.show_decision_audit(
+                item.get("decision_audit", {})
+            )
+        ).pack(
+            anchor="e",
+            padx=16,
+            pady=(0, 8)
+        )
+
+        ctk.CTkButton(
+            window,
+            text="Why This Media?",
+            command=lambda item=package: self.show_media_decision(
+                item,
+                compare=False
+            )
+        ).pack(
+            anchor="e",
+            padx=16,
+            pady=(0, 8)
+        )
+
+        ctk.CTkButton(
+            window,
+            text="Why Not Another Asset?",
+            command=lambda item=package: self.show_media_decision(
+                item,
+                compare=True
+            )
+        ).pack(
+            anchor="e",
+            padx=16,
+            pady=(0, 8)
+        )
+
+        ctk.CTkButton(
+            window,
             text="Close",
             command=window.destroy
         ).pack(
@@ -1311,7 +1351,98 @@ class ContentDirectorPage(ctk.CTkFrame):
                 ),
                 "Suggested Hashtags\n" + " ".join(package.get("suggested_hashtags", [])),
                 "Suggested CTA\n" + package.get("suggested_cta", ""),
-                "Package Score\n" + str(scoring)
+                "Package Score\n" + str(scoring),
+                "Decision Audit\n" + self.decision_audit_summary(
+                    package.get("decision_audit", {})
+                )
+            ]
+        )
+
+    ##########################################################
+
+    def show_media_decision(self, package, compare=False):
+
+        media = package.get("media_package", {}) or {}
+        selected = media.get("primary_photo") or media.get("primary_video")
+        alternatives = []
+        alternatives.extend(media.get("gallery_photos") or [])
+        alternatives.extend(media.get("gallery_videos") or [])
+        compared = None
+
+        for item in alternatives:
+            if item and item.get("media_id") != (selected or {}).get("media_id"):
+                compared = item
+                break
+
+        if not selected:
+            self.show_decision_audit({
+                "headline": "No selected media",
+                "summary": "This package has no primary media asset.",
+                "limiting_factors": [
+                    "Generate or choose a recommendation with media support first."
+                ]
+            })
+            return
+
+        explanation = self.explainability_service.explain_media_selection(
+            selected,
+            recommendation=package,
+            compared_media=compared if compare else None,
+            persist=False
+        )
+        self.show_decision_audit(explanation)
+
+    ##########################################################
+
+    def show_decision_audit(self, explanation):
+
+        explanation = explanation or {}
+        window = ctk.CTkToplevel(self)
+        window.title("Decision Audit")
+        window.geometry("900x720")
+        window.transient(self.winfo_toplevel())
+        window.lift()
+
+        textbox = ctk.CTkTextbox(
+            window,
+            wrap="word"
+        )
+        textbox.pack(
+            fill="both",
+            expand=True,
+            padx=16,
+            pady=(16, 8)
+        )
+        textbox.insert(
+            "1.0",
+            self.explainability_service.format_explanation_text(explanation)
+        )
+        textbox.configure(state="disabled")
+
+        ctk.CTkButton(
+            window,
+            text="Close",
+            command=window.destroy
+        ).pack(
+            anchor="e",
+            padx=16,
+            pady=(0, 16)
+        )
+
+    ##########################################################
+
+    def decision_audit_summary(self, explanation):
+
+        if not explanation:
+            return "No decision audit is attached yet."
+
+        return "\n".join(
+            [
+                "Why selected: " + self.format_values(
+                    explanation.get("why_selected", [])[:3]
+                ),
+                "Evidence count: " + str(explanation.get("evidence_count", 0)),
+                "Trust: " + explanation.get("trust_label", "")
             ]
         )
 
@@ -1859,6 +1990,16 @@ class ContentDirectorPage(ctk.CTkFrame):
                 package,
                 selected["platform"],
                 render
+            )
+        ).pack(
+            side="left",
+            padx=(0, 8)
+        )
+        ctk.CTkButton(
+            footer,
+            text="Decision Audit",
+            command=lambda item=package: self.show_decision_audit(
+                item.get("generated_content_audit", {})
             )
         ).pack(
             side="left",
