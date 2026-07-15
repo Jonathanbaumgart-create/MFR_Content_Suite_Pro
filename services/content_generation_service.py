@@ -559,6 +559,11 @@ class ContentGenerationService:
 
         return {
             "media": filtered,
+            "media_package": media_package,
+            "platform_media_guidance": package.get(
+                "platform_media_guidance",
+                media_package.get("platform_media_guidance", {})
+            ),
             "knowledge": self.knowledge.snapshot(),
             "memory": self.memory.writing_memory(),
             "corrections": corrections[:12],
@@ -588,6 +593,10 @@ class ContentGenerationService:
         )
         output["platform"] = platform
         output["department_voice_guidance"] = self._voice_guidance(
+            platform,
+            source
+        )
+        output["media_guidance"] = self._media_guidance(
             platform,
             source
         )
@@ -854,6 +863,77 @@ class ContentGenerationService:
 
         return note
 
+    ############################################################
+
+    def _media_guidance(self, platform, source):
+
+        media_package = source.get("media_package", {}) or {}
+        guidance = source.get("platform_media_guidance", {}) or {}
+        platform_label = self.format_platform(platform)
+        platform_item = (
+            guidance.get(platform_label)
+            or guidance.get(platform)
+            or guidance.get(platform.lower())
+            or {}
+        )
+        primary = self._media_by_id(
+            source.get("media", []),
+            platform_item.get("primary_media_id")
+        )
+
+        if not primary:
+            primary = (
+                media_package.get("primary_video")
+                if platform == "instagram" and media_package.get("primary_video")
+                else media_package.get("primary_photo")
+            ) or media_package.get("primary_video") or {}
+
+        support_ids = set(platform_item.get("supporting_media_ids") or [])
+        support = [
+            item
+            for item in source.get("media", [])
+            if item.get("media_id") in support_ids
+        ]
+
+        if not support:
+            support = (
+                list(media_package.get("gallery_photos") or []) +
+                list(media_package.get("gallery_videos") or [])
+            )[:4]
+
+        return {
+            "platform": platform,
+            "primary_media_id": primary.get("media_id"),
+            "primary_filename": primary.get("filename", ""),
+            "primary_path": primary.get("path", ""),
+            "supporting_media": [
+                {
+                    "media_id": item.get("media_id"),
+                    "filename": item.get("filename", ""),
+                    "path": item.get("path", ""),
+                    "selected_as": item.get("selected_as", "")
+                }
+                for item in support[:4]
+            ],
+            "why": (
+                platform_item.get("reason")
+                or primary.get("why_selected", "")
+                or "Use the selected primary media for this platform."
+            ),
+            "internal_only": True
+        }
+
+    def _media_by_id(self, media, media_id):
+
+        if not media_id:
+            return {}
+
+        for item in media:
+            if item.get("media_id") == media_id:
+                return item
+
+        return {}
+
     def format_platform(self, platform):
 
         return str(platform or "").replace("_", " ").title()
@@ -953,20 +1033,36 @@ class ContentGenerationService:
         if not media:
             return "Use the strongest approved or corrected visual from this package."
 
-        names = [
-            item.get("filename", "")
+        roles = [
+            str(item.get("selected_as") or item.get("media_type") or "media").replace(
+                "_",
+                " "
+            )
             for item in media[:3]
-            if item.get("filename")
         ]
 
-        return "Visual focus: " + ", ".join(names)
+        return "Visual focus: " + ", ".join(roles)
 
     def _evidence_summary(self, package):
 
         evidence = package.get("supporting_evidence") or []
 
         if evidence:
-            return " ".join(str(item) for item in evidence[:4])
+            safe = []
+
+            for item in evidence[:4]:
+                text = str(item)
+
+                if ".jpg" in text.lower() or ".jpeg" in text.lower() or ".png" in text.lower() or ".mp4" in text.lower():
+                    continue
+
+                if "effective description:" in text.lower():
+                    text = text.split(":", 1)[-1].strip()
+
+                safe.append(text)
+
+            if safe:
+                return " ".join(safe)
 
         return package.get("trust_label", "Evidence should be reviewed before publishing.")
 

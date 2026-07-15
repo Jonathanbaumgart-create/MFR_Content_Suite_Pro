@@ -476,6 +476,60 @@ class DatabaseManager:
         """)
 
         ########################################################
+        # Communication Package History / Asset Actions
+        ########################################################
+
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS communication_package_history(
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            package_id TEXT,
+
+            recommendation_id TEXT,
+
+            story_title TEXT,
+
+            package_version TEXT,
+
+            package_json TEXT,
+
+            created_at TEXT
+
+        )
+
+        """)
+
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS communication_package_asset_actions(
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            package_id TEXT,
+
+            media_id INTEGER,
+
+            action TEXT,
+
+            reason TEXT,
+
+            previous_role TEXT,
+
+            new_role TEXT,
+
+            previous_media_id INTEGER DEFAULT 0,
+
+            source TEXT,
+
+            created_at TEXT
+
+        )
+
+        """)
+
+        ########################################################
         # Home / Morning Brief Sessions
         ########################################################
 
@@ -5523,6 +5577,220 @@ class DatabaseManager:
 
     ############################################################
 
+    def media_package_asset_rows(self, media_ids, limit=50):
+
+        ids = [
+            self._to_int(media_id)
+            for media_id in media_ids[:int(limit or 50)]
+            if self._to_int(media_id)
+        ]
+
+        if not ids:
+            return []
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        placeholders = ",".join("?" for _ in ids)
+
+        cur.execute(f"""
+        SELECT
+            id AS media_id,
+            filename,
+            path,
+            media_type,
+            sha256,
+            first_seen_at,
+            date_added,
+            capture_time,
+            duration_seconds,
+            width,
+            height,
+            orientation
+        FROM media
+        WHERE id IN ({placeholders})
+        """, tuple(ids))
+
+        rows = cur.fetchall()
+        conn.close()
+        by_id = {}
+
+        for row in rows:
+            by_id[row["media_id"]] = {
+                "media_id": row["media_id"],
+                "filename": row["filename"] or "",
+                "path": row["path"] or "",
+                "media_type": row["media_type"] or "",
+                "sha256": row["sha256"] or "",
+                "first_seen_at": row["first_seen_at"] or "",
+                "date_added": row["date_added"] or "",
+                "capture_time": row["capture_time"] or "",
+                "duration_seconds": row["duration_seconds"] or 0,
+                "width": row["width"] or 0,
+                "height": row["height"] or 0,
+                "orientation": row["orientation"] or ""
+            }
+
+        return [
+            by_id[media_id]
+            for media_id in ids
+            if media_id in by_id
+        ]
+
+    ############################################################
+
+    def save_communication_package_history(self, package):
+
+        package = package or {}
+        conn = self.connection()
+        cur = conn.cursor()
+        cur.execute("""
+        INSERT INTO communication_package_history(
+            package_id,
+            recommendation_id,
+            story_title,
+            package_version,
+            package_json,
+            created_at
+        )
+        VALUES(?,?,?,?,?,?)
+        """, (
+            package.get("package_id", ""),
+            package.get("recommendation_id", ""),
+            package.get("story_title") or package.get("headline", ""),
+            package.get("version", ""),
+            self._to_json(package),
+            package.get("generated_at") or TimeService.utc_now_iso()
+        ))
+        row_id = cur.lastrowid
+        conn.commit()
+        conn.close()
+        return row_id
+
+    ############################################################
+
+    def communication_package_history(
+        self,
+        package_id=None,
+        recommendation_id=None,
+        limit=20
+    ):
+
+        clauses = []
+        params = []
+
+        if package_id:
+            clauses.append("package_id=?")
+            params.append(package_id)
+
+        if recommendation_id:
+            clauses.append("recommendation_id=?")
+            params.append(recommendation_id)
+
+        where = "WHERE " + " AND ".join(clauses) if clauses else ""
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute(
+            f"""
+            SELECT *
+            FROM communication_package_history
+            {where}
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            tuple(params + [self._to_int(limit) or 20])
+        )
+        rows = cur.fetchall()
+        conn.close()
+
+        return [
+            {
+                "id": row["id"],
+                "package_id": row["package_id"] or "",
+                "recommendation_id": row["recommendation_id"] or "",
+                "story_title": row["story_title"] or "",
+                "package_version": row["package_version"] or "",
+                "package": self._from_json(row["package_json"]),
+                "created_at": row["created_at"] or ""
+            }
+            for row in rows
+        ]
+
+    ############################################################
+
+    def save_communication_package_asset_action(self, action):
+
+        action = action or {}
+        conn = self.connection()
+        cur = conn.cursor()
+        cur.execute("""
+        INSERT INTO communication_package_asset_actions(
+            package_id,
+            media_id,
+            action,
+            reason,
+            previous_role,
+            new_role,
+            previous_media_id,
+            source,
+            created_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,?)
+        """, (
+            action.get("package_id", ""),
+            self._to_int(action.get("media_id")),
+            action.get("action", ""),
+            action.get("reason", ""),
+            action.get("previous_role", ""),
+            action.get("new_role", ""),
+            self._to_int(action.get("previous_media_id")),
+            action.get("source", "Jonathan"),
+            action.get("created_at") or TimeService.utc_now_iso()
+        ))
+        row_id = cur.lastrowid
+        conn.commit()
+        conn.close()
+        return row_id
+
+    ############################################################
+
+    def communication_package_asset_actions(self, package_id, limit=50):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute("""
+        SELECT *
+        FROM communication_package_asset_actions
+        WHERE package_id=?
+        ORDER BY id DESC
+        LIMIT ?
+        """, (
+            package_id,
+            self._to_int(limit) or 50
+        ))
+        rows = cur.fetchall()
+        conn.close()
+
+        return [
+            {
+                "id": row["id"],
+                "package_id": row["package_id"] or "",
+                "media_id": row["media_id"] or 0,
+                "action": row["action"] or "",
+                "reason": row["reason"] or "",
+                "previous_role": row["previous_role"] or "",
+                "new_role": row["new_role"] or "",
+                "previous_media_id": row["previous_media_id"] or 0,
+                "source": row["source"] or "",
+                "created_at": row["created_at"] or ""
+            }
+            for row in rows
+        ]
+
+    ############################################################
+
     def save_recommendation_history(self, recommendation):
 
         conn = self.connection()
@@ -10541,6 +10809,11 @@ class DatabaseManager:
             "CREATE INDEX IF NOT EXISTS idx_recommendation_history_media ON recommendation_history(media_id)",
             "CREATE INDEX IF NOT EXISTS idx_recommendation_history_date ON recommendation_history(recommendation_date)",
             "CREATE INDEX IF NOT EXISTS idx_recommendation_history_opportunity ON recommendation_history(opportunity)",
+            "CREATE INDEX IF NOT EXISTS idx_comm_package_history_package ON communication_package_history(package_id)",
+            "CREATE INDEX IF NOT EXISTS idx_comm_package_history_recommendation ON communication_package_history(recommendation_id)",
+            "CREATE INDEX IF NOT EXISTS idx_comm_package_history_created ON communication_package_history(created_at)",
+            "CREATE INDEX IF NOT EXISTS idx_comm_package_actions_package ON communication_package_asset_actions(package_id)",
+            "CREATE INDEX IF NOT EXISTS idx_comm_package_actions_media ON communication_package_asset_actions(media_id)",
             "CREATE INDEX IF NOT EXISTS idx_home_sessions_status ON home_sessions(status)",
             "CREATE INDEX IF NOT EXISTS idx_home_sessions_completed ON home_sessions(completed_at)",
             "CREATE INDEX IF NOT EXISTS idx_home_sessions_started ON home_sessions(started_at)",

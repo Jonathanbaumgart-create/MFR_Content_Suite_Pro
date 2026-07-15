@@ -1,8 +1,11 @@
 from concurrent.futures import ThreadPoolExecutor
+import os
 import queue
+import subprocess
 
 import customtkinter as ctk
 
+from gui.package_media_panel import PackageMediaPanel
 from gui.photo_card import PhotoCard
 from gui.photo_viewer import PhotoViewer
 from services.communications_director import CommunicationsDirector
@@ -1251,6 +1254,29 @@ class ContentDirectorPage(ctk.CTkFrame):
         window.transient(self.winfo_toplevel())
         window.lift()
 
+        visual_panel = PackageMediaPanel(
+            window,
+            package.get("media_package", {}),
+            self.thumbnail_service,
+            open_callback=self.open_package_asset,
+            reveal_callback=self.reveal_package_asset,
+            copy_callback=self.copy_package_asset_path,
+            replace_callback=lambda asset, role: self.show_package_alternatives(
+                package,
+                role=role
+            ),
+            exclude_callback=lambda asset: self.exclude_package_asset(
+                package,
+                asset
+            ),
+            preview_callback=self.show_asset_preview
+        )
+        visual_panel.pack(
+            fill="x",
+            padx=16,
+            pady=(16, 8)
+        )
+
         textbox = ctk.CTkTextbox(
             window,
             wrap="word"
@@ -1259,7 +1285,7 @@ class ContentDirectorPage(ctk.CTkFrame):
             fill="both",
             expand=True,
             padx=16,
-            pady=(16, 8)
+            pady=(0, 8)
         )
         textbox.insert(
             "1.0",
@@ -1292,6 +1318,39 @@ class ContentDirectorPage(ctk.CTkFrame):
             pady=(0, 8)
         )
 
+        primary = self.primary_package_asset(package)
+
+        if primary:
+            ctk.CTkButton(
+                window,
+                text="Open Primary Media",
+                command=lambda item=primary: self.open_package_asset(item)
+            ).pack(
+                anchor="e",
+                padx=16,
+                pady=(0, 8)
+            )
+
+            ctk.CTkButton(
+                window,
+                text="Show Alternatives",
+                command=lambda item=package: self.show_package_alternatives(item)
+            ).pack(
+                anchor="e",
+                padx=16,
+                pady=(0, 8)
+            )
+
+            ctk.CTkButton(
+                window,
+                text="Mark Primary Unsuitable",
+                command=lambda item=package: self.mark_primary_unsuitable(item)
+            ).pack(
+                anchor="e",
+                padx=16,
+                pady=(0, 8)
+            )
+
         ctk.CTkButton(
             window,
             text="Why Not Another Asset?",
@@ -1314,6 +1373,221 @@ class ContentDirectorPage(ctk.CTkFrame):
             padx=16,
             pady=(0, 16)
         )
+
+    ##########################################################
+
+    def primary_package_asset(self, package):
+
+        media = (package or {}).get("media_package", {}) or {}
+        return (
+            media.get("primary_photo")
+            or media.get("best_photo")
+            or media.get("primary_video")
+            or media.get("best_video")
+            or {}
+        )
+
+    ##########################################################
+
+    def show_package_alternatives(self, package, role=None):
+
+        primary = self.primary_package_asset(package)
+        role = role or (
+            "primary_video"
+            if primary.get("media_type") == "video"
+            else "primary_photo"
+        )
+        alternatives = self.communication_package_service.alternatives_for_package(
+            package,
+            media_type=primary.get("media_type"),
+            limit=10
+        )
+        window = ctk.CTkToplevel(self)
+        window.title("Alternative Media")
+        window.geometry("960x680")
+        window.transient(self.winfo_toplevel())
+        window.lift()
+
+        frame = ctk.CTkScrollableFrame(window)
+        frame.pack(fill="both", expand=True, padx=16, pady=(16, 8))
+
+        if not alternatives:
+            ctk.CTkLabel(
+                frame,
+                text="No bounded alternatives are available for this package."
+            ).pack(anchor="w", padx=8, pady=8)
+        else:
+            for item in alternatives[:10]:
+                row = ctk.CTkFrame(frame, corner_radius=6)
+                row.pack(fill="x", padx=8, pady=6)
+                row.grid_columnconfigure(1, weight=1)
+
+                panel = PackageMediaPanel(
+                    row,
+                    {
+                        "primary_video" if item.get("media_type") == "video" else "primary_photo": item
+                    },
+                    self.thumbnail_service,
+                    open_callback=self.open_package_asset,
+                    reveal_callback=self.reveal_package_asset,
+                    copy_callback=self.copy_package_asset_path,
+                    preview_callback=self.show_asset_preview,
+                    compact=True
+                )
+                panel.grid(row=0, column=0, sticky="w", padx=8, pady=8)
+
+                detail = (
+                    f"{item.get('filename', '')}\n"
+                    f"trust {item.get('trust_state', '')} | "
+                    f"media score {item.get('media_score', 0)} | "
+                    f"platform fit {item.get('platform_fit_score', 0)}\n"
+                    f"Why not primary: {item.get('why_not_primary') or item.get('why_selected', '')}"
+                )
+                ctk.CTkLabel(
+                    row,
+                    text=detail,
+                    wraplength=420,
+                    justify="left"
+                ).grid(row=0, column=1, sticky="ew", padx=8, pady=8)
+                ctk.CTkButton(
+                    row,
+                    text="Select This Asset",
+                    width=150,
+                    command=lambda alt=item: self.use_top_package_alternative(
+                        package,
+                        alt,
+                        window,
+                        role=role
+                    )
+                ).grid(row=0, column=2, padx=8, pady=8)
+
+        footer = ctk.CTkFrame(window, fg_color="transparent")
+        footer.pack(fill="x", padx=16, pady=(0, 16))
+
+        ctk.CTkButton(
+            footer,
+            text="Close",
+            command=window.destroy
+        ).pack(side="right")
+
+    ##########################################################
+
+    def use_top_package_alternative(self, package, alternative, window=None, role=None):
+
+        primary = self.primary_package_asset(package)
+        role = role or (
+            "primary_video" if primary.get("media_type") == "video" else "primary_photo"
+        )
+        updated = self.communication_package_service.replace_package_asset(
+            package,
+            alternative,
+            role,
+            reason="Selected from Content Director alternatives"
+        )
+        self.status.configure(
+            text=f"Primary media replaced with {alternative.get('filename', '')}."
+        )
+
+        if window and window.winfo_exists():
+            window.destroy()
+
+        self.show_package_preview(updated)
+
+    ##########################################################
+
+    def exclude_package_asset(self, package, asset):
+
+        if not asset:
+            return
+
+        updated = self.communication_package_service.exclude_package_asset(
+            package,
+            asset.get("media_id"),
+            reason="Marked unsuitable from visual package preview"
+        )
+        self.status.configure(
+            text=f"Marked {asset.get('filename', '')} unsuitable for this package only."
+        )
+        self.show_package_preview(updated)
+
+    ##########################################################
+
+    def mark_primary_unsuitable(self, package):
+
+        primary = self.primary_package_asset(package)
+
+        if not primary:
+            self.status.configure(text="No primary media is selected.")
+            return
+
+        updated = self.communication_package_service.exclude_package_asset(
+            package,
+            primary.get("media_id"),
+            reason="Marked unsuitable from Content Director package preview"
+        )
+        self.status.configure(
+            text=f"Marked {primary.get('filename', '')} unsuitable for this package only."
+        )
+        self.show_package_preview(updated)
+
+    ##########################################################
+
+    def open_package_asset(self, asset):
+
+        asset = asset or {}
+
+        if asset.get("media_type") == "video":
+            path = asset.get("path", "")
+
+            if path:
+                os.startfile(path)
+            return
+
+        self.open_viewer(asset)
+
+    ##########################################################
+
+    def reveal_package_asset(self, asset):
+
+        path = (asset or {}).get("path", "")
+
+        if not path:
+            return
+
+        subprocess.Popen(
+            ["explorer", "/select,", path]
+        )
+
+    ##########################################################
+
+    def copy_package_asset_path(self, asset):
+
+        self.copy_text(
+            "Copy File Path",
+            (asset or {}).get("path", "")
+        )
+
+    ##########################################################
+
+    def show_asset_preview(self, asset):
+
+        window = ctk.CTkToplevel(self)
+        window.title(asset.get("filename", "Media Preview"))
+        window.geometry("660x540")
+        window.transient(self.winfo_toplevel())
+        window.lift()
+        panel = PackageMediaPanel(
+            window,
+            {
+                "primary_video" if asset.get("media_type") == "video" else "primary_photo": asset
+            },
+            self.thumbnail_service,
+            open_callback=self.open_package_asset,
+            reveal_callback=self.reveal_package_asset,
+            copy_callback=self.copy_package_asset_path,
+            preview_callback=None
+        )
+        panel.pack(fill="both", expand=True, padx=16, pady=16)
 
     ##########################################################
 
@@ -1347,6 +1621,16 @@ class ContentDirectorPage(ctk.CTkFrame):
                         "Primary video: " + (media.get("primary_video", {}).get("filename") or "None"),
                         "Gallery photos: " + self.media_names(media.get("gallery_photos", [])),
                         "Gallery videos: " + self.media_names(media.get("gallery_videos", []))
+                    ]
+                ),
+                "Asset Selection\n" + "\n".join(
+                    [
+                        "Reasons: " + self.format_values(media.get("reasons", [])),
+                        "Diversity: " + self.format_values(media.get("diversity_reasoning", [])),
+                        "Platform media guidance:\n" + self.platform_guidance_text(
+                            package.get("platform_media_guidance", {})
+                            or media.get("platform_media_guidance", {})
+                        )
                     ]
                 ),
                 "Suggested Hashtags\n" + " ".join(package.get("suggested_hashtags", [])),
@@ -1876,6 +2160,23 @@ class ContentDirectorPage(ctk.CTkFrame):
 
     ##########################################################
 
+    def generated_media_guidance_text(self, guidance):
+
+        guidance = guidance or {}
+        support = guidance.get("supporting_media") or []
+        support_names = [
+            item.get("filename", "")
+            for item in support
+            if item.get("filename")
+        ]
+        return (
+            f"Primary: {guidance.get('primary_filename', 'None')}. "
+            f"Supporting: {self.format_values(support_names)}. "
+            f"Why: {guidance.get('why', '')}"
+        )
+
+    ##########################################################
+
     def show_generated_content_preview(self, package):
 
         window = ctk.CTkToplevel(self)
@@ -1887,6 +2188,18 @@ class ContentDirectorPage(ctk.CTkFrame):
         selected = {
             "platform": "facebook"
         }
+        source_package = package.get("source_package", {}) or {}
+        media_panel = PackageMediaPanel(
+            window,
+            source_package.get("media_package", {}),
+            self.thumbnail_service,
+            open_callback=self.open_package_asset,
+            reveal_callback=self.reveal_package_asset,
+            copy_callback=self.copy_package_asset_path,
+            preview_callback=self.show_asset_preview,
+            compact=True
+        )
+        media_panel.pack(fill="x", padx=16, pady=(16, 8))
         body = ctk.CTkTextbox(
             window,
             wrap="word"
@@ -1895,7 +2208,7 @@ class ContentDirectorPage(ctk.CTkFrame):
             fill="both",
             expand=True,
             padx=16,
-            pady=(8, 8)
+            pady=(0, 8)
         )
 
         controls = ctk.CTkFrame(
@@ -1905,7 +2218,7 @@ class ContentDirectorPage(ctk.CTkFrame):
         controls.pack(
             fill="x",
             padx=16,
-            pady=(16, 0)
+            pady=(8, 0)
         )
 
         def render(platform):
@@ -1925,6 +2238,9 @@ class ContentDirectorPage(ctk.CTkFrame):
                     [
                         output.get("title", self.format_label(platform)),
                         output.get("copy_text", ""),
+                        "Internal media guidance: " + self.generated_media_guidance_text(
+                            output.get("media_guidance", {})
+                        ),
                         "Word count: " + str(output.get("word_count", "")),
                         (
                             "Reading time: " +
@@ -2577,6 +2893,22 @@ class ContentDirectorPage(ctk.CTkFrame):
             for item in media[:5]
             if item.get("filename")
         ) or "None"
+
+    ##########################################################
+
+    def platform_guidance_text(self, guidance):
+
+        lines = []
+
+        for platform, item in (guidance or {}).items():
+            lines.append(
+                (
+                    f"{platform}: {item.get('primary_filename', '')} - "
+                    f"{item.get('reason', '')}"
+                )
+            )
+
+        return "\n".join(lines) if lines else "No platform-specific media guidance."
 
     ##########################################################
 

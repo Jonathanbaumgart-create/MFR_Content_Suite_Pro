@@ -9,6 +9,7 @@ from services.editorial_recommendation_service import EditorialRecommendationSer
 from services.knowledge_service import KnowledgeService
 from services.logging_service import LoggingService
 from services.media_priority_service import MediaPriorityService
+from services.media_package_service import MediaPackageService
 from services.time_service import TimeService
 
 
@@ -43,6 +44,9 @@ class CommunicationsOfficerService:
             database=self.db
         )
         self.priority = priority_service or MediaPriorityService(
+            database=self.db
+        )
+        self.media_packages = MediaPackageService(
             database=self.db
         )
         self.last_metrics = {}
@@ -435,9 +439,15 @@ class CommunicationsOfficerService:
             unreviewed_count
         )
 
-        package = self._media_package(
-            recommendation,
-            selected_assets
+        package = self.media_packages.build_package(
+            {
+                **recommendation,
+                "recommended_media": selected_assets
+            },
+            platforms=recommendation.get("recommended_platforms", []),
+            include_mock=False,
+            candidate_limit=self.MORNING_BRIEF_CANDIDATE_LIMIT,
+            persist=True
         )
         positive, negative = self._factor_groups(recommendation)
         confidence = self._confidence(

@@ -1,13 +1,18 @@
 import customtkinter as ctk
+import os
+import subprocess
 import time
 
 from core.app_context import context
+from gui.package_media_panel import PackageMediaPanel
+from gui.photo_viewer import PhotoViewer
 from services.communication_package_service import CommunicationPackageService
 from services.communications_intelligence_service import CommunicationsIntelligenceService
 from services.communications_officer_service import CommunicationsOfficerService
 from services.content_generation_service import ContentGenerationService
 from services.decision_explainability_service import DecisionExplainabilityService
 from services.logging_service import LoggingService
+from services.thumbnail_service import ThumbnailService
 from services.time_service import TimeService
 
 
@@ -25,6 +30,7 @@ class HomePage(ctk.CTkFrame):
         self.content_generation_service = ContentGenerationService()
         self.explainability_service = DecisionExplainabilityService()
         self.communications_intelligence_service = CommunicationsIntelligenceService()
+        self.thumbnail_service = ThumbnailService()
         self.future = None
         self.package_future = None
         self.content_future = None
@@ -366,6 +372,35 @@ class HomePage(ctk.CTkFrame):
             pady=12
         )
 
+        media_button = ctk.CTkButton(
+            frame,
+            text="View Media Package",
+            width=160,
+            command=lambda item=story: self.show_story_media_package(item)
+        )
+        media_button.pack(
+            side="right",
+            padx=(0, 8),
+            pady=12
+        )
+
+        primary = self.primary_media_asset(
+            story.get("media_package", {})
+        )
+
+        if primary:
+            open_button = ctk.CTkButton(
+                frame,
+                text="Open Primary Photo",
+                width=150,
+                command=lambda item=primary: self.open_media_asset(item)
+            )
+            open_button.pack(
+                side="right",
+                padx=(0, 8),
+                pady=12
+            )
+
         why_button = ctk.CTkButton(
             frame,
             text="Why This?",
@@ -380,6 +415,208 @@ class HomePage(ctk.CTkFrame):
             padx=(0, 8),
             pady=12
         )
+
+    ##########################################################
+
+    def show_story_media_package(self, story):
+
+        package = story.get("media_package", {}) or {}
+        window = ctk.CTkToplevel(self)
+        window.title("Recommended Media Package")
+        window.geometry("900x640")
+        window.transient(self.winfo_toplevel())
+        window.lift()
+
+        panel = PackageMediaPanel(
+            window,
+            package,
+            self.thumbnail_service,
+            open_callback=self.open_media_asset,
+            reveal_callback=self.reveal_media_asset,
+            copy_callback=self.copy_media_path,
+            preview_callback=self.show_asset_preview
+        )
+        panel.pack(fill="x", padx=16, pady=(16, 8))
+
+        textbox = ctk.CTkTextbox(
+            window,
+            wrap="word"
+        )
+        textbox.pack(
+            fill="both",
+            expand=True,
+            padx=16,
+            pady=(16, 8)
+        )
+        textbox.insert(
+            "1.0",
+            self.media_package_text(package)
+        )
+        textbox.configure(state="disabled")
+
+        footer = ctk.CTkFrame(window, fg_color="transparent")
+        footer.pack(fill="x", padx=16, pady=(0, 16))
+        primary = self.primary_media_asset(package)
+
+        if primary:
+            ctk.CTkButton(
+                footer,
+                text="Open Primary",
+                command=lambda item=primary: self.open_media_asset(item)
+            ).pack(side="left", padx=(0, 8))
+            ctk.CTkButton(
+                footer,
+                text="Copy File Path",
+                command=lambda item=primary: self.copy_media_path(item)
+            ).pack(side="left", padx=(0, 8))
+
+        ctk.CTkButton(
+            footer,
+            text="Close",
+            command=window.destroy
+        ).pack(side="right")
+
+    ##########################################################
+
+    def media_package_text(self, package):
+
+        package = package or {}
+        lines = [
+            "Primary Photo",
+            self.media_asset_line(package.get("primary_photo") or package.get("best_photo")),
+            "",
+            "Primary Video",
+            self.media_asset_line(package.get("primary_video") or package.get("best_video")),
+            "",
+            "Supporting Photos",
+            self.media_asset_lines(package.get("gallery_photos") or package.get("supporting_photos")),
+            "",
+            "Supporting Videos",
+            self.media_asset_lines(package.get("gallery_videos") or package.get("supporting_videos")),
+            "",
+            "Why These Assets",
+            self.format_list(package.get("reasons", [])),
+            "",
+            "Diversity Reasoning",
+            self.format_list(package.get("diversity_reasoning", [])),
+            "",
+            "Platform Guidance",
+            self.platform_guidance_text(package.get("platform_media_guidance", {})),
+            "",
+            "Scores",
+            (
+                f"Story relevance {package.get('story_relevance', 0)} | "
+                f"Media score {package.get('media_score', 0)} | "
+                f"Platform fit {package.get('platform_fit', 0)} | "
+                f"Recent-use risk {package.get('recent_use_risk', 0)}"
+            )
+        ]
+        return "\n".join(str(line) for line in lines)
+
+    def media_asset_lines(self, assets):
+
+        lines = [
+            self.media_asset_line(item)
+            for item in (assets or [])
+        ]
+        return "\n".join(lines) if lines else "None"
+
+    def media_asset_line(self, asset):
+
+        asset = asset or {}
+
+        if not asset:
+            return "None"
+
+        return (
+            f"{asset.get('filename', '')} | "
+            f"{asset.get('media_type', '')} | "
+            f"trust {asset.get('trust_state', '')} | "
+            f"score {asset.get('media_score', asset.get('communications_score', 0))} | "
+            f"{asset.get('why_selected', '')}"
+        )
+
+    def platform_guidance_text(self, guidance):
+
+        lines = []
+
+        for platform, item in (guidance or {}).items():
+            lines.append(
+                (
+                    f"{platform}: {item.get('primary_filename', '')} - "
+                    f"{item.get('reason', '')}"
+                )
+            )
+
+        return "\n".join(lines) if lines else "No platform-specific media guidance."
+
+    def primary_media_asset(self, package):
+
+        package = package or {}
+        return (
+            package.get("primary_photo")
+            or package.get("best_photo")
+            or package.get("primary_video")
+            or package.get("best_video")
+            or {}
+        )
+
+    def open_media_asset(self, asset):
+
+        asset = asset or {}
+
+        if not asset.get("media_id"):
+            return
+
+        if asset.get("media_type") == "video":
+            path = asset.get("path", "")
+            if path:
+                os.startfile(path)
+            return
+
+        PhotoViewer(
+            self,
+            asset["media_id"],
+            asset.get("filename", ""),
+            asset.get("path", "")
+        )
+
+    def reveal_media_asset(self, asset):
+
+        path = (asset or {}).get("path", "")
+
+        if not path:
+            return
+
+        subprocess.Popen(
+            ["explorer", "/select,", path]
+        )
+
+    def copy_media_path(self, asset):
+
+        self.clipboard_clear()
+        self.clipboard_append((asset or {}).get("path", ""))
+        self.status.configure(text="Media file path copied.")
+
+    def show_asset_preview(self, asset):
+
+        window = ctk.CTkToplevel(self)
+        window.title(asset.get("filename", "Media Preview"))
+        window.geometry("640x520")
+        window.transient(self.winfo_toplevel())
+        window.lift()
+        panel = PackageMediaPanel(
+            window,
+            {
+                "primary_video" if asset.get("media_type") == "video" else "primary_photo": asset
+            },
+            self.thumbnail_service,
+            open_callback=self.open_media_asset,
+            reveal_callback=self.reveal_media_asset,
+            copy_callback=self.copy_media_path,
+            preview_callback=None
+        )
+        panel.pack(fill="both", expand=True, padx=16, pady=16)
 
     ##########################################################
 
@@ -439,6 +676,17 @@ class HomePage(ctk.CTkFrame):
         window.transient(self.winfo_toplevel())
         window.lift()
 
+        visual_panel = PackageMediaPanel(
+            window,
+            package.get("media_package", {}),
+            self.thumbnail_service,
+            open_callback=self.open_media_asset,
+            reveal_callback=self.reveal_media_asset,
+            copy_callback=self.copy_media_path,
+            preview_callback=self.show_asset_preview
+        )
+        visual_panel.pack(fill="x", padx=16, pady=(16, 8))
+
         textbox = ctk.CTkTextbox(
             window,
             wrap="word"
@@ -447,7 +695,7 @@ class HomePage(ctk.CTkFrame):
             fill="both",
             expand=True,
             padx=16,
-            pady=(16, 8)
+            pady=(0, 8)
         )
         textbox.insert(
             "1.0",
@@ -518,6 +766,16 @@ class HomePage(ctk.CTkFrame):
                         "Primary video: " + (media.get("primary_video", {}).get("filename") or "None"),
                         "Gallery photos: " + self.media_summary(media.get("gallery_photos", [])),
                         "Gallery videos: " + self.media_summary(media.get("gallery_videos", []))
+                    ]
+                ),
+                "Asset Selection\n" + "\n".join(
+                    [
+                        "Reasons: " + self.format_list(media.get("reasons", [])),
+                        "Diversity: " + self.format_list(media.get("diversity_reasoning", [])),
+                        "Platform media guidance:\n" + self.platform_guidance_text(
+                            package.get("platform_media_guidance", {})
+                            or media.get("platform_media_guidance", {})
+                        )
                     ]
                 ),
                 "Suggested Hashtags\n" + " ".join(package.get("suggested_hashtags", [])),
@@ -690,19 +948,31 @@ class HomePage(ctk.CTkFrame):
         window.lift()
 
         selected = {"platform": "facebook"}
+        source_package = package.get("source_package", {}) or {}
+        media_panel = PackageMediaPanel(
+            window,
+            source_package.get("media_package", {}),
+            self.thumbnail_service,
+            open_callback=self.open_media_asset,
+            reveal_callback=self.reveal_media_asset,
+            copy_callback=self.copy_media_path,
+            preview_callback=self.show_asset_preview,
+            compact=True
+        )
+        media_panel.pack(fill="x", padx=16, pady=(16, 8))
         body = ctk.CTkTextbox(window, wrap="word")
         body.pack(
             fill="both",
             expand=True,
             padx=16,
-            pady=(8, 8)
+            pady=(0, 8)
         )
 
         controls = ctk.CTkFrame(window, fg_color="transparent")
         controls.pack(
             fill="x",
             padx=16,
-            pady=(16, 0)
+            pady=(8, 0)
         )
 
         def render(platform):
@@ -721,6 +991,9 @@ class HomePage(ctk.CTkFrame):
                     [
                         output.get("title", self.format_label(platform)),
                         output.get("copy_text", ""),
+                        "Internal media guidance: " + self.generated_media_guidance_text(
+                            output.get("media_guidance", {})
+                        ),
                         "Word count: " + str(output.get("word_count", "")),
                         (
                             "Reading time: " +
@@ -781,6 +1054,23 @@ class HomePage(ctk.CTkFrame):
         )
         self.status.configure(
             text=f"{self.format_label(platform)} copied."
+        )
+
+    ##########################################################
+
+    def generated_media_guidance_text(self, guidance):
+
+        guidance = guidance or {}
+        support = guidance.get("supporting_media") or []
+        support_names = [
+            item.get("filename", "")
+            for item in support
+            if item.get("filename")
+        ]
+        return (
+            f"Primary: {guidance.get('primary_filename', 'None')}. "
+            f"Supporting: {self.format_list(support_names)}. "
+            f"Why: {guidance.get('why', '')}"
         )
 
     ##########################################################
@@ -1563,5 +1853,8 @@ class HomePage(ctk.CTkFrame):
 
         if self.future and not self.future.done():
             self.future.cancel()
+
+        if hasattr(self, "thumbnail_service"):
+            self.thumbnail_service.shutdown()
 
         super().destroy()

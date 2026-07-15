@@ -4,6 +4,7 @@ from core.app_context import context
 from services.decision_explainability_service import DecisionExplainabilityService
 from services.human_feedback_service import HumanFeedbackService
 from services.logging_service import LoggingService
+from services.media_package_service import MediaPackageService
 from services.time_service import TimeService
 
 
@@ -82,6 +83,10 @@ class CommunicationPackageService:
         self.feedback = HumanFeedbackService(
             database=self.db
         )
+        self.media_packages = MediaPackageService(
+            database=self.db,
+            feedback_service=self.feedback
+        )
         self.last_metrics = {}
 
     ############################################################
@@ -99,9 +104,11 @@ class CommunicationPackageService:
             recommendation,
             include_mock=include_mock
         )
-        media_package = self._media_package(
+        media_package = self.media_packages.build_package(
             recommendation,
-            assets
+            platforms=self._platforms(recommendation, package_type),
+            include_mock=include_mock,
+            persist=True
         )
         scoring = self._package_scoring(
             recommendation,
@@ -165,6 +172,27 @@ class CommunicationPackageService:
                 recommendation
             ),
             "media_package": media_package,
+            "platform_media_guidance": media_package.get(
+                "platform_media_guidance",
+                {}
+            ),
+            "source_recommendation": {
+                key: recommendation.get(key)
+                for key in (
+                    "recommendation_id",
+                    "title",
+                    "summary",
+                    "topic",
+                    "category",
+                    "editorial_angle",
+                    "supporting_topics",
+                    "supporting_programs",
+                    "recommended_platforms",
+                    "best_asset_ids",
+                    "supporting_asset_ids",
+                    "recommended_media"
+                )
+            },
             "package_scoring": scoring,
             "generated_at": TimeService.utc_now_iso(),
             "source": "stored_recommendation_intelligence"
@@ -204,6 +232,72 @@ class CommunicationPackageService:
             )
             for package_type in (package_types or self.PACKAGE_TYPES)
         ]
+
+    ############################################################
+
+    def alternatives_for_package(self, package, media_type=None, limit=25):
+
+        source = package.get("source_recommendation") or package
+        media_package = package.get("media_package", {}) or {}
+        excluded = set(media_package.get("excluded_asset_ids") or [])
+
+        for key in ("primary_photo", "primary_video"):
+            if media_package.get(key):
+                excluded.add(media_package[key].get("media_id"))
+
+        for key in ("gallery_photos", "gallery_videos", "supporting_photos", "supporting_videos"):
+            for item in media_package.get(key) or []:
+                excluded.add(item.get("media_id"))
+
+        return self.media_packages.alternatives(
+            source,
+            media_type=media_type,
+            exclude_ids=excluded,
+            limit=limit
+        )
+
+    ############################################################
+
+    def replace_package_asset(self, package, replacement_asset, role, reason="Manual replacement"):
+
+        package = dict(package or {})
+        media_package = self.media_packages.replace_asset(
+            package.get("media_package", {}),
+            replacement_asset,
+            role,
+            reason=reason
+        )
+        package["media_package"] = media_package
+        package["best_photo"] = media_package.get("primary_photo", {})
+        package["best_video"] = media_package.get("primary_video", {})
+        package["supporting_photos"] = media_package.get("gallery_photos", [])
+        package["supporting_videos"] = media_package.get("gallery_videos", [])
+        package["platform_media_guidance"] = media_package.get(
+            "platform_media_guidance",
+            {}
+        )
+        return package
+
+    ############################################################
+
+    def exclude_package_asset(self, package, media_id, reason="Package-specific exclusion"):
+
+        package = dict(package or {})
+        media_package = self.media_packages.exclude_asset(
+            package.get("media_package", {}),
+            media_id,
+            reason=reason
+        )
+        package["media_package"] = media_package
+        package["best_photo"] = media_package.get("primary_photo", {})
+        package["best_video"] = media_package.get("primary_video", {})
+        package["supporting_photos"] = media_package.get("gallery_photos", [])
+        package["supporting_videos"] = media_package.get("gallery_videos", [])
+        package["platform_media_guidance"] = media_package.get(
+            "platform_media_guidance",
+            {}
+        )
+        return package
 
     ############################################################
 
