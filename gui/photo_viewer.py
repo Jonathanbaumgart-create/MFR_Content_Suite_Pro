@@ -299,7 +299,8 @@ class PhotoViewer(ctk.CTkToplevel):
 
         self.analysis_text = ctk.CTkTextbox(
             ai,
-            height=420
+            height=420,
+            wrap="word"
         )
 
         self.analysis_text.pack(
@@ -545,15 +546,18 @@ class PhotoViewer(ctk.CTkToplevel):
         self.instagram_button.configure(state="normal")
         self.both_button.configure(state="normal")
 
+        effective_description = self.effective_description()
         lines = [
-            analysis.get("description", ""),
+            "AI Assistant Understanding",
+            "Source: " + self.effective_source_label(),
+            effective_description,
             "",
-            f"Scene: {analysis.get('scene_type', '')}",
-            f"Activity: {analysis.get('activity', '')}",
-            f"People: {analysis.get('people_count', 0)}",
+            f"Scene: {self.effective_value('incident_classification', analysis.get('scene_type', ''))}",
+            f"Activity: {self.effective_value('primary_activity', analysis.get('activity', ''))}",
+            f"People: {self.effective_value('people_count', analysis.get('people_count', 0))}",
             "",
-            "Apparatus: " + self.format_list(analysis.get("apparatus")),
-            "Equipment: " + self.format_list(analysis.get("equipment")),
+            "Apparatus: " + self.format_list(self.effective_value("apparatus", analysis.get("apparatus"))),
+            "Equipment: " + self.format_list(self.effective_value("equipment", analysis.get("equipment"))),
             "Keywords: " + self.format_list(analysis.get("keywords")),
             "",
             f"Community Score: {analysis.get('community_score', 0)}",
@@ -562,13 +566,16 @@ class PhotoViewer(ctk.CTkToplevel):
             f"Technical Score: {analysis.get('technical_score', 0)}",
             f"Overall Score: {analysis.get('overall_score', 0)}",
             "",
+            "Raw AI Analysis",
             self.analysis_provider_label(analysis),
             f"Model: {analysis.get('model', '')}",
+            "Description: " + analysis.get("description", ""),
             f"Duration: {analysis.get('analysis_duration', 0):.2f}s",
             f"Retries: {analysis.get('retry_count', 0)}",
             f"Failure: {analysis.get('failure_reason', '')}",
-            f"Trust State: {analysis.get('trust_state', '') or 'unreviewed_real'}",
+            f"Trust State: {self.effective_trust_state(analysis)}",
             f"Review Status: {analysis.get('review_status', '') or 'review_required'}",
+            "Correction Timestamp: " + self.latest_correction_time(),
             "Quality Warnings: " + self.format_list(
                 analysis.get("quality_warnings")
             ),
@@ -1310,6 +1317,86 @@ class PhotoViewer(ctk.CTkToplevel):
 
     ##########################################################
 
+    def effective_description(self):
+
+        effective = self.effective_intelligence or {}
+
+        return (
+            effective.get("description") or
+            (effective.get("analysis") or {}).get("effective_description") or
+            (effective.get("analysis") or {}).get("description") or
+            (self.analysis or {}).get("description", "")
+        )
+
+    ##########################################################
+
+    def effective_value(self, field, fallback=""):
+
+        effective = self.effective_intelligence or {}
+        value = effective.get(field)
+
+        if value not in (None, "", []):
+            return value
+
+        return fallback
+
+    ##########################################################
+
+    def effective_source_label(self):
+
+        effective = self.effective_intelligence or {}
+        trust = effective.get("trust_state", "")
+
+        if effective.get("is_human_corrected"):
+            return "Human Corrected"
+
+        if trust == "approved_real":
+            return "Approved Real Analysis"
+
+        if trust == "corrected_real":
+            return "Human Corrected"
+
+        if trust == "mock":
+            return "Mock/Test Data"
+
+        if trust == "failed":
+            return "Provider Failure"
+
+        return "Unreviewed Real Analysis"
+
+    ##########################################################
+
+    def effective_trust_state(self, analysis):
+
+        effective = self.effective_intelligence or {}
+
+        return (
+            effective.get("trust_state") or
+            analysis.get("trust_state", "") or
+            "unreviewed_real"
+        )
+
+    ##########################################################
+
+    def latest_correction_time(self):
+
+        effective = self.effective_intelligence or {}
+        corrections = effective.get("corrections") or []
+        dates = [
+            row.get("updated_at") or row.get("created_at") or ""
+            for row in corrections
+            if row.get("updated_at") or row.get("created_at")
+        ]
+
+        if not dates:
+            return ""
+
+        return self.local_time(
+            sorted(dates)[-1]
+        )
+
+    ##########################################################
+
     def format_value(self, value):
 
         if isinstance(value, list):
@@ -1340,6 +1427,7 @@ class PhotoViewer(ctk.CTkToplevel):
 class CorrectionDialog(ctk.CTkToplevel):
 
     FIELD_LABELS = {
+        "description": "AI Assistant Description",
         "people_count": "People Count",
         "incident_classification": "Incident",
         "primary_activity": "Activity",

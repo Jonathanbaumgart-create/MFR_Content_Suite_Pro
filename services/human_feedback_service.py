@@ -1,4 +1,5 @@
 from core.app_context import context
+from services.cache_invalidation_service import CacheInvalidationService
 from services.logging_service import LoggingService
 
 
@@ -8,6 +9,7 @@ logger = LoggingService.get_logger("intelligence")
 class HumanFeedbackService:
 
     CORRECTABLE_FIELDS = (
+        "description",
         "people_count",
         "personnel_types",
         "incident_classification",
@@ -123,6 +125,11 @@ class HumanFeedbackService:
             field_name,
             correction_source
         )
+        CacheInvalidationService.invalidate(
+            media_id=media_id,
+            reason=f"human_correction:{field_name}",
+            scopes=self._invalidation_scopes()
+        )
 
         return correction_id
 
@@ -136,12 +143,18 @@ class HumanFeedbackService:
         notes="Reset to inferred value"
     ):
 
-        return self.db.deactivate_media_correction(
+        result = self.db.deactivate_media_correction(
             media_id,
             field_name,
             source=correction_source,
             notes=notes
         )
+        CacheInvalidationService.invalidate(
+            media_id=media_id,
+            reason=f"correction_reset:{field_name}",
+            scopes=self._invalidation_scopes()
+        )
+        return result
 
     ############################################################
 
@@ -220,6 +233,8 @@ class HumanFeedbackService:
         media["human_corrections"] = effective.get("corrections", [])
         media["is_human_corrected"] = effective.get("is_human_corrected", False)
         media["correction_count"] = effective.get("correction_count", 0)
+        media["description"] = effective.get("description", "")
+        media["effective_description"] = effective.get("description", "")
         media["trust_state"] = effective.get("trust_state", "")
         media["review_status"] = effective.get("review_status", "")
         media["quality_state"] = effective.get("quality_state", "")
@@ -314,6 +329,9 @@ class HumanFeedbackService:
                 analysis.get("people_count") or
                 0
             )
+
+        if field == "description":
+            return analysis.get("description", "")
 
         if field == "personnel_types":
             values = []
@@ -441,6 +459,11 @@ class HumanFeedbackService:
             fire["firefighter_count"] = self._to_int(value)
             media["people_tags"] = self._people_tags(value)
 
+        elif field == "description":
+            effective["description"] = str(value or "")
+            analysis["effective_description"] = str(value or "")
+            media["effective_description"] = str(value or "")
+
         elif field == "personnel_types":
             media["people_tags"] = self._as_list(value)
 
@@ -563,6 +586,25 @@ class HumanFeedbackService:
             return self._as_list(value)
 
         return str(value or "").strip()
+
+    ############################################################
+
+    def _invalidation_scopes(self):
+
+        return [
+            "effective_intelligence",
+            "media_intelligence",
+            "gallery_status",
+            "gallery_filter",
+            "content_director",
+            "editorial_recommendation",
+            "communications_officer",
+            "communication_package",
+            "content_generation",
+            "decision_explainability",
+            "ai_assistant",
+            "trust_metrics"
+        ]
 
     ############################################################
 

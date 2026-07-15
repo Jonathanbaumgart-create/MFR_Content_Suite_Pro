@@ -1728,13 +1728,16 @@ class DatabaseManager:
 
     ############################################################
 
-    def get_media_page(self, limit, offset=0, filter_key="all"):
+    def get_media_page(self, limit, offset=0, filter_key="all", sort_key="filename_az"):
 
         conn = self.connection()
         conn.row_factory = sqlite3.Row
 
         cur = conn.cursor()
-        where, params, order_by = self._gallery_filter_clause(filter_key)
+        where, params, order_by = self._gallery_filter_clause(
+            filter_key,
+            sort_key=sort_key
+        )
 
         cur.execute(f"""
 
@@ -1857,7 +1860,7 @@ class DatabaseManager:
         review_status = row["review_status"] or ""
 
         if provider == "mock" or model.startswith("mock"):
-            return "Mock"
+            return "Mock/Test Data"
 
         if provider:
             if trust_state == "rejected_real" or review_status == "rejected":
@@ -1897,6 +1900,12 @@ class DatabaseManager:
             FROM media
             LEFT JOIN ai_analysis
             ON ai_analysis.media_id=media.id
+            LEFT JOIN media_intelligence
+            ON media_intelligence.media_id=media.id
+            LEFT JOIN video_intelligence
+            ON video_intelligence.media_id=media.id
+            {self._gallery_correction_join()}
+            {self._gallery_queue_join()}
             {where}
             """,
             tuple(params)
@@ -1937,6 +1946,12 @@ class DatabaseManager:
             FROM media
             LEFT JOIN ai_analysis
             ON ai_analysis.media_id=media.id
+            LEFT JOIN media_intelligence
+            ON media_intelligence.media_id=media.id
+            LEFT JOIN video_intelligence
+            ON video_intelligence.media_id=media.id
+            {self._gallery_correction_join()}
+            {self._gallery_queue_join()}
             {final_where}
             """,
             tuple(params)
@@ -1981,6 +1996,12 @@ class DatabaseManager:
             FROM media
             LEFT JOIN ai_analysis
             ON ai_analysis.media_id=media.id
+            LEFT JOIN media_intelligence
+            ON media_intelligence.media_id=media.id
+            LEFT JOIN video_intelligence
+            ON video_intelligence.media_id=media.id
+            {self._gallery_correction_join()}
+            {self._gallery_queue_join()}
             {final_where}
             ORDER BY {order_by}
             LIMIT ?
@@ -1999,13 +2020,179 @@ class DatabaseManager:
 
     ############################################################
 
-    def _gallery_filter_clause(self, filter_key):
+    def analysis_selection_preview(
+        self,
+        media_ids,
+        force=False,
+        retry_failed=False
+    ):
+
+        ids = [
+            self._to_int(media_id)
+            for media_id in media_ids
+            if self._to_int(media_id)
+        ]
+
+        if not ids:
+            return {
+                "selected_count": 0,
+                "photo_count": 0,
+                "video_count": 0,
+                "genuinely_unanalyzed_count": 0,
+                "completed_real_analysis_count": 0,
+                "mock_only_count": 0,
+                "failed_count": 0,
+                "retryable_failed_count": 0,
+                "video_metadata_only_count": 0,
+                "queueable_ids": [],
+                "skipped_ids": [],
+                "force_reanalysis": bool(force),
+                "retry_failed": bool(retry_failed)
+            }
+
+        placeholders = ",".join("?" for _ in ids)
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute(
+            f"""
+            SELECT
+                media.id,
+                media.media_type,
+                ai_analysis.provider,
+                ai_analysis.model,
+                ai_analysis.failure_reason,
+                ai_analysis.trust_state,
+                ai_analysis.review_status,
+                video_intelligence.media_id AS video_intelligence_id
+            FROM media
+            LEFT JOIN ai_analysis
+            ON ai_analysis.media_id=media.id
+            LEFT JOIN video_intelligence
+            ON video_intelligence.media_id=media.id
+            WHERE media.id IN ({placeholders})
+            """,
+            tuple(ids)
+        )
+        rows = cur.fetchall()
+        conn.close()
+
+        by_id = {
+            row["id"]: row
+            for row in rows
+        }
+        counts = {
+            "selected_count": len(ids),
+            "photo_count": 0,
+            "video_count": 0,
+            "genuinely_unanalyzed_count": 0,
+            "completed_real_analysis_count": 0,
+            "mock_only_count": 0,
+            "failed_count": 0,
+            "retryable_failed_count": 0,
+            "video_metadata_only_count": 0,
+            "queueable_ids": [],
+            "skipped_ids": [],
+            "force_reanalysis": bool(force),
+            "retry_failed": bool(retry_failed)
+        }
+
+        for media_id in ids:
+            row = by_id.get(media_id)
+
+            if not row:
+                counts["skipped_ids"].append(media_id)
+                continue
+
+            media_type = row["media_type"] or ""
+
+            if media_type == "video":
+                counts["video_count"] += 1
+            else:
+                counts["photo_count"] += 1
+
+            provider = row["provider"] or ""
+            model = row["model"] or ""
+            failure = row["failure_reason"] or ""
+            trust_state = row["trust_state"] or ""
+            review_status = row["review_status"] or ""
+            is_mock = (
+                provider == "mock" or
+                str(model).startswith("mock")
+            )
+            is_real = (
+                bool(provider) and
+                provider != "mock" and
+                not str(model).startswith("mock") and
+                not failure
+            )
+            is_failed = bool(failure)
+            is_completed_real = is_real
+            is_protected_real = (
+                trust_state in ("approved_real", "corrected_real") or
+                review_status in ("approved", "corrected")
+            )
+
+            if is_completed_real:
+                counts["completed_real_analysis_count"] += 1
+
+            if is_mock and not is_completed_real:
+                counts["mock_only_count"] += 1
+
+            if is_failed and not is_completed_real:
+                counts["failed_count"] += 1
+                counts["retryable_failed_count"] += 1
+
+            if media_type == "video" and row["video_intelligence_id"] and not is_completed_real:
+                counts["video_metadata_only_count"] += 1
+
+            if not provider and not row["video_intelligence_id"]:
+                counts["genuinely_unanalyzed_count"] += 1
+
+            should_queue = False
+
+            if force and is_completed_real and not is_protected_real:
+                should_queue = True
+            elif is_failed and retry_failed:
+                should_queue = True
+            elif not is_completed_real and not is_failed:
+                should_queue = True
+
+            if is_protected_real and not force:
+                should_queue = False
+
+            if should_queue:
+                counts["queueable_ids"].append(media_id)
+            else:
+                counts["skipped_ids"].append(media_id)
+
+        return counts
+
+    ############################################################
+
+    def _gallery_filter_clause(self, filter_key, sort_key="filename_az"):
 
         filter_key = str(filter_key or "all").lower()
+        sort_key = str(sort_key or "filename_az").lower()
         clauses = []
         params = []
-        order_by = "media.filename"
+        order_by = self._gallery_order_by(sort_key)
         added_expr = self._media_added_timestamp_expr()
+        real_completed = self._gallery_real_completed_clause()
+        not_real_completed = f"NOT ({real_completed})"
+        failed_clause = """
+            (
+                ai_analysis.failure_reason IS NOT NULL
+                AND ai_analysis.failure_reason!=''
+                AND NOT (
+                    ai_analysis.provider IS NOT NULL
+                    AND ai_analysis.provider!=''
+                    AND ai_analysis.provider!='mock'
+                    AND ai_analysis.model NOT LIKE 'mock%'
+                    AND (ai_analysis.failure_reason IS NULL OR ai_analysis.failure_reason='')
+                )
+            )
+        """
 
         if filter_key == "photos":
             clauses.append("media.media_type='image'")
@@ -2022,7 +2209,8 @@ class DatabaseManager:
                 """
             )
             params.extend([start, end])
-            order_by = f"{added_expr} DESC, media.filename"
+            if sort_key == "filename_az":
+                order_by = f"{added_expr} DESC, media.id DESC"
 
         elif filter_key == "captured_today":
             start, end = self._local_day_utc_bounds()
@@ -2034,61 +2222,127 @@ class DatabaseManager:
                 """
             )
             params.extend([start, end])
-            order_by = f"{capture_expr} DESC, media.filename"
+            if sort_key == "filename_az":
+                order_by = f"{capture_expr} DESC, media.id DESC"
 
         elif filter_key == "last_7_days":
             clauses.append(
                 f"datetime({added_expr}) >= datetime('now', '-7 days')"
             )
-            order_by = f"{added_expr} DESC, media.filename"
+            if sort_key == "filename_az":
+                order_by = f"{added_expr} DESC, media.id DESC"
 
         elif filter_key == "last_30_days":
             clauses.append(
                 f"datetime({added_expr}) >= datetime('now', '-30 days')"
             )
-            order_by = f"{added_expr} DESC, media.filename"
+            if sort_key == "filename_az":
+                order_by = f"{added_expr} DESC, media.id DESC"
 
         elif filter_key == "last_12_months":
             clauses.append(
                 f"datetime({added_expr}) >= datetime('now', '-365 days')"
             )
-            order_by = f"{added_expr} DESC, media.filename"
+            if sort_key == "filename_az":
+                order_by = f"{added_expr} DESC, media.id DESC"
 
-        elif filter_key == "unanalyzed":
-            clauses.append("ai_analysis.media_id IS NULL")
+        elif filter_key in ("unanalyzed", "not_analyzed"):
+            clauses.append(not_real_completed)
+
+        elif filter_key == "analyzed":
+            clauses.append(real_completed)
+
+        elif filter_key == "real_analysis":
+            clauses.append(real_completed)
 
         elif filter_key == "review_required":
             clauses.append(
-                """
+                f"""
                 (
+                    {real_completed}
+                    AND (
                     ai_analysis.review_status='review_required'
                     OR ai_analysis.trust_state='unreviewed_real'
+                    OR (
+                        ai_analysis.review_status IS NULL
+                        OR ai_analysis.review_status=''
+                    )
+                    )
                 )
                 """
             )
-            order_by = "ai_analysis.last_analyzed DESC, media.filename"
 
         elif filter_key == "approved":
             clauses.append(
-                """
+                f"""
                 (
+                    {real_completed}
+                    AND (
                     ai_analysis.review_status='approved'
                     OR ai_analysis.trust_state='approved_real'
+                    )
                 )
                 """
             )
-            order_by = "ai_analysis.reviewed_at DESC, media.filename"
+
+        elif filter_key == "corrected":
+            clauses.append(
+                f"""
+                (
+                    {real_completed}
+                    AND (
+                        ai_analysis.review_status='corrected'
+                        OR ai_analysis.trust_state='corrected_real'
+                        OR media_corrections.id IS NOT NULL
+                    )
+                )
+                """
+            )
+
+        elif filter_key == "rejected":
+            clauses.append(
+                f"""
+                (
+                    {real_completed}
+                    AND (
+                        ai_analysis.review_status='rejected'
+                        OR ai_analysis.trust_state='rejected_real'
+                    )
+                )
+                """
+            )
 
         elif filter_key == "failed":
+            clauses.append(failed_clause)
+
+        elif filter_key in ("mock", "mock_test_data"):
             clauses.append(
                 """
                 (
-                    ai_analysis.failure_reason IS NOT NULL
-                    AND ai_analysis.failure_reason!=''
+                    ai_analysis.media_id IS NOT NULL
+                    AND (
+                        ai_analysis.provider='mock'
+                        OR ai_analysis.model LIKE 'mock%'
+                        OR ai_analysis.description LIKE 'MOCK TEST ANALYSIS%'
+                    )
                 )
                 """
             )
-            order_by = "ai_analysis.last_analyzed DESC, media.filename"
+
+        elif filter_key == "photos_not_analyzed":
+            clauses.append("media.media_type='image'")
+            clauses.append(not_real_completed)
+
+        elif filter_key == "videos_not_analyzed":
+            clauses.append("media.media_type='video'")
+            clauses.append(
+                f"""
+                (
+                    {not_real_completed}
+                    AND video_intelligence.media_id IS NULL
+                )
+                """
+            )
 
         where = ""
 
@@ -2096,6 +2350,79 @@ class DatabaseManager:
             where = "WHERE " + " AND ".join(clauses)
 
         return where, params, order_by
+
+    ############################################################
+
+    def _gallery_real_completed_clause(self):
+
+        return """
+            (
+                ai_analysis.media_id IS NOT NULL
+                AND ai_analysis.provider IS NOT NULL
+                AND ai_analysis.provider!=''
+                AND ai_analysis.provider!='mock'
+                AND ai_analysis.model NOT LIKE 'mock%'
+                AND (ai_analysis.failure_reason IS NULL OR ai_analysis.failure_reason='')
+            )
+        """
+
+    ############################################################
+
+    def _gallery_correction_join(self):
+
+        return """
+            LEFT JOIN (
+                SELECT media_id, MIN(id) AS id
+                FROM media_corrections
+                WHERE active=1
+                GROUP BY media_id
+            ) media_corrections
+            ON media_corrections.media_id=media.id
+        """
+
+    ############################################################
+
+    def _gallery_queue_join(self):
+
+        return """
+            LEFT JOIN (
+                SELECT q1.media_id, q1.state
+                FROM analysis_queue q1
+                INNER JOIN (
+                    SELECT media_id, MAX(queue_id) AS queue_id
+                    FROM analysis_queue
+                    GROUP BY media_id
+                ) latest
+                ON latest.queue_id=q1.queue_id
+            ) latest_queue
+            ON latest_queue.media_id=media.id
+        """
+
+    ############################################################
+
+    def _gallery_order_by(self, sort_key):
+
+        added_expr = self._media_added_timestamp_expr()
+        capture_expr = self._media_timestamp_expr("media.capture_time")
+        analysis_expr = self._media_timestamp_expr("ai_analysis.last_analyzed")
+        not_analyzed = self._gallery_real_completed_clause()
+
+        options = {
+            "added_newest": f"{added_expr} DESC, media.id DESC",
+            "added_oldest": f"{added_expr} ASC, media.id ASC",
+            "capture_newest": f"{capture_expr} DESC, media.id DESC",
+            "capture_oldest": f"{capture_expr} ASC, media.id ASC",
+            "analysis_newest": f"{analysis_expr} DESC, media.id DESC",
+            "analysis_oldest": f"{analysis_expr} ASC, media.id ASC",
+            "not_analyzed_first": f"CASE WHEN NOT ({not_analyzed}) THEN 0 ELSE 1 END, media.id DESC",
+            "review_required_first": "CASE WHEN ai_analysis.review_status='review_required' OR ai_analysis.trust_state='unreviewed_real' THEN 0 ELSE 1 END, media.id DESC",
+            "corrected_first": "CASE WHEN ai_analysis.review_status='corrected' OR ai_analysis.trust_state='corrected_real' OR media_corrections.id IS NOT NULL THEN 0 ELSE 1 END, media.id DESC",
+            "failed_first": "CASE WHEN ai_analysis.failure_reason IS NOT NULL AND ai_analysis.failure_reason!='' THEN 0 ELSE 1 END, media.id DESC",
+            "filename_za": "media.filename COLLATE NOCASE DESC, media.id DESC",
+            "filename_az": "media.filename COLLATE NOCASE ASC, media.id ASC"
+        }
+
+        return options.get(sort_key, options["filename_az"])
 
     ############################################################
 
@@ -4681,6 +5008,8 @@ class DatabaseManager:
 
             ai_analysis.community_score,
 
+            ai_analysis.description AS analysis_description,
+
             ai_analysis.recruitment_score,
 
             ai_analysis.education_score,
@@ -4745,6 +5074,8 @@ class DatabaseManager:
                     "filename": row["filename"],
                     "path": row["path"],
                     "media_type": row["media_type"],
+                    "description": row["analysis_description"] or "",
+                    "effective_description": row["analysis_description"] or "",
                     "community_score": row["community_score"] or 0,
                     "recruitment_score": row["recruitment_score"] or 0,
                     "education_score": row["education_score"] or 0,
@@ -5151,6 +5482,7 @@ class DatabaseManager:
             ai_analysis.trust_state,
             ai_analysis.review_status,
             ai_analysis.failure_reason,
+            ai_analysis.description AS analysis_description,
             ai_analysis.provider,
             ai_analysis.model
         FROM media
@@ -5176,6 +5508,8 @@ class DatabaseManager:
                 "trust_state": row["trust_state"] or "",
                 "review_status": row["review_status"] or "",
                 "failure_reason": row["failure_reason"] or "",
+                "description": row["analysis_description"] or "",
+                "effective_description": row["analysis_description"] or "",
                 "provider": row["provider"] or "",
                 "model": row["model"] or ""
             })

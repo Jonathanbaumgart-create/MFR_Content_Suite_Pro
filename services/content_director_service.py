@@ -465,6 +465,8 @@ class ContentDirectorService:
                     "filename": candidate.get("filename"),
                     "path": candidate.get("path"),
                     "media_type": candidate.get("media_type"),
+                    "description": effective.get("description", candidate.get("description", "")),
+                    "effective_description": effective.get("effective_description", candidate.get("description", "")),
                     "community_score": candidate.get("community_score", 0),
                     "recruitment_score": candidate.get("recruitment_score", 0),
                     "education_score": candidate.get("education_score", 0),

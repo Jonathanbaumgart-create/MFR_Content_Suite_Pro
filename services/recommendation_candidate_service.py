@@ -1211,7 +1211,11 @@ class RecommendationCandidateService:
 
     def _apply_correction(self, asset, fire, field, value):
 
-        if field == "people_count":
+        if field == "description":
+            asset["description"] = str(value or "")
+            asset["effective_description"] = str(value or "")
+
+        elif field == "people_count":
             count = self._to_int(value)
             fire["firefighter_count"] = count
             asset["people_tags"] = ["people"] if count else ["unknown_people"]
@@ -1270,6 +1274,8 @@ class RecommendationCandidateService:
             "normalized_scene",
             "incident_type",
             "primary_activity",
+            "description",
+            "effective_description",
             "search_text",
             "suggested_platform",
             "suggested_time_of_year"

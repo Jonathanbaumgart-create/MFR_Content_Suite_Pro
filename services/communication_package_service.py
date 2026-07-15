@@ -2,6 +2,7 @@ import time
 
 from core.app_context import context
 from services.decision_explainability_service import DecisionExplainabilityService
+from services.human_feedback_service import HumanFeedbackService
 from services.logging_service import LoggingService
 from services.time_service import TimeService
 
@@ -76,6 +77,9 @@ class CommunicationPackageService:
 
         self.db = database or context.database
         self.explainability = DecisionExplainabilityService(
+            database=self.db
+        )
+        self.feedback = HumanFeedbackService(
             database=self.db
         )
         self.last_metrics = {}
@@ -224,7 +228,9 @@ class CommunicationPackageService:
             if not include_mock and asset.get("provider") == "mock":
                 continue
 
-            filtered.append(asset)
+            filtered.append(
+                self._effective_asset(asset)
+            )
 
         reviewed = [
             asset
@@ -233,6 +239,36 @@ class CommunicationPackageService:
         ]
 
         return reviewed or filtered
+
+    ############################################################
+
+    def _effective_asset(self, asset):
+
+        media_id = asset.get("media_id")
+
+        if not media_id:
+            return asset
+
+        try:
+            effective = self.feedback.effective_media_intelligence_row(
+                media_id
+            )
+        except Exception:
+            return asset
+
+        effective.update({
+            "media_id": media_id,
+            "filename": asset.get("filename", ""),
+            "path": asset.get("path", ""),
+            "media_type": asset.get("media_type", ""),
+            "provider": asset.get("provider", ""),
+            "model": asset.get("model", ""),
+            "failure_reason": asset.get("failure_reason", "")
+        })
+
+        return effective
+
+    ############################################################
 
     def _asset_ids(self, recommendation):
 
@@ -412,6 +448,16 @@ class CommunicationPackageService:
             if name:
                 evidence.append(
                     f"{name}: communications score {score}, trust {trust}"
+                )
+
+            description = (
+                asset.get("effective_description") or
+                asset.get("description", "")
+            )
+
+            if description:
+                evidence.append(
+                    "Effective description: " + description[:220]
                 )
 
         return evidence[:8]

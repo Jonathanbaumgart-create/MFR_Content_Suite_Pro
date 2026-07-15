@@ -3,6 +3,7 @@ import time
 from core.app_context import context
 from models.decision_explanation import DecisionExplanation
 from services.communications_memory_service import CommunicationsMemoryService
+from services.human_feedback_service import HumanFeedbackService
 from services.logging_service import LoggingService
 from services.time_service import TimeService
 
@@ -22,6 +23,9 @@ class DecisionExplainabilityService:
 
         self.db = database or context.database
         self.memory = memory_service or CommunicationsMemoryService(
+            database=self.db
+        )
+        self.feedback = HumanFeedbackService(
             database=self.db
         )
         self.last_metrics = {}
@@ -483,12 +487,19 @@ class DecisionExplainabilityService:
         ids = self._unique_ids(ids)[:self.MAX_ASSETS]
 
         if ids:
-            return self.db.communications_officer_assets(
+            assets = self.db.communications_officer_assets(
                 ids,
                 limit=self.MAX_ASSETS
             )
+            return [
+                self._effective_asset(asset)
+                for asset in assets
+            ]
 
-        return list(recommendation.get("recommended_media") or [])[:self.MAX_ASSETS]
+        return [
+            self._effective_asset(asset)
+            for asset in list(recommendation.get("recommended_media") or [])[:self.MAX_ASSETS]
+        ]
 
     def _asset(self, media_or_asset):
 
@@ -496,7 +507,7 @@ class DecisionExplainabilityService:
             return {}
 
         if isinstance(media_or_asset, dict):
-            return media_or_asset
+            return self._effective_asset(media_or_asset)
 
         media_id = self._int(media_or_asset)
 
@@ -507,7 +518,33 @@ class DecisionExplainabilityService:
             [media_id],
             limit=1
         )
-        return assets[0] if assets else {"media_id": media_id}
+        return self._effective_asset(assets[0]) if assets else {"media_id": media_id}
+
+    def _effective_asset(self, asset):
+
+        media_id = asset.get("media_id") if asset else None
+
+        if not media_id:
+            return asset or {}
+
+        try:
+            effective = self.feedback.effective_media_intelligence_row(
+                media_id
+            )
+        except Exception:
+            return asset
+
+        effective.update({
+            "media_id": media_id,
+            "filename": asset.get("filename", ""),
+            "path": asset.get("path", ""),
+            "media_type": asset.get("media_type", ""),
+            "provider": asset.get("provider", ""),
+            "model": asset.get("model", ""),
+            "failure_reason": asset.get("failure_reason", "")
+        })
+
+        return effective
 
     def _factor_groups(self, factors):
 
@@ -583,6 +620,10 @@ class DecisionExplainabilityService:
                 "review_status": asset.get("review_status", ""),
                 "communications_score": self._score(asset.get("communications_score")),
                 "intelligence_score": self._score(asset.get("intelligence_score")),
+                "description": (
+                    asset.get("effective_description") or
+                    asset.get("description", "")
+                ),
                 "incident_type": asset.get("incident_type", ""),
                 "primary_activity": asset.get("primary_activity", ""),
                 "recommended_uses": self._list(asset.get("recommended_uses"))[:5],

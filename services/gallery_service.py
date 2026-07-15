@@ -15,7 +15,7 @@ class GalleryService:
 
     ###########################################################
 
-    def get_media_page(self, limit, offset=0, filter_key="all"):
+    def get_media_page(self, limit, offset=0, filter_key="all", sort_key="filename_az"):
 
         logger.info(
             "Loading media page limit=%s offset=%s",
@@ -26,7 +26,8 @@ class GalleryService:
         return context.database.get_media_page(
             limit,
             offset,
-            filter_key=filter_key
+            filter_key=filter_key,
+            sort_key=sort_key
         )
 
     ###########################################################
@@ -57,6 +58,21 @@ class GalleryService:
             filter_key=filter_key,
             media_type=media_type,
             limit=limit
+        )
+
+    ###########################################################
+
+    def analysis_selection_preview(
+        self,
+        media_ids,
+        force=False,
+        retry_failed=False
+    ):
+
+        return context.database.analysis_selection_preview(
+            media_ids,
+            force=force,
+            retry_failed=retry_failed
         )
 
     ###########################################################

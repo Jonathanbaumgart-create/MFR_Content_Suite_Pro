@@ -1,5 +1,5 @@
 import customtkinter as ctk
-from tkinter import messagebox
+from tkinter import BooleanVar, messagebox
 from collections import deque
 
 from gui.photo_card import PhotoCard
@@ -34,6 +34,9 @@ class GalleryPage(ctk.CTkFrame):
         self.loading_cards = False
         self.pending_cards = deque()
         self.filter_var = ctk.StringVar(value="All Media")
+        self.sort_var = ctk.StringVar(value="Added Date: Newest First")
+        self.force_reanalysis_var = BooleanVar(value=False)
+        self.retry_failed_var = BooleanVar(value=False)
         self.filter_map = {
             "All Media": "all",
             "Photos": "photos",
@@ -43,10 +46,31 @@ class GalleryPage(ctk.CTkFrame):
             "Last 7 Days": "last_7_days",
             "Last 30 Days": "last_30_days",
             "Last 12 Months": "last_12_months",
-            "Unanalyzed": "unanalyzed",
+            "Not Analyzed": "not_analyzed",
+            "Analyzed": "analyzed",
+            "Real Analysis": "real_analysis",
             "Review Required": "review_required",
             "Approved": "approved",
-            "Failed": "failed"
+            "Corrected": "corrected",
+            "Rejected": "rejected",
+            "Failed": "failed",
+            "Mock/Test Data": "mock_test_data",
+            "Photos Not Analyzed": "photos_not_analyzed",
+            "Videos Not Analyzed": "videos_not_analyzed"
+        }
+        self.sort_map = {
+            "Added Date: Newest First": "added_newest",
+            "Added Date: Oldest First": "added_oldest",
+            "Capture Date: Newest First": "capture_newest",
+            "Capture Date: Oldest First": "capture_oldest",
+            "Analysis Date: Newest First": "analysis_newest",
+            "Analysis Date: Oldest First": "analysis_oldest",
+            "Not Analyzed First": "not_analyzed_first",
+            "Review Required First": "review_required_first",
+            "Corrected First": "corrected_first",
+            "Failed First": "failed_first",
+            "Filename A-Z": "filename_az",
+            "Filename Z-A": "filename_za"
         }
 
         self.build_page()
@@ -111,6 +135,18 @@ class GalleryPage(ctk.CTkFrame):
             padx=(0, 10)
         )
 
+        self.sort_menu = ctk.CTkOptionMenu(
+            actions,
+            values=list(self.sort_map.keys()),
+            variable=self.sort_var,
+            command=self.sort_changed,
+            width=230
+        )
+        self.sort_menu.pack(
+            side="left",
+            padx=(0, 10)
+        )
+
         analyze_selected = ctk.CTkButton(
             actions,
             text="Analyze Selected",
@@ -130,6 +166,26 @@ class GalleryPage(ctk.CTkFrame):
 
         self.clear_selected_button.pack(
             side="left"
+        )
+
+        self.force_checkbox = ctk.CTkCheckBox(
+            actions,
+            text="Force reanalysis",
+            variable=self.force_reanalysis_var
+        )
+        self.force_checkbox.pack(
+            side="left",
+            padx=(12, 0)
+        )
+
+        self.retry_failed_checkbox = ctk.CTkCheckBox(
+            actions,
+            text="Retry failed",
+            variable=self.retry_failed_var
+        )
+        self.retry_failed_checkbox.pack(
+            side="left",
+            padx=(10, 0)
         )
 
         bulk_actions = ctk.CTkFrame(
@@ -231,7 +287,8 @@ class GalleryPage(ctk.CTkFrame):
         media = self.service.get_media_page(
             self.PAGE_SIZE,
             self.loaded,
-            self.current_filter()
+            self.current_filter(),
+            self.current_sort()
         )
 
         self.pending_cards = deque(
@@ -363,6 +420,15 @@ class GalleryPage(ctk.CTkFrame):
 
     ########################################################
 
+    def current_sort(self):
+
+        return self.sort_map.get(
+            self.sort_var.get(),
+            "added_newest"
+        )
+
+    ########################################################
+
     def filter_changed(self, _value=None):
 
         if self.loading_cards:
@@ -390,6 +456,12 @@ class GalleryPage(ctk.CTkFrame):
             text="Load More"
         )
         self.load_more()
+
+    ########################################################
+
+    def sort_changed(self, _value=None):
+
+        self.filter_changed(_value)
 
     ########################################################
 
@@ -520,6 +592,34 @@ class GalleryPage(ctk.CTkFrame):
 
     def analyze_selected(self):
 
+        if not self.selected:
+            self.info.configure(text="No media selected for analysis")
+            return
+
+        force = bool(self.force_reanalysis_var.get())
+        retry_failed = bool(self.retry_failed_var.get())
+        preview = self.service.analysis_selection_preview(
+            list(self.selected),
+            force=force,
+            retry_failed=retry_failed
+        )
+        queueable = preview.get("queueable_ids", [])
+
+        if not queueable:
+            messagebox.showinfo(
+                "Analyze Selected",
+                self.analysis_preview_text(preview) +
+                "\n\nNo selected media will be queued with the current options."
+            )
+            return
+
+        if not messagebox.askyesno(
+            "Analyze Selected",
+            self.analysis_preview_text(preview) +
+            "\n\nQueue the eligible media now?"
+        ):
+            return
+
         warning = self.brain.provider_bulk_warning()
 
         if warning:
@@ -529,13 +629,41 @@ class GalleryPage(ctk.CTkFrame):
             ):
                 return
 
-        futures = self.brain.analyze_selected(
-            list(self.selected),
+        handle = self.brain.analyze_selected(
+            queueable,
+            force=force,
             progress_callback=self.analysis_progress
         )
 
         self.info.configure(
-            text=f"Queued {len(futures):,} selected photos for analysis"
+            text=f"Queued {len(queueable):,} selected media for analysis"
+        )
+
+    ########################################################
+
+    def analysis_preview_text(self, preview):
+
+        provider = self.brain.vision.provider_key()
+        model = self.brain.vision.model_name()
+
+        return "\n".join(
+            [
+                f"Selected: {preview.get('selected_count', 0):,}",
+                f"Photos: {preview.get('photo_count', 0):,}",
+                f"Videos: {preview.get('video_count', 0):,}",
+                f"Genuinely unanalyzed: {preview.get('genuinely_unanalyzed_count', 0):,}",
+                f"Completed real analysis: {preview.get('completed_real_analysis_count', 0):,}",
+                f"Mock-only: {preview.get('mock_only_count', 0):,}",
+                f"Failed: {preview.get('failed_count', 0):,}",
+                f"Retryable failed: {preview.get('retryable_failed_count', 0):,}",
+                f"Video metadata-only: {preview.get('video_metadata_only_count', 0):,}",
+                f"Eligible to queue: {len(preview.get('queueable_ids', [])):,}",
+                f"Provider: {provider}",
+                f"Model: {model}",
+                f"Force reanalysis: {preview.get('force_reanalysis', False)}",
+                f"Retry failed: {preview.get('retry_failed', False)}",
+                "Estimated Qwen time: depends on local model load and media complexity."
+            ]
         )
 
     ########################################################

@@ -3,6 +3,7 @@ import threading
 import time as perf_time
 
 from core.app_context import context
+from services.cache_invalidation_service import CacheInvalidationService
 from services.communications_memory_service import CommunicationsMemoryService
 from services.editorial_recommendation_service import EditorialRecommendationService
 from services.knowledge_service import KnowledgeService
@@ -276,6 +277,9 @@ class CommunicationsOfficerService:
             self._brief_cache = {
                 "local_date": local_now.date().isoformat(),
                 "created_at": perf_time.perf_counter(),
+                "invalidation_sequence": (
+                    CacheInvalidationService.latest().get("sequence", 0)
+                ),
                 "brief": brief,
                 "_metrics": self.last_metrics
             }
@@ -320,6 +324,16 @@ class CommunicationsOfficerService:
         age = perf_time.perf_counter() - cache.get("created_at", 0)
 
         if age > self.CACHE_TTL_SECONDS:
+            return None
+
+        if CacheInvalidationService.changed_since(
+            cache.get("invalidation_sequence", 0),
+            scopes=[
+                "effective_intelligence",
+                "communications_officer",
+                "trust_metrics"
+            ]
+        ):
             return None
 
         return cache

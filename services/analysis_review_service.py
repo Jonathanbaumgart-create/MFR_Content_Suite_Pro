@@ -1,4 +1,5 @@
 from core.app_context import context
+from services.cache_invalidation_service import CacheInvalidationService
 from services.logging_service import LoggingService
 
 
@@ -121,6 +122,23 @@ class AnalysisReviewService:
             media_id,
             decision,
             trust_state
+        )
+        CacheInvalidationService.invalidate(
+            media_id=media_id,
+            reason=f"analysis_review:{decision}",
+            scopes=[
+                "effective_intelligence",
+                "gallery_status",
+                "gallery_filter",
+                "ai_dashboard",
+                "content_director",
+                "editorial_recommendation",
+                "communications_officer",
+                "communication_package",
+                "content_generation",
+                "decision_explainability",
+                "trust_metrics"
+            ]
         )
 
         return result

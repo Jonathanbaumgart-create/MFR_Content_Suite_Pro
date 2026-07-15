@@ -274,6 +274,7 @@ class PhotoCard(ctk.CTkFrame):
             "Human Corrected": "#c9a8ff",
             "Failed": "#ff8a8a",
             "Mock": "#ffcf7a",
+            "Mock/Test Data": "#ffcf7a",
             "Not analyzed": "#a8a8a8"
         }
 

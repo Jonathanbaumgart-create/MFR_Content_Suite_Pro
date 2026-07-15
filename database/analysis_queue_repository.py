@@ -614,7 +614,7 @@ class AnalysisQueueRepository:
         review_status = row.get("review_status") or ""
 
         if provider == "mock" or model.startswith("mock"):
-            return "Mock"
+            return "Mock/Test Data"
 
         if provider:
             if trust_state == "rejected_real" or review_status == "rejected":
