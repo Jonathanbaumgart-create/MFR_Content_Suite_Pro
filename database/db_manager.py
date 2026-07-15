@@ -394,6 +394,92 @@ class DatabaseManager:
         """)
 
         ########################################################
+        # Filesystem Intelligence
+        ########################################################
+
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS filesystem_intelligence(
+
+            media_id INTEGER PRIMARY KEY,
+
+            media_root TEXT,
+
+            relative_path TEXT,
+
+            folder_hierarchy TEXT,
+
+            root_category TEXT,
+
+            parent_category TEXT,
+
+            subcategory TEXT,
+
+            folder_keywords TEXT,
+
+            normalized_tags TEXT,
+
+            apparatus_identifier TEXT,
+
+            apparatus_name TEXT,
+
+            apparatus_resolved INTEGER DEFAULT 0,
+
+            incident_category TEXT,
+
+            incident_type TEXT,
+
+            training_category TEXT,
+
+            training_type TEXT,
+
+            drill_type TEXT,
+
+            live_burn_context INTEGER DEFAULT 0,
+
+            public_education_program TEXT,
+
+            campaign TEXT,
+
+            community_event TEXT,
+
+            station TEXT,
+
+            recruit_class INTEGER DEFAULT 0,
+
+            mutual_aid_context INTEGER DEFAULT 0,
+
+            year TEXT,
+
+            month INTEGER DEFAULT 0,
+
+            season TEXT,
+
+            location_context TEXT,
+
+            filesystem_confidence INTEGER DEFAULT 0,
+
+            matching_rule TEXT,
+
+            source_folders TEXT,
+
+            conflict_state TEXT,
+
+            conflict_details TEXT,
+
+            enrichment_version TEXT,
+
+            last_derived_at TEXT,
+
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+
+        )
+
+        """)
+
+        ########################################################
         # Fire Service Intelligence
         ########################################################
 
@@ -1825,6 +1911,12 @@ class DatabaseManager:
 
             media_intelligence.media_id AS intelligence_media_id,
 
+            filesystem_intelligence.root_category AS filesystem_category,
+
+            filesystem_intelligence.subcategory AS filesystem_subcategory,
+
+            filesystem_intelligence.conflict_state AS filesystem_conflict,
+
             media_corrections.id AS correction_id,
 
             latest_queue.state AS queue_state
@@ -1836,6 +1928,9 @@ class DatabaseManager:
 
         LEFT JOIN media_intelligence
         ON media_intelligence.media_id=media.id
+
+        LEFT JOIN filesystem_intelligence
+        ON filesystem_intelligence.media_id=media.id
 
         LEFT JOIN (
             SELECT media_id, MIN(id) AS id
@@ -1880,7 +1975,8 @@ class DatabaseManager:
                 self._media_analysis_status_from_row(row),
                 row["duration_seconds"] or 0,
                 row["date_added"] or "",
-                row["capture_time"] or ""
+                row["capture_time"] or "",
+                self._filesystem_badge_from_row(row)
             )
             for row in cur.fetchall()
         ]
@@ -1941,6 +2037,26 @@ class DatabaseManager:
 
     ############################################################
 
+    def _filesystem_badge_from_row(self, row):
+
+        conflict = row["filesystem_conflict"] or ""
+
+        if conflict == "conflict":
+            return "Folder Conflict"
+
+        category = row["filesystem_category"] or ""
+        subcategory = row["filesystem_subcategory"] or ""
+
+        if not category or category == "unknown":
+            return ""
+
+        if subcategory and subcategory != "unknown":
+            return f"{category}: {subcategory}"
+
+        return category
+
+    ############################################################
+
     def media_count(self, filter_key="all"):
 
         conn = self.connection()
@@ -1956,6 +2072,8 @@ class DatabaseManager:
             ON ai_analysis.media_id=media.id
             LEFT JOIN media_intelligence
             ON media_intelligence.media_id=media.id
+            LEFT JOIN filesystem_intelligence
+            ON filesystem_intelligence.media_id=media.id
             LEFT JOIN video_intelligence
             ON video_intelligence.media_id=media.id
             {self._gallery_correction_join()}
@@ -2002,6 +2120,8 @@ class DatabaseManager:
             ON ai_analysis.media_id=media.id
             LEFT JOIN media_intelligence
             ON media_intelligence.media_id=media.id
+            LEFT JOIN filesystem_intelligence
+            ON filesystem_intelligence.media_id=media.id
             LEFT JOIN video_intelligence
             ON video_intelligence.media_id=media.id
             {self._gallery_correction_join()}
@@ -2052,6 +2172,8 @@ class DatabaseManager:
             ON ai_analysis.media_id=media.id
             LEFT JOIN media_intelligence
             ON media_intelligence.media_id=media.id
+            LEFT JOIN filesystem_intelligence
+            ON filesystem_intelligence.media_id=media.id
             LEFT JOIN video_intelligence
             ON video_intelligence.media_id=media.id
             {self._gallery_correction_join()}
@@ -2253,6 +2375,33 @@ class DatabaseManager:
 
         elif filter_key == "videos":
             clauses.append("media.media_type='video'")
+
+        elif filter_key == "filesystem_training":
+            clauses.append("filesystem_intelligence.root_category='Training'")
+
+        elif filter_key == "filesystem_incidents":
+            clauses.append("filesystem_intelligence.root_category='Incidents'")
+
+        elif filter_key == "filesystem_apparatus":
+            clauses.append("filesystem_intelligence.root_category='Apparatus'")
+
+        elif filter_key == "filesystem_programs":
+            clauses.append("filesystem_intelligence.root_category='Programs'")
+
+        elif filter_key == "filesystem_campaigns":
+            clauses.append("filesystem_intelligence.root_category='Campaigns'")
+
+        elif filter_key == "filesystem_community":
+            clauses.append("filesystem_intelligence.root_category='Community'")
+
+        elif filter_key == "filesystem_conflicts":
+            clauses.append("filesystem_intelligence.conflict_state='conflict'")
+
+        elif filter_key == "has_filesystem_intelligence":
+            clauses.append("filesystem_intelligence.media_id IS NOT NULL")
+
+        elif filter_key == "missing_filesystem_intelligence":
+            clauses.append("filesystem_intelligence.media_id IS NULL")
 
         elif filter_key in ("new_today", "added_today"):
             start, end = self._local_day_utc_bounds()
@@ -4066,6 +4215,256 @@ class DatabaseManager:
 
     ############################################################
 
+    def save_filesystem_intelligence(self, media_id, intelligence):
+
+        conn = self.connection()
+        cur = conn.cursor()
+        cur.execute("""
+        INSERT OR REPLACE INTO filesystem_intelligence(
+            media_id,
+            media_root,
+            relative_path,
+            folder_hierarchy,
+            root_category,
+            parent_category,
+            subcategory,
+            folder_keywords,
+            normalized_tags,
+            apparatus_identifier,
+            apparatus_name,
+            apparatus_resolved,
+            incident_category,
+            incident_type,
+            training_category,
+            training_type,
+            drill_type,
+            live_burn_context,
+            public_education_program,
+            campaign,
+            community_event,
+            station,
+            recruit_class,
+            mutual_aid_context,
+            year,
+            month,
+            season,
+            location_context,
+            filesystem_confidence,
+            matching_rule,
+            source_folders,
+            conflict_state,
+            conflict_details,
+            enrichment_version,
+            last_derived_at,
+            updated_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+        """, (
+            media_id,
+            intelligence.get("media_root", ""),
+            intelligence.get("relative_path", ""),
+            self._to_json(intelligence.get("folder_hierarchy")),
+            intelligence.get("root_category", ""),
+            intelligence.get("parent_category", ""),
+            intelligence.get("subcategory", ""),
+            self._to_json(intelligence.get("folder_keywords")),
+            self._to_json(intelligence.get("normalized_tags")),
+            intelligence.get("apparatus_identifier", ""),
+            intelligence.get("apparatus_name", ""),
+            self._to_int(intelligence.get("apparatus_resolved")),
+            intelligence.get("incident_category", ""),
+            intelligence.get("incident_type", ""),
+            intelligence.get("training_category", ""),
+            intelligence.get("training_type", ""),
+            intelligence.get("drill_type", ""),
+            self._to_int(intelligence.get("live_burn_context")),
+            intelligence.get("public_education_program", ""),
+            intelligence.get("campaign", ""),
+            intelligence.get("community_event", ""),
+            intelligence.get("station", ""),
+            self._to_int(intelligence.get("recruit_class")),
+            self._to_int(intelligence.get("mutual_aid_context")),
+            intelligence.get("year", ""),
+            self._to_int(intelligence.get("month")),
+            intelligence.get("season", ""),
+            intelligence.get("location_context", ""),
+            self._to_int(intelligence.get("filesystem_confidence")),
+            intelligence.get("matching_rule", ""),
+            self._to_json(intelligence.get("source_folders")),
+            intelligence.get("conflict_state", ""),
+            self._to_json(intelligence.get("conflict_details")),
+            intelligence.get("enrichment_version", ""),
+            intelligence.get("last_derived_at", "")
+        ))
+        conn.commit()
+        conn.close()
+
+    ############################################################
+
+    def get_filesystem_intelligence(self, media_id):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT *
+            FROM filesystem_intelligence
+            WHERE media_id=?
+            """,
+            (self._to_int(media_id),)
+        )
+        row = cur.fetchone()
+        conn.close()
+
+        if not row:
+            return None
+
+        return self._filesystem_intelligence_from_row(row)
+
+    ############################################################
+
+    def filesystem_intelligence_for_media_ids(self, media_ids):
+
+        ids = [
+            self._to_int(media_id)
+            for media_id in media_ids
+            if self._to_int(media_id)
+        ]
+
+        if not ids:
+            return {}
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        placeholders = ",".join("?" for _ in ids)
+        cur.execute(
+            f"""
+            SELECT *
+            FROM filesystem_intelligence
+            WHERE media_id IN ({placeholders})
+            """,
+            tuple(ids)
+        )
+        rows = cur.fetchall()
+        conn.close()
+
+        return {
+            row["media_id"]: self._filesystem_intelligence_from_row(row)
+            for row in rows
+        }
+
+    ############################################################
+
+    def get_media_needing_filesystem_intelligence(
+        self,
+        rules_version,
+        limit=500
+    ):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                media.id,
+                media.filename,
+                media.path,
+                media.media_type,
+                media_intelligence.normalized_scene,
+                media_intelligence.incident_type,
+                media_intelligence.primary_activity
+            FROM media
+            LEFT JOIN filesystem_intelligence
+            ON filesystem_intelligence.media_id=media.id
+            LEFT JOIN media_intelligence
+            ON media_intelligence.media_id=media.id
+            WHERE
+                filesystem_intelligence.media_id IS NULL
+                OR filesystem_intelligence.enrichment_version!=?
+                OR filesystem_intelligence.relative_path=''
+            ORDER BY media.id
+            LIMIT ?
+            """,
+            (
+                str(rules_version or ""),
+                self._to_int(limit) or 500
+            )
+        )
+        rows = cur.fetchall()
+        conn.close()
+
+        return rows
+
+    ############################################################
+
+    def filesystem_knowledge_map(self, limit=100):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                COALESCE(NULLIF(root_category, ''), 'unknown') AS category,
+                COALESCE(NULLIF(subcategory, ''), 'unknown') AS subcategory,
+                COUNT(*) AS media_count,
+                SUM(CASE WHEN media.media_type='image' THEN 1 ELSE 0 END) AS photo_count,
+                SUM(CASE WHEN media.media_type='video' THEN 1 ELSE 0 END) AS video_count,
+                SUM(CASE WHEN ai_analysis.media_id IS NOT NULL THEN 1 ELSE 0 END) AS analyzed_count,
+                SUM(CASE WHEN ai_analysis.media_id IS NULL THEN 1 ELSE 0 END) AS not_analyzed_count,
+                SUM(CASE WHEN ai_analysis.review_status IN ('approved', 'corrected') THEN 1 ELSE 0 END) AS reviewed_count,
+                SUM(CASE WHEN filesystem_intelligence.conflict_state='conflict' THEN 1 ELSE 0 END) AS conflict_count
+            FROM filesystem_intelligence
+            JOIN media
+            ON media.id=filesystem_intelligence.media_id
+            LEFT JOIN ai_analysis
+            ON ai_analysis.media_id=media.id
+            GROUP BY category, subcategory
+            ORDER BY category, media_count DESC, subcategory
+            LIMIT ?
+            """,
+            (self._to_int(limit) or 100,)
+        )
+        rows = [
+            dict(row)
+            for row in cur.fetchall()
+        ]
+        conn.close()
+
+        return rows
+
+    ############################################################
+
+    def filesystem_intelligence_summary(self):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT
+                COUNT(*) AS total,
+                SUM(CASE WHEN conflict_state='conflict' THEN 1 ELSE 0 END) AS conflicts,
+                SUM(CASE WHEN filesystem_confidence>=70 THEN 1 ELSE 0 END) AS confident,
+                SUM(CASE WHEN media.media_type='video' THEN 1 ELSE 0 END) AS videos
+            FROM filesystem_intelligence
+            JOIN media
+            ON media.id=filesystem_intelligence.media_id
+        """)
+        row = cur.fetchone()
+        conn.close()
+
+        return dict(row) if row else {
+            "total": 0,
+            "conflicts": 0,
+            "confident": 0,
+            "videos": 0
+        }
+
+    ############################################################
+
     def save_fire_service_intelligence(self, media_id, intelligence):
 
         conn = self.connection()
@@ -5060,6 +5459,30 @@ class DatabaseManager:
 
             media_intelligence.*,
 
+            filesystem_intelligence.root_category AS fs_root_category,
+
+            filesystem_intelligence.subcategory AS fs_subcategory,
+
+            filesystem_intelligence.normalized_tags AS fs_normalized_tags,
+
+            filesystem_intelligence.apparatus_identifier AS fs_apparatus_identifier,
+
+            filesystem_intelligence.apparatus_name AS fs_apparatus_name,
+
+            filesystem_intelligence.incident_type AS fs_incident_type,
+
+            filesystem_intelligence.training_type AS fs_training_type,
+
+            filesystem_intelligence.public_education_program AS fs_program,
+
+            filesystem_intelligence.campaign AS fs_campaign,
+
+            filesystem_intelligence.community_event AS fs_community_event,
+
+            filesystem_intelligence.filesystem_confidence AS fs_confidence,
+
+            filesystem_intelligence.conflict_state AS fs_conflict_state,
+
             ai_analysis.community_score,
 
             ai_analysis.description AS analysis_description,
@@ -5086,6 +5509,9 @@ class DatabaseManager:
 
         JOIN media_intelligence
         ON media_intelligence.media_id = media.id
+
+        LEFT JOIN filesystem_intelligence
+        ON filesystem_intelligence.media_id = media.id
 
         LEFT JOIN ai_analysis
         ON ai_analysis.media_id = media.id
@@ -5139,7 +5565,21 @@ class DatabaseManager:
                     "model": row["model"] or "",
                     "trust_state": row["trust_state"] or "",
                     "review_status": row["review_status"] or "",
-                    "quality_state": row["quality_state"] or ""
+                    "quality_state": row["quality_state"] or "",
+                    "filesystem_intelligence": {
+                        "root_category": row["fs_root_category"] or "",
+                        "subcategory": row["fs_subcategory"] or "",
+                        "normalized_tags": self._from_json(row["fs_normalized_tags"]),
+                        "apparatus_identifier": row["fs_apparatus_identifier"] or "",
+                        "apparatus_name": row["fs_apparatus_name"] or "",
+                        "incident_type": row["fs_incident_type"] or "",
+                        "training_type": row["fs_training_type"] or "",
+                        "public_education_program": row["fs_program"] or "",
+                        "campaign": row["fs_campaign"] or "",
+                        "community_event": row["fs_community_event"] or "",
+                        "filesystem_confidence": row["fs_confidence"] or 0,
+                        "conflict_state": row["fs_conflict_state"] or ""
+                    }
                 }
             )
             candidates.append(intelligence)
@@ -5533,6 +5973,18 @@ class DatabaseManager:
             media.path,
             media.media_type,
             media_intelligence.*,
+            filesystem_intelligence.root_category AS fs_root_category,
+            filesystem_intelligence.subcategory AS fs_subcategory,
+            filesystem_intelligence.normalized_tags AS fs_normalized_tags,
+            filesystem_intelligence.apparatus_identifier AS fs_apparatus_identifier,
+            filesystem_intelligence.apparatus_name AS fs_apparatus_name,
+            filesystem_intelligence.incident_type AS fs_incident_type,
+            filesystem_intelligence.training_type AS fs_training_type,
+            filesystem_intelligence.public_education_program AS fs_program,
+            filesystem_intelligence.campaign AS fs_campaign,
+            filesystem_intelligence.community_event AS fs_community_event,
+            filesystem_intelligence.filesystem_confidence AS fs_confidence,
+            filesystem_intelligence.conflict_state AS fs_conflict_state,
             ai_analysis.trust_state,
             ai_analysis.review_status,
             ai_analysis.failure_reason,
@@ -5542,6 +5994,8 @@ class DatabaseManager:
         FROM media
         JOIN media_intelligence
         ON media_intelligence.media_id=media.id
+        LEFT JOIN filesystem_intelligence
+        ON filesystem_intelligence.media_id=media.id
         LEFT JOIN ai_analysis
         ON ai_analysis.media_id=media.id
         WHERE media.id IN ({placeholders})
@@ -5567,6 +6021,20 @@ class DatabaseManager:
                 "provider": row["provider"] or "",
                 "model": row["model"] or ""
             })
+            asset["filesystem_intelligence"] = {
+                "root_category": row["fs_root_category"] or "",
+                "subcategory": row["fs_subcategory"] or "",
+                "normalized_tags": self._from_json(row["fs_normalized_tags"]),
+                "apparatus_identifier": row["fs_apparatus_identifier"] or "",
+                "apparatus_name": row["fs_apparatus_name"] or "",
+                "incident_type": row["fs_incident_type"] or "",
+                "training_type": row["fs_training_type"] or "",
+                "public_education_program": row["fs_program"] or "",
+                "campaign": row["fs_campaign"] or "",
+                "community_event": row["fs_community_event"] or "",
+                "filesystem_confidence": row["fs_confidence"] or 0,
+                "conflict_state": row["fs_conflict_state"] or ""
+            }
             by_id[asset["media_id"]] = asset
 
         return [
@@ -10086,6 +10554,50 @@ class DatabaseManager:
 
     ############################################################
 
+    def _filesystem_intelligence_from_row(self, row):
+
+        return {
+            "media_id": row["media_id"],
+            "media_root": row["media_root"] or "",
+            "relative_path": row["relative_path"] or "",
+            "folder_hierarchy": self._from_json(row["folder_hierarchy"]),
+            "root_category": row["root_category"] or "",
+            "parent_category": row["parent_category"] or "",
+            "subcategory": row["subcategory"] or "",
+            "folder_keywords": self._from_json(row["folder_keywords"]),
+            "normalized_tags": self._from_json(row["normalized_tags"]),
+            "apparatus_identifier": row["apparatus_identifier"] or "",
+            "apparatus_name": row["apparatus_name"] or "",
+            "apparatus_resolved": bool(row["apparatus_resolved"]),
+            "incident_category": row["incident_category"] or "",
+            "incident_type": row["incident_type"] or "",
+            "training_category": row["training_category"] or "",
+            "training_type": row["training_type"] or "",
+            "drill_type": row["drill_type"] or "",
+            "live_burn_context": bool(row["live_burn_context"]),
+            "public_education_program": row["public_education_program"] or "",
+            "campaign": row["campaign"] or "",
+            "community_event": row["community_event"] or "",
+            "station": row["station"] or "",
+            "recruit_class": bool(row["recruit_class"]),
+            "mutual_aid_context": bool(row["mutual_aid_context"]),
+            "year": row["year"] or "",
+            "month": row["month"] or 0,
+            "season": row["season"] or "",
+            "location_context": row["location_context"] or "",
+            "filesystem_confidence": row["filesystem_confidence"] or 0,
+            "matching_rule": row["matching_rule"] or "",
+            "source_folders": self._from_json(row["source_folders"]),
+            "conflict_state": row["conflict_state"] or "",
+            "conflict_details": self._from_json(row["conflict_details"]),
+            "enrichment_version": row["enrichment_version"] or "",
+            "last_derived_at": row["last_derived_at"] or "",
+            "created_at": row["created_at"] or "",
+            "updated_at": row["updated_at"] or ""
+        }
+
+    ############################################################
+
     def _knowledge_item_from_row(self, row):
 
         return {
@@ -10800,6 +11312,18 @@ class DatabaseManager:
             "CREATE INDEX IF NOT EXISTS idx_intelligence_recruitment_value ON media_intelligence(recruitment_value_score)",
             "CREATE INDEX IF NOT EXISTS idx_intelligence_community_engagement ON media_intelligence(community_engagement_score)",
             "CREATE INDEX IF NOT EXISTS idx_intelligence_trust ON media_intelligence(trust_building_score)",
+            "CREATE INDEX IF NOT EXISTS idx_filesystem_media ON filesystem_intelligence(media_id)",
+            "CREATE INDEX IF NOT EXISTS idx_filesystem_category ON filesystem_intelligence(root_category)",
+            "CREATE INDEX IF NOT EXISTS idx_filesystem_subcategory ON filesystem_intelligence(subcategory)",
+            "CREATE INDEX IF NOT EXISTS idx_filesystem_apparatus ON filesystem_intelligence(apparatus_identifier)",
+            "CREATE INDEX IF NOT EXISTS idx_filesystem_incident ON filesystem_intelligence(incident_type)",
+            "CREATE INDEX IF NOT EXISTS idx_filesystem_training ON filesystem_intelligence(training_type)",
+            "CREATE INDEX IF NOT EXISTS idx_filesystem_program ON filesystem_intelligence(public_education_program)",
+            "CREATE INDEX IF NOT EXISTS idx_filesystem_campaign ON filesystem_intelligence(campaign)",
+            "CREATE INDEX IF NOT EXISTS idx_filesystem_conflict ON filesystem_intelligence(conflict_state)",
+            "CREATE INDEX IF NOT EXISTS idx_filesystem_confidence ON filesystem_intelligence(filesystem_confidence)",
+            "CREATE INDEX IF NOT EXISTS idx_filesystem_version ON filesystem_intelligence(enrichment_version)",
+            "CREATE INDEX IF NOT EXISTS idx_filesystem_tags ON filesystem_intelligence(normalized_tags)",
             "CREATE INDEX IF NOT EXISTS idx_fire_service_media ON fire_service_intelligence(media_id)",
             "CREATE INDEX IF NOT EXISTS idx_fire_service_incident ON fire_service_intelligence(incident_classification)",
             "CREATE INDEX IF NOT EXISTS idx_fire_service_activity ON fire_service_intelligence(operational_activity)",

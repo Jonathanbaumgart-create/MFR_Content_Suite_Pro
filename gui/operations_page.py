@@ -67,6 +67,30 @@ class OperationsPage(ctk.CTkFrame):
             sticky="e"
         )
 
+        preview_backfill = ctk.CTkButton(
+            header,
+            text="Preview Filesystem Backfill",
+            command=self.preview_filesystem_backfill
+        )
+        preview_backfill.grid(
+            row=0,
+            column=2,
+            sticky="e",
+            padx=(8, 0)
+        )
+
+        start_backfill = ctk.CTkButton(
+            header,
+            text="Start Bounded Backfill",
+            command=self.start_filesystem_backfill
+        )
+        start_backfill.grid(
+            row=0,
+            column=3,
+            sticky="e",
+            padx=(8, 0)
+        )
+
         self.status = ctk.CTkLabel(
             self,
             text="Loading operations health..."
@@ -185,6 +209,10 @@ class OperationsPage(ctk.CTkFrame):
             self.format_library(report["library_processing"])
         )
         self.add_section(
+            "Folder Knowledge Map",
+            self.format_folder_map(report["library_processing"])
+        )
+        self.add_section(
             "Queue Health",
             self.format_queue(report["queue_health"])
         )
@@ -244,6 +272,8 @@ class OperationsPage(ctk.CTkFrame):
 
     def format_library(self, data):
 
+        filesystem = data.get("filesystem_intelligence") or {}
+
         return [
             f"Total media scanned: {data['total_media_scanned']}",
             f"Photos: {data.get('photo_count', 0)}",
@@ -273,11 +303,134 @@ class OperationsPage(ctk.CTkFrame):
             f"Emergency Media: {data.get('emergency_media_count', 0)}",
             f"Public Education Media: {data.get('public_education_media_count', 0)}",
             f"Recruitment Media: {data.get('recruitment_media_count', 0)}",
+            f"Filesystem Intelligence count: {filesystem.get('total', 0)}",
+            f"Filesystem conflicts: {filesystem.get('conflicts', 0)}",
+            f"Filesystem confident records: {filesystem.get('confident', 0)}",
+            f"Filesystem videos: {filesystem.get('videos', 0)}",
             f"Unanalyzed count: {data['unanalyzed_count']}",
             f"Intelligence missing count: {data['intelligence_missing_count']}",
             f"Analysis coverage: {data['analysis_coverage_percentage']}%",
             f"Intelligence coverage: {data['intelligence_coverage_percentage']}%"
         ]
+
+    ##########################################################
+
+    def format_folder_map(self, data):
+
+        rows = data.get("folder_knowledge_map") or []
+
+        if not rows:
+            return ["No filesystem intelligence has been derived yet."]
+
+        return [
+            (
+                f"{row.get('category', 'unknown')} / "
+                f"{row.get('subcategory', 'unknown')}: "
+                f"{row.get('media_count', 0)} media, "
+                f"{row.get('photo_count', 0)} photos, "
+                f"{row.get('video_count', 0)} videos, "
+                f"{row.get('reviewed_count', 0)} reviewed, "
+                f"{row.get('conflict_count', 0)} conflicts"
+            )
+            for row in rows[:40]
+        ]
+
+    ##########################################################
+
+    def preview_filesystem_backfill(self):
+
+        self.status.configure(
+            text="Previewing filesystem intelligence backfill..."
+        )
+        self.future = context.job_manager.submit(
+            self.service.filesystem.preview_backfill,
+            500
+        )
+        self.after(150, self.check_filesystem_preview)
+
+    ##########################################################
+
+    def check_filesystem_preview(self):
+
+        if self._destroyed or self.future is None:
+            return
+
+        if not self.future.done():
+            self.after(150, self.check_filesystem_preview)
+            return
+
+        try:
+            preview = self.future.result()
+        except Exception as ex:
+            self.render_error(str(ex))
+            return
+
+        self.status.configure(
+            text="Filesystem backfill preview loaded."
+        )
+        self.clear_content()
+        self.add_section(
+            "Filesystem Backfill Preview",
+            [
+                f"Eligible sample: {preview.get('eligible', 0)}",
+                f"Preview limit: {preview.get('preview_limit', 0)}",
+                f"Already current estimate: {preview.get('already_current', 0)}",
+                f"Videos in sample: {preview.get('video_count', 0)}",
+                f"Conflict estimate: {preview.get('conflict_estimate', 0)}",
+                f"Rules version: {preview.get('rules_version', '')}",
+                "Categories: " + self.dict_counts_text(
+                    preview.get("category_counts")
+                )
+            ]
+        )
+
+    ##########################################################
+
+    def start_filesystem_backfill(self):
+
+        self.status.configure(
+            text="Starting bounded filesystem intelligence backfill..."
+        )
+        self.future = context.job_manager.submit(
+            self.service.filesystem.backfill,
+            500
+        )
+        self.after(150, self.check_filesystem_backfill)
+
+    ##########################################################
+
+    def check_filesystem_backfill(self):
+
+        if self._destroyed or self.future is None:
+            return
+
+        if not self.future.done():
+            self.after(150, self.check_filesystem_backfill)
+            return
+
+        try:
+            result = self.future.result()
+        except Exception as ex:
+            self.render_error(str(ex))
+            return
+
+        self.status.configure(
+            text="Filesystem backfill completed."
+        )
+        self.clear_content()
+        self.add_section(
+            "Filesystem Backfill Result",
+            [
+                f"Total eligible: {result.get('total', 0)}",
+                f"Processed: {result.get('processed', 0)}",
+                f"Updated: {result.get('updated', 0)}",
+                f"Skipped: {result.get('skipped', 0)}",
+                f"Failed: {result.get('failed', 0)}",
+                f"Conflicts: {result.get('conflicts', 0)}",
+                f"Canceled: {result.get('canceled', False)}",
+                f"Rules version: {result.get('rules_version', '')}"
+            ]
+        )
 
     ##########################################################
 
@@ -414,6 +567,24 @@ class OperationsPage(ctk.CTkFrame):
         return ", ".join(
             f"{row['name']} ({row['count']})"
             for row in rows[:5]
+        )
+
+    ##########################################################
+
+    def dict_counts_text(self, counts):
+
+        counts = counts or {}
+
+        if not counts:
+            return "None"
+
+        return ", ".join(
+            f"{key} ({value})"
+            for key, value in sorted(
+                counts.items(),
+                key=lambda item: item[1],
+                reverse=True
+            )[:8]
         )
 
     ##########################################################

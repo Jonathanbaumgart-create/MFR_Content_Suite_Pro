@@ -18,6 +18,7 @@ class RecommendationScoringService:
         "topic_evidence": 16.0,
         "story_strength": 14.0,
         "topic_agreement": 8.0,
+        "filesystem_agreement": 6.0,
         "unused_media": 10.0,
         "human_correction": 4.0,
         "recent_repetition": -16.0,
@@ -26,7 +27,8 @@ class RecommendationScoringService:
         "mock_source": -18.0,
         "unreviewed_real_source": -8.0,
         "recent_media_use": -14.0,
-        "unresolved_conflict": -10.0
+        "unresolved_conflict": -10.0,
+        "filesystem_conflict": -8.0
     }
 
     CONFIDENCE_WEIGHTS = {
@@ -137,6 +139,21 @@ class RecommendationScoringService:
                     min(
                         self.WEIGHTS["topic_agreement"],
                         topic_agreement * 2
+                    ),
+                    "positive"
+                )
+            )
+
+        filesystem_agreement = self._filesystem_agreement(candidate)
+
+        if filesystem_agreement:
+            factors.append(
+                self._factor(
+                    "filesystem_agreement",
+                    f"{filesystem_agreement} asset(s) have matching folder context",
+                    min(
+                        self.WEIGHTS["filesystem_agreement"],
+                        filesystem_agreement * 2
                     ),
                     "positive"
                 )
@@ -299,6 +316,16 @@ class RecommendationScoringService:
                 )
             )
 
+        if self._filesystem_conflicts(assets):
+            factors.append(
+                self._factor(
+                    "filesystem_conflict",
+                    "Some folder context conflicts with stored intelligence",
+                    self.WEIGHTS["filesystem_conflict"],
+                    "negative"
+                )
+            )
+
         raw_score = round(
             sum(item["score"] for item in factors),
             1
@@ -384,6 +411,9 @@ class RecommendationScoringService:
 
         if self._low_confidence(assets):
             score -= 14
+
+        if self._filesystem_conflicts(assets):
+            score -= 8
 
         if not memory["memory_available"]:
             score -= 8
@@ -492,6 +522,46 @@ class RecommendationScoringService:
             )
         )
 
+    def _filesystem_agreement(self, candidate):
+
+        profile_terms = list(candidate["profile"].get("terms") or [])
+        profile_terms.append(candidate["profile"].get("topic", ""))
+        topic_terms = {
+            self._token(value)
+            for value in profile_terms
+            if value
+        }
+
+        count = 0
+
+        for asset in candidate["assets"][:5]:
+            filesystem = asset.get("filesystem_intelligence") or {}
+            folder_terms = {
+                self._token(value)
+                for value in (
+                    filesystem.get("normalized_tags") or []
+                )
+            }
+            folder_terms.update(
+                self._token(filesystem.get(key, ""))
+                for key in (
+                    "root_category",
+                    "subcategory",
+                    "incident_type",
+                    "training_type",
+                    "public_education_program",
+                    "campaign",
+                    "community_event",
+                    "apparatus_name",
+                    "apparatus_identifier"
+                )
+            )
+
+            if topic_terms & folder_terms:
+                count += 1
+
+        return count
+
     def _confidence_limitations(self, candidate, memory, story):
 
         limitations = []
@@ -524,6 +594,11 @@ class RecommendationScoringService:
         if self._low_confidence(assets):
             limitations.append(
                 "Some supporting media has low intelligence confidence."
+            )
+
+        if self._filesystem_conflicts(assets):
+            limitations.append(
+                "Some supporting media has unresolved folder-context conflicts."
             )
 
         if story.get("overall", 0) < 55:
@@ -684,6 +759,13 @@ class RecommendationScoringService:
         return any(
             int(asset.get("correction_count") or 0) >= 3
             and int(asset.get("intelligence_score") or 0) < 60
+            for asset in assets
+        )
+
+    def _filesystem_conflicts(self, assets):
+
+        return any(
+            (asset.get("filesystem_intelligence") or {}).get("conflict_state") == "conflict"
             for asset in assets
         )
 

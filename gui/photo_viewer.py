@@ -525,6 +525,9 @@ class PhotoViewer(ctk.CTkToplevel):
         self.fire_service_intelligence = (
             self.effective_intelligence.get("fire_service_intelligence")
         )
+        self.filesystem_intelligence = (
+            self.effective_intelligence.get("filesystem_intelligence") or {}
+        )
         self.update_mock_notice(analysis)
 
         failure = analysis.get("failure_reason", "")
@@ -607,6 +610,17 @@ class PhotoViewer(ctk.CTkToplevel):
                     "",
                     "Video Intelligence"
                 ] + video_lines
+            )
+
+        filesystem_lines = self.filesystem_intelligence_lines()
+
+        if filesystem_lines:
+            lines.extend(
+                [
+                    "",
+                    "Filesystem Intelligence",
+                    "Folder context is supporting evidence, not visual proof."
+                ] + filesystem_lines
             )
 
         communications_lines = self.communications_intelligence_lines()
@@ -1086,6 +1100,66 @@ class PhotoViewer(ctk.CTkToplevel):
             (
                 "Reasoning: " +
                 self.format_list(self.intelligence.get("communications_reasoning"))
+            )
+        ]
+
+    ##########################################################
+
+    def filesystem_intelligence_lines(self):
+
+        filesystem = getattr(
+            self,
+            "filesystem_intelligence",
+            None
+        )
+
+        if not filesystem:
+            return []
+
+        apparatus = filesystem.get("apparatus_name") or filesystem.get(
+            "apparatus_identifier",
+            ""
+        )
+        agreement = (
+            "Conflict flagged"
+            if filesystem.get("conflict_state") == "conflict"
+            else "No folder conflict flagged"
+        )
+
+        return [
+            f"Category: {filesystem.get('root_category', '') or 'unknown'}",
+            f"Subcategory: {filesystem.get('subcategory', '') or 'unknown'}",
+            f"Apparatus: {apparatus or 'unknown'}",
+            f"Incident Type: {filesystem.get('incident_type', '') or 'unknown'}",
+            f"Training Type: {filesystem.get('training_type', '') or 'unknown'}",
+            f"Program: {filesystem.get('public_education_program', '') or 'unknown'}",
+            f"Campaign: {filesystem.get('campaign', '') or 'unknown'}",
+            f"Event: {filesystem.get('community_event', '') or 'unknown'}",
+            (
+                "Folder Hierarchy: " +
+                self.format_list(filesystem.get("folder_hierarchy"))
+            ),
+            (
+                "Normalized Tags: " +
+                self.format_list(filesystem.get("normalized_tags"))
+            ),
+            f"Confidence: {filesystem.get('filesystem_confidence', 0)}",
+            (
+                "Department Knowledge Match: " +
+                (
+                    "resolved"
+                    if filesystem.get("apparatus_resolved")
+                    else "unresolved or not applicable"
+                )
+            ),
+            f"Agreement: {agreement}",
+            (
+                "Conflict Details: " +
+                self.format_list(filesystem.get("conflict_details"))
+            ),
+            f"Version: {filesystem.get('enrichment_version', '')}",
+            "Derived: " + self.local_time(
+                filesystem.get("last_derived_at", "")
             )
         ]
 

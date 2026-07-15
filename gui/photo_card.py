@@ -36,6 +36,7 @@ class PhotoCard(ctk.CTkFrame):
         media_type=None,
         duration_seconds=0,
         date_label="",
+        filesystem_badge="",
         selected=False
     ):
 
@@ -54,6 +55,7 @@ class PhotoCard(ctk.CTkFrame):
         self.media_type = media_type or self._media_type_from_path()
         self.duration_seconds = float(duration_seconds or 0)
         self.date_label = date_label or ""
+        self.filesystem_badge = filesystem_badge or ""
         self.analysis_status = analysis_status or "Not analyzed"
         self.selection_callback = selection_callback
         self.thumbnail_service = thumbnail_service
@@ -152,6 +154,24 @@ class PhotoCard(ctk.CTkFrame):
                 pady=(0, 3)
             )
 
+        self.filesystem_label = None
+
+        if self.filesystem_badge:
+            self.filesystem_label = ctk.CTkLabel(
+                self,
+                text=self.filesystem_badge[:32],
+                font=("Segoe UI", 10, "bold"),
+                text_color=(
+                    "#ffcf7a"
+                    if self.filesystem_badge == "Folder Conflict"
+                    else "#9bd8ff"
+                )
+            )
+            self.filesystem_label.pack(
+                padx=5,
+                pady=(0, 3)
+            )
+
         self.status_label = ctk.CTkLabel(
             self,
             text=self.analysis_status,
@@ -181,6 +201,12 @@ class PhotoCard(ctk.CTkFrame):
 
         if self.video_label is not None:
             self.video_label.bind(
+                "<Double-Button-1>",
+                self.open_viewer
+            )
+
+        if self.filesystem_label is not None:
+            self.filesystem_label.bind(
                 "<Double-Button-1>",
                 self.open_viewer
             )

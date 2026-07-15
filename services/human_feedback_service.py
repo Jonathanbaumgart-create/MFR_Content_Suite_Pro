@@ -163,6 +163,7 @@ class HumanFeedbackService:
         analysis = self.db.get_ai_analysis(media_id) or {}
         media = self.db.get_media_intelligence(media_id) or {}
         fire = self.db.get_fire_service_intelligence(media_id) or {}
+        filesystem = self.db.get_filesystem_intelligence(media_id) or {}
         corrections = self.corrections_for_media(media_id)
         correction_map = {
             row["field_name"]: row["corrected_value"]
@@ -174,6 +175,7 @@ class HumanFeedbackService:
             "analysis": dict(analysis),
             "media_intelligence": dict(media),
             "fire_service_intelligence": dict(fire),
+            "filesystem_intelligence": dict(filesystem),
             "corrections": corrections,
             "correction_history": self.history_for_media(media_id),
             "analysis_review_history": self.db.analysis_review_history(
@@ -230,6 +232,10 @@ class HumanFeedbackService:
         fire = dict(effective.get("fire_service_intelligence") or {})
 
         media["fire_service_intelligence"] = fire
+        media["filesystem_intelligence"] = effective.get(
+            "filesystem_intelligence",
+            {}
+        )
         media["human_corrections"] = effective.get("corrections", [])
         media["is_human_corrected"] = effective.get("is_human_corrected", False)
         media["correction_count"] = effective.get("correction_count", 0)

@@ -1269,6 +1269,7 @@ class RecommendationCandidateService:
 
         values = []
         fire = asset.get("fire_service_intelligence") or {}
+        filesystem = asset.get("filesystem_intelligence") or {}
 
         for key in (
             "normalized_scene",
@@ -1314,6 +1315,28 @@ class RecommendationCandidateService:
             "operational_reasoning"
         ):
             values.extend(fire.get(key) or [])
+
+        for key in (
+            "root_category",
+            "subcategory",
+            "apparatus_identifier",
+            "apparatus_name",
+            "incident_type",
+            "training_type",
+            "public_education_program",
+            "campaign",
+            "community_event",
+            "station",
+            "season"
+        ):
+            values.extend(self._split(filesystem.get(key)))
+
+        for key in (
+            "normalized_tags",
+            "folder_keywords",
+            "source_folders"
+        ):
+            values.extend(filesystem.get(key) or [])
 
         terms = {
             self._token(value)

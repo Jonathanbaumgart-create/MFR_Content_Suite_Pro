@@ -41,6 +41,15 @@ class GalleryPage(ctk.CTkFrame):
             "All Media": "all",
             "Photos": "photos",
             "Videos": "videos",
+            "Filesystem: Training": "filesystem_training",
+            "Filesystem: Incidents": "filesystem_incidents",
+            "Filesystem: Apparatus": "filesystem_apparatus",
+            "Filesystem: Programs": "filesystem_programs",
+            "Filesystem: Campaigns": "filesystem_campaigns",
+            "Filesystem: Community": "filesystem_community",
+            "Filesystem: Conflicts": "filesystem_conflicts",
+            "Has Filesystem Intelligence": "has_filesystem_intelligence",
+            "Missing Filesystem Intelligence": "missing_filesystem_intelligence",
             "Added Today": "added_today",
             "Captured Today": "captured_today",
             "Last 7 Days": "last_7_days",
@@ -326,6 +335,7 @@ class GalleryPage(ctk.CTkFrame):
             date_label = item[7] if len(item) > 7 and item[7] else (
                 item[6] if len(item) > 6 else ""
             )
+            filesystem_badge = item[8] if len(item) > 8 else ""
 
             try:
 
@@ -340,6 +350,7 @@ class GalleryPage(ctk.CTkFrame):
                     media_type=media_type,
                     duration_seconds=duration_seconds,
                     date_label=date_label,
+                    filesystem_badge=filesystem_badge,
                     selected=media_id in self.selected
                 )
 

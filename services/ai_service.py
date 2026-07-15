@@ -42,9 +42,15 @@ class AIService:
 
     ############################################################
 
-    def analyze_image(self, image_path, vision_service):
+    def analyze_image(self, image_path, vision_service, prompt_context=""):
 
-        text = vision_service.analyze(image_path)
+        try:
+            text = vision_service.analyze(
+                image_path,
+                prompt_context=prompt_context
+            )
+        except TypeError:
+            text = vision_service.analyze(image_path)
 
         return self.parse_analysis(
             text,

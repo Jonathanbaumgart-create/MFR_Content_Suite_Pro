@@ -41,7 +41,7 @@ class VisionProvider(ABC):
         self.settings = settings or {}
 
     @abstractmethod
-    def analyze(self, image_path: str) -> str:
+    def analyze(self, image_path: str, prompt_context: str = "") -> str:
         pass
 
     def model_name(self):
@@ -58,11 +58,11 @@ class OllamaVisionProvider(VisionProvider):
         super().__init__(settings=settings)
         self.preprocessor = VisionPreprocessingService()
 
-    def analyze(self, image_path: str) -> str:
+    def analyze(self, image_path: str, prompt_context: str = "") -> str:
 
         model = self.model_name()
         url = self.settings.get("url")
-        prompt = self._prompt()
+        prompt = self._prompt(prompt_context)
         attempts = []
         dimensions = [
             self.settings.get("analysis_max_dimension", 1536),
@@ -292,9 +292,18 @@ class OllamaVisionProvider(VisionProvider):
 
     ############################################################
 
-    def _prompt(self):
+    def _prompt(self, prompt_context=""):
 
-        return """
+        context_text = ""
+
+        if str(prompt_context or "").strip():
+            context_text = (
+                "\nFolder context for orientation only: "
+                + str(prompt_context).strip()
+                + "\n"
+            )
+
+        return ("""
 Describe only visible evidence in this image. Return JSON only.
 Do not identify people, infer rank, infer department identity, infer location,
 infer incident type, or invent apparatus types unless clearly visible.
@@ -302,7 +311,10 @@ Use unknown when uncertain. Use empty lists when evidence is absent.
 Put uncertain claims in uncertain_observations.
 visible_text must contain only clearly readable text.
 people_count must be numeric. confidence must be between 0 and 1.
+If folder context is provided, use it only to focus attention and confirm
+only details that are visually supported.
 No Markdown fences. No introductory text.
+""" + context_text + """
 {
   "description": "",
   "people_count": 0,
@@ -322,12 +334,12 @@ No Markdown fences. No introductory text.
   "uncertain_observations": [],
   "confidence": 0.0
 }
-""".strip()
+""").strip()
 
 
 class MockVisionProvider(VisionProvider):
 
-    def analyze(self, image_path: str) -> str:
+    def analyze(self, image_path: str, prompt_context: str = "") -> str:
         model = self.model_name()
 
         return """

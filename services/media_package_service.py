@@ -540,6 +540,8 @@ class MediaPackageService:
             recent_used
         )
         duplicate_risk = self._duplicate_scene_risk(asset)
+        filesystem = asset.get("filesystem_intelligence") or {}
+        filesystem_conflict = filesystem.get("conflict_state") == "conflict"
         media_score = round(
             communications_score * 0.34 +
             topic_score * 0.24 +
@@ -561,9 +563,20 @@ class MediaPackageService:
         ]
         limitations = []
 
+        if filesystem.get("filesystem_confidence", 0):
+            factors.append(
+                "folder context " +
+                str(filesystem.get("root_category") or "available")
+            )
+
         if not self._reviewed(asset):
             limitations.append(
                 "Human review is incomplete; use only if no reviewed alternative fits."
+            )
+
+        if filesystem_conflict:
+            limitations.append(
+                "Folder context conflicts with stored intelligence and needs review."
             )
 
         if not matches:
@@ -873,6 +886,7 @@ class MediaPackageService:
     def _asset_terms(self, asset):
 
         values = []
+        filesystem = asset.get("filesystem_intelligence") or {}
 
         for key in (
             "normalized_scene",
@@ -899,6 +913,29 @@ class MediaPackageService:
             "communications_reasoning"
         ):
             for value in asset.get(key) or []:
+                values.extend(self._split(value))
+
+        for key in (
+            "root_category",
+            "subcategory",
+            "apparatus_identifier",
+            "apparatus_name",
+            "incident_type",
+            "training_type",
+            "public_education_program",
+            "campaign",
+            "community_event",
+            "station",
+            "season"
+        ):
+            values.extend(self._split(filesystem.get(key)))
+
+        for key in (
+            "normalized_tags",
+            "folder_keywords",
+            "source_folders"
+        ):
+            for value in filesystem.get(key) or []:
                 values.extend(self._split(value))
 
         return {

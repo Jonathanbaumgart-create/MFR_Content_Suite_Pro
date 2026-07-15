@@ -1,5 +1,6 @@
 from media.scanner import MediaScanner
 from core.app_context import context
+from services.filesystem_intelligence_service import FilesystemIntelligenceService
 from services.logging_service import LoggingService
 from datetime import datetime
 from pathlib import Path
@@ -16,6 +17,7 @@ class ScanService:
     def __init__(self, scanner=None, database=None):
         self.scanner = scanner or MediaScanner()
         self.db = database or context.database
+        self.filesystem = FilesystemIntelligenceService(database=self.db)
 
     def scan(self, folder, progress_callback=None):
 
@@ -70,6 +72,10 @@ class ScanService:
                         inserted += 1
                         existing_paths.add(item.get("path"))
                         existing_hashes.add(item.get("sha256"))
+                        self._derive_filesystem_intelligence(
+                            item,
+                            folder
+                        )
                     else:
                         reason = self._duplicate_reason(
                             item,
@@ -215,6 +221,41 @@ class ScanService:
             return self.db.media_identity_sets()
 
         return set(), set()
+
+    ############################################################
+
+    def _derive_filesystem_intelligence(self, item, folder):
+
+        try:
+            row = self.db.get_media_by_path(
+                item.get("path")
+            )
+
+            if not row:
+                return
+
+            media = {
+                "id": row[0],
+                "media_id": row[0],
+                "filename": item.get("filename", ""),
+                "path": item.get("path", ""),
+                "media_type": item.get("type", "")
+            }
+            self.filesystem.save_for_media(
+                media,
+                media_root=folder
+            )
+
+        except Exception as ex:
+            logger.warning(
+                "Filesystem intelligence derive failed path=%s",
+                item.get("path"),
+                exc_info=(
+                    type(ex),
+                    ex,
+                    ex.__traceback__
+                )
+            )
 
     ############################################################
 

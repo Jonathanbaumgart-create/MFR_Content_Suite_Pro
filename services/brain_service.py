@@ -19,6 +19,7 @@ from services.vision_service import VisionProviderError, VisionService
 from services.human_feedback_service import HumanFeedbackService
 from services.video_metadata_service import VideoMetadataService
 from services.media_priority_service import MediaPriorityService
+from services.filesystem_intelligence_service import FilesystemIntelligenceService
 
 
 logger = LoggingService.get_logger("ai")
@@ -77,6 +78,7 @@ class BrainService:
         )
         self.video = VideoMetadataService()
         self.priority = MediaPriorityService(database=self.db)
+        self.filesystem = FilesystemIntelligenceService(database=self.db)
         self.quality = AnalysisQualityService()
         self.config = config or AI_CONFIG
 
@@ -1052,7 +1054,10 @@ class BrainService:
 
         try:
 
-            analysis, retry_count = self._analyze_with_retries(image_path)
+            analysis, retry_count = self._analyze_with_retries(
+                image_path,
+                media_id=media_id
+            )
             analysis["analysis_duration"] = time.perf_counter() - started
             analysis["provider"] = self.vision.provider_key()
             analysis["retry_count"] = retry_count
@@ -1506,7 +1511,7 @@ class BrainService:
 
     ############################################################
 
-    def _analyze_with_retries(self, image_path):
+    def _analyze_with_retries(self, image_path, media_id=None):
 
         retry_limit = self.config.get("retry_attempts", 2)
         attempts = retry_limit + 1
@@ -1517,10 +1522,23 @@ class BrainService:
 
             try:
 
-                analysis = self.ai.analyze_image(
-                    image_path,
-                    self.vision
+                prompt_context = (
+                    self.filesystem.prompt_context(media_id)
+                    if media_id
+                    else ""
                 )
+
+                try:
+                    analysis = self.ai.analyze_image(
+                        image_path,
+                        self.vision,
+                        prompt_context=prompt_context
+                    )
+                except TypeError:
+                    analysis = self.ai.analyze_image(
+                        image_path,
+                        self.vision
+                    )
 
                 return analysis, attempt - 1
 

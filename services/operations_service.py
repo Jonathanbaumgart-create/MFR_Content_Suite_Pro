@@ -6,6 +6,7 @@ from services.communications_reasoning_service import CommunicationsReasoningSer
 from services.knowledge_graph_service import KnowledgeGraphService
 from services.knowledge_service import KnowledgeService
 from services.human_feedback_service import HumanFeedbackService
+from services.filesystem_intelligence_service import FilesystemIntelligenceService
 from services.logging_service import LoggingService
 
 
@@ -43,6 +44,10 @@ class OperationsService:
         )
         self.feedback = HumanFeedbackService(
             database=self.db
+        )
+        self.filesystem = FilesystemIntelligenceService(
+            database=self.db,
+            knowledge_service=self.knowledge
         )
         self.ai_settings = AISettingsService(
             base_config=AI_CONFIG
@@ -135,6 +140,10 @@ class OperationsService:
             "intelligence_coverage_percentage": self._percentage(
                 intelligence,
                 total
+            ),
+            "filesystem_intelligence": self.db.filesystem_intelligence_summary(),
+            "folder_knowledge_map": self.filesystem.folder_knowledge_map(
+                limit=50
             )
         }
 

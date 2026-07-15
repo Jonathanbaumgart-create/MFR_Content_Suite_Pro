@@ -595,7 +595,8 @@ class DecisionExplainabilityService:
             "Recommendation Candidate Service",
             "Communications Memory",
             "Media Priority",
-            "Human Review trust state"
+            "Human Review trust state",
+            "Filesystem Intelligence"
         ]
 
         for item in required:
@@ -627,10 +628,33 @@ class DecisionExplainabilityService:
                 "incident_type": asset.get("incident_type", ""),
                 "primary_activity": asset.get("primary_activity", ""),
                 "recommended_uses": self._list(asset.get("recommended_uses"))[:5],
-                "content_tags": self._list(asset.get("content_tags"))[:5]
+                "content_tags": self._list(asset.get("content_tags"))[:5],
+                "filesystem_context": self._filesystem_context(asset)
             })
 
         return evidence
+
+    def _filesystem_context(self, asset):
+
+        filesystem = asset.get("filesystem_intelligence") or {}
+
+        if not filesystem:
+            return {}
+
+        return {
+            "category": filesystem.get("root_category", ""),
+            "subcategory": filesystem.get("subcategory", ""),
+            "apparatus": (
+                filesystem.get("apparatus_name") or
+                filesystem.get("apparatus_identifier", "")
+            ),
+            "training_type": filesystem.get("training_type", ""),
+            "incident_type": filesystem.get("incident_type", ""),
+            "program": filesystem.get("public_education_program", ""),
+            "campaign": filesystem.get("campaign", ""),
+            "confidence": filesystem.get("filesystem_confidence", 0),
+            "conflict_state": filesystem.get("conflict_state", "")
+        }
 
     def _communications_evidence(self, recommendation):
 
