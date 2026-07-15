@@ -40,3 +40,41 @@ database/backups/
 database/*.db
 database/*.sqlite
 database/*.sqlite3
+
+###############################################################################
+# MFR Content Suite Pro - Local Runtime Files
+###############################################################################
+
+# Local launcher
+Launch MFR Content Suite.bat
+Launch MFR Content Suite.bat - Shortcut.lnk
+
+# Runtime thumbnail cache
+thumbnails/
+
+# Runtime logs
+logs/
+
+# Local imports used for Communications Memory
+imports/
+
+# Database backups
+database/backups/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Operating system
+Thumbs.db
+Desktop.ini
+.DS_Store
