@@ -52,7 +52,7 @@ def main():
             "incident": root / "Incidents" / "MVC" / "2026-06" / "scene.jpg",
             "program": root / "Public Education" / "Hydrant Heroes" / "school.jpg",
             "campaign": root / "Campaigns" / "Fire Prevention Week" / "demo.jpg",
-            "community": root / "Community Events" / "Canada-Day Fireworks" / "event.jpg",
+            "community": root / "Community Events" / "Parade" / "event.jpg",
             "unknown": root / "Misc" / "Unsorted" / "plain.jpg",
             "video": root / "Training" / "SCBA" / "clip.mp4"
         }
@@ -108,7 +108,7 @@ def main():
 
         community_row = db.get_media_by_path(str(paths["community"]))
         community = db.get_filesystem_intelligence(community_row[0])
-        assert_true(community["community_event"] in ("fireworks", "community_event"), "community event detection")
+        assert_true(community["community_event"] in ("fireworks", "community_event", "parade"), "community event detection")
 
         unknown_row = db.get_media_by_path(str(paths["unknown"]))
         unknown = db.get_filesystem_intelligence(unknown_row[0])

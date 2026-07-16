@@ -98,7 +98,7 @@ class FilesystemIntelligenceService:
             tags
         )
         matched_rules = self._unique(tags)
-        conflicts = self._conflicts(media, tags)
+        conflicts = self._conflicts(media, tags, category)
         confidence = self._confidence(
             category,
             apparatus,
@@ -127,21 +127,47 @@ class FilesystemIntelligenceService:
             "apparatus_resolved": bool(apparatus.get("resolved")),
             "incident_category": (
                 "incident"
-                if incidents
+                if category == "Incidents" and incidents
                 else "unknown"
             ),
-            "incident_type": self._first_specific(incidents),
+            "incident_type": (
+                self._first_specific(incidents)
+                if category == "Incidents"
+                else "unknown"
+            ),
             "training_category": (
                 "training"
-                if training
+                if category == "Training" and training
                 else "unknown"
             ),
-            "training_type": self._first_specific(training),
-            "drill_type": "drill" if "drill" in training else "",
-            "live_burn_context": "live_burn" in training,
-            "public_education_program": self._first_specific(programs),
-            "campaign": self._first_specific(campaigns),
-            "community_event": self._first_specific(community),
+            "training_type": (
+                self._first_specific(training)
+                if category == "Training"
+                else "unknown"
+            ),
+            "drill_type": (
+                "drill"
+                if category == "Training" and "drill" in training
+                else ""
+            ),
+            "live_burn_context": (
+                category == "Training" and "live_burn" in training
+            ),
+            "public_education_program": (
+                self._first_specific(programs)
+                if category == "Programs"
+                else "unknown"
+            ),
+            "campaign": (
+                self._first_specific(campaigns)
+                if category == "Campaigns"
+                else "unknown"
+            ),
+            "community_event": (
+                self._first_specific(community)
+                if category == "Community"
+                else "unknown"
+            ),
             "station": self._station(folder_text),
             "recruit_class": "recruit_class" in training,
             "mutual_aid_context": "mutual aid" in folder_text,
@@ -562,7 +588,7 @@ class FilesystemIntelligenceService:
 
         return score
 
-    def _conflicts(self, media, tags):
+    def _conflicts(self, media, tags, category="unknown"):
 
         text = " ".join(
             str(media.get(key, "") or "").lower()
@@ -578,17 +604,33 @@ class FilesystemIntelligenceService:
         has_incident_context = bool(incident_tags.intersection(tags))
         has_community_context = bool(community_tags.intersection(tags))
 
-        if "training" in tags and any(term in text for term in ("community", "public_education")):
+        has_training_context = bool(set(self.rules.get("training", {}).keys()).intersection(tags))
+
+        if (
+            category == "Training" and
+            has_training_context and
+            any(term in text for term in ("community", "public_education"))
+        ):
             conflicts.append(
                 "Folder suggests training while existing intelligence suggests community/public education."
             )
 
-        if has_incident_context and "training" in text:
+        if category == "Incidents" and has_incident_context and "training" in text:
             conflicts.append(
                 "Folder suggests incident context while existing intelligence suggests training."
             )
 
-        if has_community_context and any(term in text for term in ("incident", "fire", "mvc", "rescue")):
+        if category == "Community" and has_community_context and any(
+            term in text
+            for term in (
+                "incident_response",
+                "fire_suppression",
+                "structure_fire",
+                "motor_vehicle_collision",
+                "mvc",
+                "hazmat"
+            )
+        ):
             conflicts.append(
                 "Folder suggests community context while existing intelligence suggests incident response."
             )
