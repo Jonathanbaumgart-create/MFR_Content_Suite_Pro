@@ -290,6 +290,7 @@ class PhotoCard(ctk.CTkFrame):
         colors = {
             "Analyzing": "#f6c453",
             "Queued": "#9fb7ff",
+            "Interrupted": "#ffcf7a",
             "Analyzed": "#7bd88f",
             "Real": "#7bd88f",
             "Real - Review Required": "#f6c453",

@@ -91,10 +91,10 @@ class AIDashboardPage(ctk.CTkFrame):
         )
 
         metrics = (
-            ("queued", "Queued"),
-            ("running", "Running"),
-            ("completed", "Completed"),
-            ("failed", "Failed"),
+            ("queued", "Job Queued"),
+            ("running", "Job Running"),
+            ("completed", "Job Completed"),
+            ("failed", "Job Failed"),
             ("provider", "Provider"),
             ("provider_model", "Vision Model"),
             ("average_analysis_time", "Avg Time"),
@@ -102,11 +102,15 @@ class AIDashboardPage(ctk.CTkFrame):
             ("last_analyzed", "Last Analyzed"),
             ("legacy_mock_analysis", "Legacy Mock"),
             ("analysis_status", "Session"),
+            ("analysis_worker_status", "Worker Status"),
+            ("analysis_worker_active", "Worker Active"),
+            ("analysis_heartbeat_age", "Heartbeat Age"),
             ("analysis_completed", "Session Done"),
             ("analysis_failed", "Session Failed"),
             ("analysis_skipped", "Session Skipped"),
             ("analysis_remaining", "Remaining"),
             ("analysis_current", "Current Image"),
+            ("analysis_last_attempted", "Last Attempted"),
             ("analysis_speed", "Avg Speed"),
             ("analysis_eta", "ETA"),
             ("review_unreviewed", "Review Needed"),
@@ -1122,6 +1126,8 @@ class AIDashboardPage(ctk.CTkFrame):
             )
 
         paused = metrics.get("paused")
+        worker_status = metrics.get("analysis_worker_status", "Idle")
+        session_status = metrics.get("analysis_status", "Idle")
 
         if metrics.get("provider") == "mock":
             self.mock_notice.configure(
@@ -1135,6 +1141,25 @@ class AIDashboardPage(ctk.CTkFrame):
         if paused:
             self.status.configure(
                 text="Queue paused"
+            )
+        elif worker_status in ("Stale", "Recoverable", "Interrupted"):
+            self.status.configure(
+                text=(
+                    "Analysis session needs Resume Previous "
+                    f"({session_status}, worker {worker_status})"
+                )
+            )
+        elif session_status == "Paused":
+            self.status.configure(
+                text="Analysis session paused - Resume Previous to continue"
+            )
+        elif metrics.get("analysis_worker_active") == "Yes":
+            self.status.configure(
+                text=f"Analysis running ({worker_status})"
+            )
+        else:
+            self.status.configure(
+                text="Ready"
             )
 
         self.after(

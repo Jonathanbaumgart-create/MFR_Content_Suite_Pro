@@ -1389,6 +1389,7 @@ class DatabaseManager:
         """)
 
         self._ensure_media_columns(cur)
+        self._ensure_analysis_session_columns(cur)
         self._ensure_analysis_queue_columns(cur)
         self._ensure_ai_analysis_columns(cur)
         self._ensure_media_intelligence_columns(cur)
@@ -1919,7 +1920,8 @@ class DatabaseManager:
 
             media_corrections.id AS correction_id,
 
-            latest_queue.state AS queue_state
+            latest_queue.state AS queue_state,
+            latest_queue.session_status AS queue_session_status
 
         FROM media
 
@@ -1941,8 +1943,10 @@ class DatabaseManager:
         ON media_corrections.media_id=media.id
 
         LEFT JOIN (
-            SELECT q1.media_id, q1.state
+            SELECT q1.media_id, q1.state, s.status AS session_status
             FROM analysis_queue q1
+            LEFT JOIN analysis_sessions s
+            ON s.session_id=q1.session_id
             INNER JOIN (
                 SELECT media_id, MAX(queue_id) AS queue_id
                 FROM analysis_queue
@@ -1990,6 +1994,13 @@ class DatabaseManager:
     def _media_analysis_status_from_row(self, row):
 
         queue_state = row["queue_state"] or ""
+        session_status = row["queue_session_status"] or ""
+
+        if (
+            session_status in ("Recoverable", "Interrupted")
+            and queue_state in ("Waiting", "Queued", "Analyzing", "Retry Pending")
+        ):
+            return "Interrupted"
 
         if queue_state in (
             "Waiting",
@@ -2589,8 +2600,10 @@ class DatabaseManager:
 
         return """
             LEFT JOIN (
-                SELECT q1.media_id, q1.state
+                SELECT q1.media_id, q1.state, s.status AS session_status
                 FROM analysis_queue q1
+                LEFT JOIN analysis_sessions s
+                ON s.session_id=q1.session_id
                 INNER JOIN (
                     SELECT media_id, MAX(queue_id) AS queue_id
                     FROM analysis_queue
@@ -9649,6 +9662,63 @@ class DatabaseManager:
             session_id
         )
 
+    def mark_analysis_worker_started(
+        self,
+        session_id,
+        worker_id,
+        process_id=None,
+        thread_id=None,
+        status="Active"
+    ):
+
+        return self._analysis_queue_repository().mark_worker_started(
+            session_id,
+            worker_id,
+            process_id=process_id,
+            thread_id=thread_id,
+            status=status
+        )
+
+    def heartbeat_analysis_session(self, session_id, worker_status="Active"):
+
+        return self._analysis_queue_repository().heartbeat_session(
+            session_id,
+            worker_status=worker_status
+        )
+
+    def mark_analysis_worker_stopped(
+        self,
+        session_id,
+        worker_status,
+        reason=""
+    ):
+
+        return self._analysis_queue_repository().mark_worker_stopped(
+            session_id,
+            worker_status,
+            reason=reason
+        )
+
+    def mark_analysis_session_recoverable(self, session_id, reason):
+
+        return self._analysis_queue_repository().mark_session_recoverable(
+            session_id,
+            reason
+        )
+
+    def pause_analysis_session(self, session_id, reason="Paused"):
+
+        return self._analysis_queue_repository().pause_session(
+            session_id,
+            reason=reason
+        )
+
+    def increment_analysis_session_resume_count(self, session_id):
+
+        return self._analysis_queue_repository().increment_resume_count(
+            session_id
+        )
+
     def update_analysis_session(self, session_id, **fields):
 
         return self._analysis_queue_repository().update_session(
@@ -10988,6 +11058,44 @@ class DatabaseManager:
 
             logger.info(
                 "Added analysis_queue column %s",
+                name
+            )
+
+    ############################################################
+
+    def _ensure_analysis_session_columns(self, cur):
+
+        cur.execute("PRAGMA table_info(analysis_sessions)")
+
+        columns = {
+            row[1]
+            for row in cur.fetchall()
+        }
+
+        additions = {
+            "worker_id": "TEXT",
+            "worker_process_id": "INTEGER",
+            "worker_thread_id": "TEXT",
+            "worker_status": "TEXT",
+            "worker_started_at": "TEXT",
+            "worker_heartbeat_at": "TEXT",
+            "worker_stopped_at": "TEXT",
+            "worker_stop_reason": "TEXT",
+            "last_progress_at": "TEXT",
+            "resume_count": "INTEGER DEFAULT 0"
+        }
+
+        for name, definition in additions.items():
+
+            if name in columns:
+                continue
+
+            cur.execute(
+                f"ALTER TABLE analysis_sessions ADD COLUMN {name} {definition}"
+            )
+
+            logger.info(
+                "Added analysis_sessions column %s",
                 name
             )
 

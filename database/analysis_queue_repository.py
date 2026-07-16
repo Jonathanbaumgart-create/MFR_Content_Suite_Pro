@@ -346,6 +346,119 @@ class AnalysisQueueRepository:
 
     ############################################################
 
+    def mark_worker_started(
+        self,
+        session_id,
+        worker_id,
+        process_id=None,
+        thread_id=None,
+        status="Active"
+    ):
+
+        now = TimeService.utc_now_iso()
+        self.update_session(
+            session_id,
+            status=AnalysisSessionStatus.RUNNING,
+            worker_id=worker_id,
+            worker_process_id=process_id,
+            worker_thread_id=thread_id,
+            worker_status=status,
+            worker_started_at=now,
+            worker_heartbeat_at=now,
+            worker_stopped_at="",
+            worker_stop_reason="",
+            last_progress_at=now,
+            cancel_reason=""
+        )
+
+    ############################################################
+
+    def heartbeat_session(self, session_id, worker_status="Active"):
+
+        now = TimeService.utc_now_iso()
+        self.update_session(
+            session_id,
+            worker_status=worker_status,
+            worker_heartbeat_at=now,
+            last_progress_at=now
+        )
+
+    ############################################################
+
+    def mark_worker_stopped(
+        self,
+        session_id,
+        worker_status,
+        reason=""
+    ):
+
+        now = TimeService.utc_now_iso()
+        self.update_session(
+            session_id,
+            worker_status=worker_status,
+            worker_stopped_at=now,
+            worker_stop_reason=reason,
+            last_progress_at=now
+        )
+
+    ############################################################
+
+    def mark_session_recoverable(self, session_id, reason):
+
+        now = TimeService.utc_now_iso()
+        self.update_session(
+            session_id,
+            status=AnalysisSessionStatus.RECOVERABLE,
+            worker_status="Recoverable",
+            worker_stopped_at=now,
+            worker_stop_reason=reason,
+            last_progress_at=now,
+            current_filename="",
+            current_media_id=None,
+            estimated_remaining_seconds=0
+        )
+        self.refresh_session_counts(session_id)
+
+    ############################################################
+
+    def pause_session(self, session_id, reason="Paused"):
+
+        now = TimeService.utc_now_iso()
+        self.update_session(
+            session_id,
+            status=AnalysisSessionStatus.PAUSED,
+            worker_status="Paused",
+            worker_stopped_at=now,
+            worker_stop_reason=reason,
+            last_progress_at=now,
+            current_filename="",
+            current_media_id=None,
+            estimated_remaining_seconds=0,
+            cancel_reason=reason
+        )
+        self.refresh_session_counts(session_id)
+
+    ############################################################
+
+    def increment_resume_count(self, session_id):
+
+        conn = self.database.connection()
+        cur = conn.cursor()
+        cur.execute("""
+        UPDATE analysis_sessions
+        SET resume_count=COALESCE(resume_count, 0) + 1,
+            updated_at=?
+        WHERE session_id=?
+        """,
+        (
+            TimeService.utc_now_iso(),
+            int(session_id)
+        ))
+        conn.commit()
+        conn.close()
+
+    ############################################################
+
     def update_session(self, session_id, **fields):
 
         if not fields:
@@ -465,13 +578,15 @@ class AnalysisQueueRepository:
         cur.execute("""
         SELECT *
         FROM analysis_sessions
-        WHERE status IN (?, ?, ?)
+        WHERE status IN (?, ?, ?, ?, ?)
         ORDER BY session_id DESC
         """,
         (
             AnalysisSessionStatus.QUEUED,
             AnalysisSessionStatus.RUNNING,
-            AnalysisSessionStatus.PAUSED
+            AnalysisSessionStatus.PAUSED,
+            AnalysisSessionStatus.RECOVERABLE,
+            AnalysisSessionStatus.INTERRUPTED
         ))
         rows = [
             dict(row)
@@ -534,7 +649,8 @@ class AnalysisQueueRepository:
                ai_analysis.review_status,
                media_intelligence.media_id AS intelligence_media_id,
                media_corrections.id AS correction_id,
-               latest_queue.state AS queue_state
+               latest_queue.state AS queue_state,
+               latest_queue.session_status AS queue_session_status
         FROM media
         LEFT JOIN ai_analysis
         ON ai_analysis.media_id=media.id
@@ -544,8 +660,10 @@ class AnalysisQueueRepository:
         ON media_corrections.media_id=media.id
         AND media_corrections.active=1
         LEFT JOIN (
-            SELECT q1.media_id, q1.state
+            SELECT q1.media_id, q1.state, s.status AS session_status
             FROM analysis_queue q1
+            LEFT JOIN analysis_sessions s
+            ON s.session_id=q1.session_id
             INNER JOIN (
                 SELECT media_id, MAX(queue_id) AS queue_id
                 FROM analysis_queue
@@ -594,6 +712,16 @@ class AnalysisQueueRepository:
     def _status_from_row(self, row):
 
         queue_state = row.get("queue_state") or ""
+        session_status = row.get("queue_session_status") or ""
+
+        if (
+            session_status in (
+                AnalysisSessionStatus.RECOVERABLE,
+                AnalysisSessionStatus.INTERRUPTED
+            )
+            and queue_state in AnalysisQueueState.ACTIVE
+        ):
+            return "Interrupted"
 
         if queue_state in (
             AnalysisQueueState.QUEUED,

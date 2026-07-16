@@ -32,6 +32,8 @@ class AnalysisSessionStatus:
     QUEUED = "Queued"
     RUNNING = "Running"
     PAUSED = "Paused"
+    RECOVERABLE = "Recoverable"
+    INTERRUPTED = "Interrupted"
     COMPLETED = "Completed"
     CANCELED = "Canceled"
     FAILED = "Failed"

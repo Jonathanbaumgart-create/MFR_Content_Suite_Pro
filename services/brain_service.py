@@ -1,5 +1,7 @@
+import os
 import threading
 import time
+import uuid
 
 from concurrent.futures import Future
 
@@ -50,10 +52,12 @@ class BulkAnalysisHandle:
 class BrainService:
 
     _active_jobs = {}
+    _active_session_futures = {}
     _active_jobs_lock = threading.Lock()
     _bulk_cancel = threading.Event()
     _active_session_id = None
     BULK_BATCH_SIZE = 200
+    SESSION_HEARTBEAT_STALE_SECONDS = 1800
 
     def __init__(
         self,
@@ -387,8 +391,7 @@ class BrainService:
             force=force
         )
 
-        future = self.jobs.submit(
-            self._run_persistent_analysis_session,
+        future = self._submit_persistent_session(
             session_id,
             progress_callback
         )
@@ -446,6 +449,7 @@ class BrainService:
             force,
             progress_callback
         )
+        self._track_session_future(session_id, future)
 
         self._report_progress(
             progress_callback,
@@ -481,6 +485,7 @@ class BrainService:
             force,
             progress_callback
         )
+        self._track_session_future(session_id, future)
 
         self._report_progress(
             progress_callback,
@@ -524,6 +529,129 @@ class BrainService:
         )
 
         return session_id
+
+    ############################################################
+
+    def _submit_persistent_session(
+        self,
+        session_id,
+        progress_callback=None,
+        max_items=None
+    ):
+
+        with self._active_jobs_lock:
+            active = self.__class__._active_session_futures.get(session_id)
+
+            if active and not self._future_done(active):
+                logger.info(
+                    "Persistent analysis session already has active worker session_id=%s",
+                    session_id
+                )
+                return active
+
+        future = self.jobs.submit(
+            self._run_persistent_analysis_session,
+            session_id,
+            progress_callback,
+            max_items=max_items
+        )
+
+        self._track_session_future(session_id, future)
+
+        return future
+
+    ############################################################
+
+    def _track_session_future(self, session_id, future):
+
+        with self._active_jobs_lock:
+            self.__class__._active_session_futures[session_id] = future
+            self.__class__._active_session_id = session_id
+
+        def cleanup(_future):
+            with self._active_jobs_lock:
+                current = self.__class__._active_session_futures.get(
+                    session_id
+                )
+                if current is _future:
+                    self.__class__._active_session_futures.pop(
+                        session_id,
+                        None
+                    )
+
+        if hasattr(future, "add_done_callback"):
+            future.add_done_callback(cleanup)
+
+    ############################################################
+
+    def _session_has_active_worker(self, session_id):
+
+        with self._active_jobs_lock:
+            future = self.__class__._active_session_futures.get(session_id)
+
+        return bool(future and not self._future_done(future))
+
+    ############################################################
+
+    def _future_done(self, future):
+
+        done = getattr(future, "done", None)
+
+        if callable(done):
+            return bool(done())
+
+        return True
+
+    ############################################################
+
+    def _db_optional(self, method_name, *args, **kwargs):
+
+        method = getattr(self.db, method_name, None)
+
+        if not method:
+            return None
+
+        return method(*args, **kwargs)
+
+    ############################################################
+
+    def recover_interrupted_sessions(self):
+
+        recovered = []
+
+        for session in self.db.incomplete_analysis_sessions():
+            session_id = session.get("session_id")
+            status = session.get("status", "")
+
+            if self._session_has_active_worker(session_id):
+                continue
+
+            if status in (
+                AnalysisSessionStatus.RUNNING,
+                AnalysisSessionStatus.QUEUED
+            ):
+                reset_count = self.db.reset_stale_analysis_items(session_id)
+                self._db_optional(
+                    "mark_analysis_session_recoverable",
+                    session_id,
+                    "No live analysis worker owns this session"
+                )
+                recovered.append(
+                    {
+                        "session_id": session_id,
+                        "previous_status": status,
+                        "reset_items": reset_count
+                    }
+                )
+
+        if recovered:
+            logger.warning(
+                "Recovered orphaned analysis sessions count=%s details=%s",
+                len(recovered),
+                recovered
+            )
+
+        return recovered
 
     ############################################################
 
@@ -603,11 +731,27 @@ class BrainService:
 
     ############################################################
 
-    def _run_persistent_analysis_session(self, session_id, progress_callback):
+    def _run_persistent_analysis_session(
+        self,
+        session_id,
+        progress_callback,
+        max_items=None
+    ):
 
         started = time.perf_counter()
+        worker_id = (
+            f"{os.getpid()}:{threading.get_ident()}:{uuid.uuid4().hex[:8]}"
+        )
         self.__class__._active_session_id = session_id
         self.db.reset_stale_analysis_items(session_id)
+        self._db_optional(
+            "mark_analysis_worker_started",
+            session_id,
+            worker_id,
+            process_id=os.getpid(),
+            thread_id=str(threading.get_ident()),
+            status="Active"
+        )
         self.db.update_analysis_session(
             session_id,
             status=AnalysisSessionStatus.RUNNING,
@@ -618,11 +762,18 @@ class BrainService:
         )
 
         processed = 0
+        stop_status = "Completed"
+        stop_reason = ""
 
         try:
             while not self._bulk_cancel.is_set():
 
                 self.jobs.wait_if_paused()
+                self._db_optional(
+                    "heartbeat_analysis_session",
+                    session_id,
+                    "Active"
+                )
                 batch = self.db.next_analysis_queue_batch(
                     session_id,
                     self._batch_size()
@@ -636,6 +787,9 @@ class BrainService:
                     if self._bulk_cancel.is_set():
                         break
 
+                    if max_items is not None and processed >= max_items:
+                        break
+
                     self.jobs.wait_if_paused()
                     processed += 1
                     self._run_queue_item(session_id, item)
@@ -646,19 +800,35 @@ class BrainService:
                             progress_callback
                         )
 
+                    if max_items is not None and processed >= max_items:
+                        break
+
                 self._report_persistent_progress(
                     session_id,
                     progress_callback
                 )
+
+                if max_items is not None and processed >= max_items:
+                    break
 
                 pause = self._pause_between_batches()
                 if pause:
                     time.sleep(pause)
 
             if self._bulk_cancel.is_set():
+                stop_status = "Canceled"
+                stop_reason = "Canceled by user"
                 self.db.cancel_analysis_session(
                     session_id,
                     "Canceled by user"
+                )
+            elif max_items is not None and processed >= max_items:
+                stop_status = "Paused"
+                stop_reason = "Paused after controlled recovery validation"
+                self._db_optional(
+                    "pause_analysis_session",
+                    session_id,
+                    stop_reason
                 )
             else:
                 self._finish_session(session_id, started)
@@ -672,7 +842,41 @@ class BrainService:
                 self.db.analysis_session_summary(session_id)
             )
 
+        except Exception as error:
+            stop_status = "Failed"
+            stop_reason = str(error)
+            self.db.reset_stale_analysis_items(session_id)
+            self._db_optional(
+                "mark_analysis_session_recoverable",
+                session_id,
+                f"Worker exception: {type(error).__name__}"
+            )
+            logger.error(
+                "Persistent analysis worker failed session_id=%s",
+                session_id,
+                exc_info=(
+                    type(error),
+                    error,
+                    error.__traceback__
+                )
+            )
+            raise
+
         finally:
+            try:
+                self._db_optional(
+                    "mark_analysis_worker_stopped",
+                    session_id,
+                    stop_status,
+                    reason=stop_reason
+                )
+            except Exception:
+                logger.error(
+                    "Could not mark analysis worker stopped session_id=%s",
+                    session_id,
+                    exc_info=True
+                )
+
             if self._active_session_id == session_id:
                 self.__class__._active_session_id = None
 
@@ -692,6 +896,11 @@ class BrainService:
             session_id,
             current_media_id=media_id,
             current_filename=filename
+        )
+        self._db_optional(
+            "heartbeat_analysis_session",
+            session_id,
+            "Waiting for Provider"
         )
 
         try:
@@ -715,6 +924,11 @@ class BrainService:
                 self._analyze_video_and_save(media_id, path)
             else:
                 self._analyze_and_save(media_id, path)
+            self._db_optional(
+                "heartbeat_analysis_session",
+                session_id,
+                "Active"
+            )
             self.db.mark_analysis_queue_completed(
                 queue_id,
                 duration=time.perf_counter() - started
@@ -742,6 +956,11 @@ class BrainService:
             )
 
         finally:
+            self._db_optional(
+                "heartbeat_analysis_session",
+                session_id,
+                "Active"
+            )
             self.db.refresh_analysis_session_counts(session_id)
 
     ############################################################
@@ -843,6 +1062,10 @@ class BrainService:
             return {
                 "analysis_session": "None",
                 "analysis_status": "Idle",
+                "analysis_worker_status": "Idle",
+                "analysis_worker_active": "No",
+                "analysis_heartbeat_age": "",
+                "analysis_last_attempted": "",
                 "analysis_total": 0,
                 "analysis_completed": 0,
                 "analysis_failed": 0,
@@ -859,23 +1082,66 @@ class BrainService:
         skipped = session.get("skipped_count", 0)
         processed = completed + failed + skipped
         remaining = max(0, total - processed)
+        session_id = session.get("session_id", "")
+        status = session.get("status", "")
+        active_worker = (
+            self._session_has_active_worker(session_id)
+            if session_id
+            else False
+        )
+        heartbeat = session.get("worker_heartbeat_at", "")
+        heartbeat_age = ""
+
+        if heartbeat:
+            heartbeat_age = self._format_seconds(
+                TimeService.elapsed_seconds_since_utc(heartbeat)
+            )
+
+        worker_status = session.get("worker_status") or "Idle"
+        stale_running = (
+            status == AnalysisSessionStatus.RUNNING
+            and not active_worker
+        )
+
+        if stale_running:
+            worker_status = "Stale"
+
+        if status in (
+            AnalysisSessionStatus.RECOVERABLE,
+            AnalysisSessionStatus.INTERRUPTED
+        ):
+            worker_status = status
+
+        analysis_current = session.get("current_filename", "")
+
+        if not active_worker and status in (
+            AnalysisSessionStatus.RUNNING,
+            AnalysisSessionStatus.RECOVERABLE,
+            AnalysisSessionStatus.INTERRUPTED,
+            AnalysisSessionStatus.PAUSED
+        ):
+            analysis_current = ""
 
         return {
-            "analysis_session": session.get("session_id", ""),
-            "analysis_status": session.get("status", ""),
+            "analysis_session": session_id,
+            "analysis_status": status,
+            "analysis_worker_status": worker_status,
+            "analysis_worker_active": "Yes" if active_worker else "No",
+            "analysis_heartbeat_age": heartbeat_age,
+            "analysis_last_attempted": session.get("current_filename", ""),
             "analysis_total": total,
             "analysis_processed": processed,
             "analysis_completed": completed,
             "analysis_failed": failed,
             "analysis_skipped": skipped,
             "analysis_remaining": remaining,
-            "analysis_current": session.get("current_filename", ""),
+            "analysis_current": analysis_current,
             "analysis_provider": session.get("provider", ""),
             "analysis_model": session.get("model", ""),
             "analysis_speed": f"{session.get('throughput_per_hour', 0):.1f}/hr",
             "analysis_eta": self._format_seconds(
                 session.get("estimated_remaining_seconds", 0)
-            )
+            ) if active_worker else ""
         }
 
     ############################################################
@@ -987,7 +1253,12 @@ class BrainService:
 
     ############################################################
 
-    def resume_previous_analysis(self, session_id=None, progress_callback=None):
+    def resume_previous_analysis(
+        self,
+        session_id=None,
+        progress_callback=None,
+        max_items=None
+    ):
 
         session = (
             self.db.analysis_session_summary(session_id)
@@ -1005,10 +1276,14 @@ class BrainService:
 
         self._bulk_cancel.clear()
         self.db.reset_stale_analysis_items(session["session_id"])
-        future = self.jobs.submit(
-            self._run_persistent_analysis_session,
+        self._db_optional(
+            "increment_analysis_session_resume_count",
+            session["session_id"]
+        )
+        future = self._submit_persistent_session(
             session["session_id"],
-            progress_callback
+            progress_callback,
+            max_items=max_items
         )
 
         return BulkAnalysisHandle(
@@ -1035,8 +1310,7 @@ class BrainService:
             return BulkAnalysisHandle(future, retry_count)
 
         self._bulk_cancel.clear()
-        future = self.jobs.submit(
-            self._run_persistent_analysis_session,
+        future = self._submit_persistent_session(
             session_id,
             progress_callback
         )
@@ -1246,8 +1520,7 @@ class BrainService:
             self.vision.model_name(),
             force=force
         )
-        future = self.jobs.submit(
-            self._run_persistent_analysis_session,
+        future = self._submit_persistent_session(
             session_id,
             progress_callback
         )

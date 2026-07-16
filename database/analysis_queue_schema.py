@@ -24,7 +24,17 @@ def create_analysis_queue_tables(cur):
         average_seconds_per_item REAL DEFAULT 0,
         throughput_per_hour REAL DEFAULT 0,
         estimated_remaining_seconds REAL DEFAULT 0,
-        cancel_reason TEXT
+        cancel_reason TEXT,
+        worker_id TEXT,
+        worker_process_id INTEGER,
+        worker_thread_id TEXT,
+        worker_status TEXT,
+        worker_started_at TEXT,
+        worker_heartbeat_at TEXT,
+        worker_stopped_at TEXT,
+        worker_stop_reason TEXT,
+        last_progress_at TEXT,
+        resume_count INTEGER DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS analysis_queue(
@@ -62,6 +72,7 @@ def analysis_queue_indexes():
         "CREATE INDEX IF NOT EXISTS idx_analysis_sessions_status ON analysis_sessions(status)",
         "CREATE INDEX IF NOT EXISTS idx_analysis_sessions_created ON analysis_sessions(created_at)",
         "CREATE INDEX IF NOT EXISTS idx_analysis_sessions_provider ON analysis_sessions(provider)",
+        "CREATE INDEX IF NOT EXISTS idx_analysis_sessions_worker_heartbeat ON analysis_sessions(worker_heartbeat_at)",
         "CREATE INDEX IF NOT EXISTS idx_analysis_queue_session ON analysis_queue(session_id)",
         "CREATE INDEX IF NOT EXISTS idx_analysis_queue_media ON analysis_queue(media_id)",
         "CREATE INDEX IF NOT EXISTS idx_analysis_queue_state ON analysis_queue(state)",
