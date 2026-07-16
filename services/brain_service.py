@@ -20,6 +20,7 @@ from services.time_service import TimeService
 from services.vision_service import VisionProviderError, VisionService
 from services.human_feedback_service import HumanFeedbackService
 from services.video_metadata_service import VideoMetadataService
+from services.video_intelligence_service import VideoIntelligenceService
 from services.media_priority_service import MediaPriorityService
 from services.filesystem_intelligence_service import FilesystemIntelligenceService
 
@@ -73,6 +74,7 @@ class BrainService:
         self.jobs = job_manager or context.job_manager
         self.ai = ai_service or AIService()
         self.vision = vision_service or VisionService()
+        self.config = config or AI_CONFIG
         self.intelligence = (
             intelligence_service or
             MediaIntelligenceService(self.db)
@@ -83,8 +85,15 @@ class BrainService:
         self.video = VideoMetadataService()
         self.priority = MediaPriorityService(database=self.db)
         self.filesystem = FilesystemIntelligenceService(database=self.db)
+        self.video_intelligence = VideoIntelligenceService(
+            database=self.db,
+            ai_service=self.ai,
+            vision_service=self.vision,
+            metadata_service=self.video,
+            filesystem_service=self.filesystem,
+            config=self.config
+        )
         self.quality = AnalysisQualityService()
-        self.config = config or AI_CONFIG
 
     ############################################################
 
@@ -1446,40 +1455,18 @@ class BrainService:
             media_id,
             saved
         )
-        self.db.save_video_intelligence(
+        self.video_intelligence.generate_and_save(
             media_id,
-            {
-                "duration_seconds": metadata.get("duration", 0),
-                "analyzed_frame_count": len(
-                    (analysis.get("preprocessing_metadata") or {}).get(
-                        "keyframe_timestamps",
-                        []
-                    )
-                ),
-                "frame_timestamps": (
-                    (analysis.get("preprocessing_metadata") or {}).get(
-                        "keyframe_timestamps",
-                        []
-                    )
-                ),
-                "people_observed": [],
-                "apparatus_observed": [],
-                "equipment_observed": [],
-                "activities_observed": [],
-                "settings_observed": [],
-                "visible_text": [],
-                "uncertain_observations": analysis.get(
-                    "uncertain_observations",
-                    []
-                ),
-                "likely_content_category": "requires_review",
-                "confidence": analysis.get("confidence", 0),
-                "review_state": analysis.get("review_status", ""),
-                "provider": analysis.get("provider", ""),
-                "model": analysis.get("model", ""),
-                "analysis_version": analysis.get("analysis_version", ""),
-                "raw_frame_outputs": []
-            }
+            video_path,
+            metadata=metadata,
+            effective_intelligence=(
+                self.db.get_media_intelligence(media_id)
+                if hasattr(self.db, "get_media_intelligence")
+                else {}
+            ),
+            analyze_frames=bool(
+                self.config.get("video_frame_analysis_enabled", True)
+            )
         )
 
         return saved

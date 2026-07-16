@@ -227,6 +227,9 @@ class CommunicationsOfficerService:
             ),
             "communications_memory_status": memory_status,
             "recommended_media_package": top_story.get("media_package", {}),
+            "recommended_videos": self._recommended_videos(
+                top_story.get("media_package", {})
+            ),
             "estimated_audience": top_story.get("estimated_audience", []),
             "confidence": top_story.get("confidence", 0),
             "why_today_matters": top_story.get("why_today_matters", ""),
@@ -248,7 +251,8 @@ class CommunicationsOfficerService:
                 "Communications Memory",
                 "Media Priority",
                 "Human Review trust states",
-                "Reviewed Media Intelligence"
+                "Reviewed Media Intelligence",
+                "Video Intelligence"
             ],
             "confidence_limitations": self._brief_limitations(
                 opportunities,
@@ -684,6 +688,79 @@ class CommunicationsOfficerService:
                 0
             )
         }
+
+    ############################################################
+
+    def _recommended_videos(self, media_package):
+
+        media_package = media_package or {}
+        videos = []
+
+        for key in ("best_video", "primary_video"):
+            video = media_package.get(key) or {}
+
+            if video and video not in videos:
+                videos.append(video)
+
+        for key in ("supporting_videos", "gallery_videos"):
+            for video in media_package.get(key) or []:
+                if video and video not in videos:
+                    videos.append(video)
+
+        if not videos:
+            videos = self._top_reviewed_reel_videos()
+
+        return [
+            {
+                "media_id": video.get("media_id"),
+                "filename": video.get("filename", ""),
+                "reel_potential": video.get("reel_potential", 0),
+                "why_selected": video.get("why_selected", ""),
+                "clip_recommendations": video.get("clip_recommendations", []),
+                "cover_recommendation": video.get("cover_recommendation", {})
+            }
+            for video in videos[:4]
+        ]
+
+    ############################################################
+
+    def _top_reviewed_reel_videos(self, limit=4):
+
+        try:
+            rows = self.db.get_media_page(
+                limit * 4,
+                0,
+                filter_key="highest_reel_potential"
+            )
+            ids = [
+                row[0]
+                for row in rows
+                if row and row[0]
+            ]
+            assets = self.db.media_package_asset_rows(
+                ids,
+                limit=len(ids)
+            )
+        except Exception:
+            return []
+
+        reviewed = []
+        for asset in assets:
+            if (
+                asset.get("media_type") == "video"
+                and asset.get("reel_potential", 0)
+                and (
+                    asset.get("trust_state") in ("approved_real", "corrected_real")
+                    or asset.get("review_status") in ("approved", "corrected")
+                )
+            ):
+                reviewed.append(asset)
+
+        reviewed.sort(
+            key=lambda item: item.get("reel_potential", 0),
+            reverse=True
+        )
+        return reviewed[:limit]
 
     ############################################################
 

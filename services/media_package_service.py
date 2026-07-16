@@ -353,6 +353,22 @@ class MediaPackageService:
                     limit=self.ASSET_LIMIT
                 )
             )
+            found_ids = {
+                self._to_int(asset.get("media_id"))
+                for asset in assets
+            }
+            missing_ids = [
+                media_id
+                for media_id in ids
+                if media_id and media_id not in found_ids
+            ]
+            if missing_ids:
+                assets.extend(
+                    self.db.media_package_asset_rows(
+                        missing_ids,
+                        limit=len(missing_ids)
+                    )
+                )
 
         if len(assets) < 6:
             assets.extend(
@@ -463,7 +479,13 @@ class MediaPackageService:
                     "width",
                     "height",
                     "duration_seconds",
-                    "sha256"
+                    "sha256",
+                    "reel_potential",
+                    "story_potential",
+                    "clip_recommendations",
+                    "cover_recommendation",
+                    "video_story_category",
+                    "video_communications_themes"
                 )
             })
             enriched.append(merged)
@@ -552,6 +574,14 @@ class MediaPackageService:
             duplicate_risk * 0.04,
             1
         )
+        reel_potential = self._to_int(asset.get("reel_potential"))
+
+        if asset.get("media_type") == "video" and reel_potential:
+            media_score = round(
+                media_score * 0.78 + reel_potential * 0.22,
+                1
+            )
+
         media_score = max(0, min(100, media_score))
         factors = [
             f"story relevance {topic_score}",
@@ -561,6 +591,9 @@ class MediaPackageService:
             f"recent-use risk {recent_risk}",
             f"duplicate-scene risk {duplicate_risk}"
         ]
+
+        if reel_potential:
+            factors.append(f"Reel potential {reel_potential}")
         limitations = []
 
         if filesystem.get("filesystem_confidence", 0):
@@ -593,6 +626,7 @@ class MediaPackageService:
             "media_score": media_score,
             "recent_use_risk": recent_risk,
             "duplicate_scene_risk": duplicate_risk,
+            "reel_potential": reel_potential,
             "matched_terms": matches[:8],
             "selection_factors": factors,
             "confidence_limitations": limitations
@@ -752,6 +786,10 @@ class MediaPackageService:
             platform_fit_score=self._to_float(asset.get("platform_fit_score")),
             recent_use_risk=self._to_float(asset.get("recent_use_risk")),
             duplicate_scene_risk=self._to_float(asset.get("duplicate_scene_risk")),
+            reel_potential=self._to_float(asset.get("reel_potential")),
+            story_potential=self._to_float(asset.get("story_potential")),
+            clip_recommendations=list(asset.get("clip_recommendations") or []),
+            cover_recommendation=dict(asset.get("cover_recommendation") or {}),
             selected_as=selected_as,
             why_selected=self._why_selected(asset, selected_as),
             why_not_primary=self._why_not_primary(asset, selected_as),
@@ -896,7 +934,9 @@ class MediaPackageService:
             "description",
             "effective_description",
             "suggested_platform",
-            "suggested_time_of_year"
+            "suggested_time_of_year",
+            "video_story_category",
+            "reel_explanation"
         ):
             values.extend(self._split(asset.get(key)))
 
@@ -914,6 +954,9 @@ class MediaPackageService:
         ):
             for value in asset.get(key) or []:
                 values.extend(self._split(value))
+
+        for value in asset.get("video_communications_themes") or []:
+            values.extend(self._split(value))
 
         for key in (
             "root_category",
@@ -969,6 +1012,11 @@ class MediaPackageService:
         orientation = asset.get("orientation") or self._orientation(asset)
 
         if media_type == "video":
+            reel = self._to_int(asset.get("reel_potential"))
+
+            if reel and any(platform in ("Instagram", "Facebook") for platform in platforms):
+                return max(82, min(100, reel))
+
             if any(platform in ("Instagram", "Facebook") for platform in platforms):
                 return 82
             return 68

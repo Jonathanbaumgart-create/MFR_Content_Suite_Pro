@@ -20,7 +20,7 @@ class GalleryPage(ctk.CTkFrame):
         super().__init__(parent)
 
         self.service = GalleryService()
-        self.brain = BrainService()
+        self.brain = None
 
         self.media = []
 
@@ -41,6 +41,13 @@ class GalleryPage(ctk.CTkFrame):
             "All Media": "all",
             "Photos": "photos",
             "Videos": "videos",
+            "Highest Reel Potential": "highest_reel_potential",
+            "Training Videos": "training_videos",
+            "Incident Videos": "incident_videos",
+            "Community Videos": "community_videos",
+            "Recruitment Videos": "recruitment_videos",
+            "Reviewed Videos": "reviewed_videos",
+            "Unreviewed Videos": "unreviewed_videos",
             "Filesystem: Training": "filesystem_training",
             "Filesystem: Incidents": "filesystem_incidents",
             "Filesystem: Apparatus": "filesystem_apparatus",
@@ -83,6 +90,15 @@ class GalleryPage(ctk.CTkFrame):
         }
 
         self.build_page()
+
+    ########################################################
+
+    def brain_service(self):
+
+        if self.brain is None:
+            self.brain = BrainService()
+
+        return self.brain
 
     ########################################################
 
@@ -631,7 +647,8 @@ class GalleryPage(ctk.CTkFrame):
         ):
             return
 
-        warning = self.brain.provider_bulk_warning()
+        brain = self.brain_service()
+        warning = brain.provider_bulk_warning()
 
         if warning:
             if not messagebox.askyesno(
@@ -640,7 +657,7 @@ class GalleryPage(ctk.CTkFrame):
             ):
                 return
 
-        handle = self.brain.analyze_selected(
+        handle = brain.analyze_selected(
             queueable,
             force=force,
             progress_callback=self.analysis_progress
@@ -654,8 +671,9 @@ class GalleryPage(ctk.CTkFrame):
 
     def analysis_preview_text(self, preview):
 
-        provider = self.brain.vision.provider_key()
-        model = self.brain.vision.model_name()
+        brain = self.brain_service()
+        provider = brain.vision.provider_key()
+        model = brain.vision.model_name()
 
         return "\n".join(
             [

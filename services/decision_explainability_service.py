@@ -629,6 +629,12 @@ class DecisionExplainabilityService:
                 "primary_activity": asset.get("primary_activity", ""),
                 "recommended_uses": self._list(asset.get("recommended_uses"))[:5],
                 "content_tags": self._list(asset.get("content_tags"))[:5],
+                "reel_potential": self._score(asset.get("reel_potential")),
+                "story_potential": self._score(asset.get("story_potential")),
+                "clip_recommendations": self._list(
+                    asset.get("clip_recommendations")
+                )[:3],
+                "cover_recommendation": asset.get("cover_recommendation") or {},
                 "filesystem_context": self._filesystem_context(asset)
             })
 

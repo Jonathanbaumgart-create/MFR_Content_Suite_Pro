@@ -754,12 +754,36 @@ class PhotoViewer(ctk.CTkToplevel):
         if video:
             lines.extend(
                 [
+                    "Summary: " + video.get("video_summary", ""),
+                    f"Story Category: {video.get('story_category', '') or video.get('likely_content_category', '')}",
+                    f"Primary Activity: {video.get('primary_activity', '')}",
+                    f"Reel Potential: {video.get('reel_potential', 0)}",
+                    f"Story Potential: {video.get('story_potential', 0)}",
                     f"Analyzed Frames: {video.get('analyzed_frame_count', 0)}",
                     "Frame Timestamps: " + self.format_list(
                         video.get("frame_timestamps")
                     ),
+                    "Clip Windows: " + self.format_clip_windows(
+                        video.get("clip_recommendations")
+                    ),
+                    "Cover Frame: " + self.format_cover_frame(
+                        video.get("cover_recommendation")
+                    ),
+                    "Themes: " + self.format_list(
+                        video.get("communications_themes")
+                    ),
+                    "Apparatus: " + self.format_list(
+                        video.get("apparatus_observed")
+                    ),
+                    "PPE: " + self.format_list(
+                        video.get("identified_ppe")
+                    ),
+                    "Tools: " + self.format_list(
+                        video.get("equipment_observed")
+                    ),
                     f"Likely Category: {video.get('likely_content_category', '')}",
                     f"Review State: {video.get('review_state', '')}",
+                    "Explanation: " + video.get("explanation", ""),
                     "Uncertain Observations: " + self.format_list(
                         video.get("uncertain_observations")
                     )
@@ -775,6 +799,33 @@ class PhotoViewer(ctk.CTkToplevel):
         )
 
         return lines
+
+    ##########################################################
+
+    def format_clip_windows(self, clips):
+
+        values = []
+
+        for clip in clips or []:
+            values.append(
+                f"{clip.get('start', '')}-{clip.get('end', '')}"
+            )
+
+        return self.format_list(values)
+
+    ##########################################################
+
+    def format_cover_frame(self, cover):
+
+        cover = cover or {}
+
+        if not cover:
+            return ""
+
+        return (
+            f"{cover.get('timecode', '')} - "
+            f"{cover.get('reason', '')}"
+        )
 
     ##########################################################
 

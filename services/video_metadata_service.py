@@ -281,6 +281,8 @@ class VideoMetadataService:
     def video_analysis_from_metadata(self, media_id, path, metadata=None):
 
         metadata = metadata or self.inspect(path)
+        safe_metadata = dict(metadata)
+        safe_metadata.pop("path", None)
         duration = float(metadata.get("duration") or 0)
         orientation = metadata.get("orientation") or "unknown"
         dimensions = self._dimensions_text(metadata)
@@ -325,7 +327,7 @@ class VideoMetadataService:
             "failure_reason": "",
             "raw_response": json.dumps(
                 {
-                    "metadata": metadata,
+                    "metadata": safe_metadata,
                     "keyframe_timestamps": timestamps
                 }
             ),
@@ -347,7 +349,7 @@ class VideoMetadataService:
                 "No full temporal video understanding has been performed."
             ],
             "structured_field_completeness": 0.4,
-            "request_metadata": metadata,
+            "request_metadata": safe_metadata,
             "preprocessing_metadata": {
                 "stage": "video_stage1_metadata",
                 "bounded_keyframes": len(keyframes),

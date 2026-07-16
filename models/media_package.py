@@ -25,6 +25,10 @@ class MediaPackageAsset:
     platform_fit_score: float = 0
     recent_use_risk: float = 0
     duplicate_scene_risk: float = 0
+    reel_potential: float = 0
+    story_potential: float = 0
+    clip_recommendations: list = field(default_factory=list)
+    cover_recommendation: dict = field(default_factory=dict)
     selected_as: str = ""
     why_selected: str = ""
     why_not_primary: str = ""

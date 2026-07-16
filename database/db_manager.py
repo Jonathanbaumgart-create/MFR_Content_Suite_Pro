@@ -245,6 +245,56 @@ class DatabaseManager:
 
             raw_frame_outputs TEXT,
 
+            video_summary TEXT,
+
+            primary_activity TEXT,
+
+            secondary_activity TEXT,
+
+            estimated_scene_count INTEGER DEFAULT 0,
+
+            representative_frames TEXT,
+
+            identified_ppe TEXT,
+
+            training_evolution TEXT,
+
+            incident_category TEXT,
+
+            program TEXT,
+
+            campaign TEXT,
+
+            community_event TEXT,
+
+            estimated_audience TEXT,
+
+            communications_themes TEXT,
+
+            story_potential INTEGER DEFAULT 0,
+
+            education_score INTEGER DEFAULT 0,
+
+            recruitment_score INTEGER DEFAULT 0,
+
+            community_score INTEGER DEFAULT 0,
+
+            operations_score INTEGER DEFAULT 0,
+
+            reel_potential INTEGER DEFAULT 0,
+
+            reel_explanation TEXT,
+
+            clip_recommendations TEXT,
+
+            cover_recommendation TEXT,
+
+            story_category TEXT,
+
+            trust_state TEXT,
+
+            explanation TEXT,
+
             generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 
         )
@@ -1393,6 +1443,7 @@ class DatabaseManager:
         self._ensure_analysis_queue_columns(cur)
         self._ensure_ai_analysis_columns(cur)
         self._ensure_media_intelligence_columns(cur)
+        self._ensure_video_intelligence_columns(cur)
         self._ensure_fire_service_intelligence_columns(cur)
         self._ensure_knowledge_columns(cur)
         self._ensure_communication_columns(cur)
@@ -1934,6 +1985,9 @@ class DatabaseManager:
         LEFT JOIN filesystem_intelligence
         ON filesystem_intelligence.media_id=media.id
 
+        LEFT JOIN video_intelligence
+        ON video_intelligence.media_id=media.id
+
         LEFT JOIN (
             SELECT media_id, MIN(id) AS id
             FROM media_corrections
@@ -2386,6 +2440,88 @@ class DatabaseManager:
 
         elif filter_key == "videos":
             clauses.append("media.media_type='video'")
+
+        elif filter_key == "highest_reel_potential":
+            clauses.append("media.media_type='video'")
+            clauses.append("video_intelligence.reel_potential > 0")
+            order_by = "video_intelligence.reel_potential DESC, media.id DESC"
+
+        elif filter_key == "training_videos":
+            clauses.append("media.media_type='video'")
+            clauses.append(
+                """
+                (
+                    video_intelligence.story_category='Training'
+                    OR video_intelligence.primary_activity LIKE '%training%'
+                    OR filesystem_intelligence.root_category='Training'
+                )
+                """
+            )
+
+        elif filter_key == "incident_videos":
+            clauses.append("media.media_type='video'")
+            clauses.append(
+                """
+                (
+                    video_intelligence.story_category IN ('Incident', 'Operations')
+                    OR video_intelligence.incident_category NOT IN ('', 'unknown')
+                    OR filesystem_intelligence.root_category='Incidents'
+                )
+                """
+            )
+
+        elif filter_key == "community_videos":
+            clauses.append("media.media_type='video'")
+            clauses.append(
+                """
+                (
+                    video_intelligence.story_category='Community'
+                    OR video_intelligence.community_event!=''
+                    OR filesystem_intelligence.root_category='Community'
+                )
+                """
+            )
+
+        elif filter_key == "recruitment_videos":
+            clauses.append("media.media_type='video'")
+            clauses.append(
+                """
+                (
+                    video_intelligence.recruitment_score >= 60
+                    OR video_intelligence.story_category='Recruitment'
+                )
+                """
+            )
+
+        elif filter_key == "reviewed_videos":
+            clauses.append("media.media_type='video'")
+            clauses.append(
+                """
+                (
+                    video_intelligence.review_state IN ('approved', 'corrected')
+                    OR ai_analysis.review_status IN ('approved', 'corrected')
+                )
+                """
+            )
+
+        elif filter_key == "unreviewed_videos":
+            clauses.append("media.media_type='video'")
+            clauses.append(
+                """
+                (
+                    (
+                        video_intelligence.review_state IS NULL
+                        OR video_intelligence.review_state=''
+                        OR video_intelligence.review_state='review_required'
+                    )
+                    AND (
+                        ai_analysis.review_status IS NULL
+                        OR ai_analysis.review_status=''
+                        OR ai_analysis.review_status='review_required'
+                    )
+                )
+                """
+            )
 
         elif filter_key == "filesystem_training":
             clauses.append("filesystem_intelligence.root_category='Training'")
@@ -4636,11 +4772,36 @@ class DatabaseManager:
             model,
             analysis_version,
             raw_frame_outputs,
+            video_summary,
+            primary_activity,
+            secondary_activity,
+            estimated_scene_count,
+            representative_frames,
+            identified_ppe,
+            training_evolution,
+            incident_category,
+            program,
+            campaign,
+            community_event,
+            estimated_audience,
+            communications_themes,
+            story_potential,
+            education_score,
+            recruitment_score,
+            community_score,
+            operations_score,
+            reel_potential,
+            reel_explanation,
+            clip_recommendations,
+            cover_recommendation,
+            story_category,
+            trust_state,
+            explanation,
             generated_at
 
         )
 
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 
         """,
         (
@@ -4662,6 +4823,31 @@ class DatabaseManager:
             intelligence.get("model", ""),
             intelligence.get("analysis_version", ""),
             self._to_json(intelligence.get("raw_frame_outputs")),
+            intelligence.get("video_summary", ""),
+            intelligence.get("primary_activity", ""),
+            intelligence.get("secondary_activity", ""),
+            self._to_int(intelligence.get("estimated_scene_count")),
+            self._to_json(intelligence.get("representative_frames")),
+            self._to_json(intelligence.get("identified_ppe")),
+            intelligence.get("training_evolution", ""),
+            intelligence.get("incident_category", ""),
+            intelligence.get("program", ""),
+            intelligence.get("campaign", ""),
+            intelligence.get("community_event", ""),
+            self._to_json(intelligence.get("estimated_audience")),
+            self._to_json(intelligence.get("communications_themes")),
+            self._to_int(intelligence.get("story_potential")),
+            self._to_int(intelligence.get("education_score")),
+            self._to_int(intelligence.get("recruitment_score")),
+            self._to_int(intelligence.get("community_score")),
+            self._to_int(intelligence.get("operations_score")),
+            self._to_int(intelligence.get("reel_potential")),
+            intelligence.get("reel_explanation", ""),
+            self._to_json(intelligence.get("clip_recommendations")),
+            self._to_json(intelligence.get("cover_recommendation")),
+            intelligence.get("story_category", ""),
+            intelligence.get("trust_state", ""),
+            intelligence.get("explanation", ""),
             TimeService.utc_now_iso()
         ))
         conn.commit()
@@ -4704,6 +4890,31 @@ class DatabaseManager:
             "model": row["model"] or "",
             "analysis_version": row["analysis_version"] or "",
             "raw_frame_outputs": self._from_json(row["raw_frame_outputs"]),
+            "video_summary": row["video_summary"] or "",
+            "primary_activity": row["primary_activity"] or "",
+            "secondary_activity": row["secondary_activity"] or "",
+            "estimated_scene_count": row["estimated_scene_count"] or 0,
+            "representative_frames": self._from_json(row["representative_frames"]),
+            "identified_ppe": self._from_json(row["identified_ppe"]),
+            "training_evolution": row["training_evolution"] or "",
+            "incident_category": row["incident_category"] or "",
+            "program": row["program"] or "",
+            "campaign": row["campaign"] or "",
+            "community_event": row["community_event"] or "",
+            "estimated_audience": self._from_json(row["estimated_audience"]),
+            "communications_themes": self._from_json(row["communications_themes"]),
+            "story_potential": row["story_potential"] or 0,
+            "education_score": row["education_score"] or 0,
+            "recruitment_score": row["recruitment_score"] or 0,
+            "community_score": row["community_score"] or 0,
+            "operations_score": row["operations_score"] or 0,
+            "reel_potential": row["reel_potential"] or 0,
+            "reel_explanation": row["reel_explanation"] or "",
+            "clip_recommendations": self._from_json(row["clip_recommendations"]),
+            "cover_recommendation": self._from_json(row["cover_recommendation"]),
+            "story_category": row["story_category"] or "",
+            "trust_state": row["trust_state"] or "",
+            "explanation": row["explanation"] or "",
             "generated_at": row["generated_at"] or ""
         }
 
@@ -6076,20 +6287,35 @@ class DatabaseManager:
 
         cur.execute(f"""
         SELECT
-            id AS media_id,
-            filename,
-            path,
-            media_type,
-            sha256,
-            first_seen_at,
-            date_added,
-            capture_time,
-            duration_seconds,
-            width,
-            height,
-            orientation
+            media.id AS media_id,
+            media.filename,
+            media.path,
+            media.media_type,
+            media.sha256,
+            media.first_seen_at,
+            media.date_added,
+            media.capture_time,
+            media.duration_seconds,
+            media.width,
+            media.height,
+            media.orientation,
+            ai_analysis.trust_state,
+            ai_analysis.review_status,
+            ai_analysis.failure_reason,
+            ai_analysis.provider,
+            ai_analysis.model,
+            video_intelligence.reel_potential,
+            video_intelligence.story_potential,
+            video_intelligence.clip_recommendations,
+            video_intelligence.cover_recommendation,
+            video_intelligence.story_category,
+            video_intelligence.communications_themes
         FROM media
-        WHERE id IN ({placeholders})
+        LEFT JOIN ai_analysis
+        ON ai_analysis.media_id=media.id
+        LEFT JOIN video_intelligence
+        ON video_intelligence.media_id=media.id
+        WHERE media.id IN ({placeholders})
         """, tuple(ids))
 
         rows = cur.fetchall()
@@ -6109,7 +6335,24 @@ class DatabaseManager:
                 "duration_seconds": row["duration_seconds"] or 0,
                 "width": row["width"] or 0,
                 "height": row["height"] or 0,
-                "orientation": row["orientation"] or ""
+                "orientation": row["orientation"] or "",
+                "trust_state": row["trust_state"] or "",
+                "review_status": row["review_status"] or "",
+                "failure_reason": row["failure_reason"] or "",
+                "provider": row["provider"] or "",
+                "model": row["model"] or "",
+                "reel_potential": row["reel_potential"] or 0,
+                "story_potential": row["story_potential"] or 0,
+                "clip_recommendations": self._from_json(
+                    row["clip_recommendations"]
+                ),
+                "cover_recommendation": self._from_json(
+                    row["cover_recommendation"]
+                ),
+                "video_story_category": row["story_category"] or "",
+                "video_communications_themes": self._from_json(
+                    row["communications_themes"]
+                )
             }
 
         return [
@@ -11162,6 +11405,59 @@ class DatabaseManager:
 
     ############################################################
 
+    def _ensure_video_intelligence_columns(self, cur):
+
+        cur.execute("PRAGMA table_info(video_intelligence)")
+
+        columns = {
+            row[1]
+            for row in cur.fetchall()
+        }
+
+        additions = {
+            "video_summary": "TEXT",
+            "primary_activity": "TEXT",
+            "secondary_activity": "TEXT",
+            "estimated_scene_count": "INTEGER DEFAULT 0",
+            "representative_frames": "TEXT",
+            "identified_ppe": "TEXT",
+            "training_evolution": "TEXT",
+            "incident_category": "TEXT",
+            "program": "TEXT",
+            "campaign": "TEXT",
+            "community_event": "TEXT",
+            "estimated_audience": "TEXT",
+            "communications_themes": "TEXT",
+            "story_potential": "INTEGER DEFAULT 0",
+            "education_score": "INTEGER DEFAULT 0",
+            "recruitment_score": "INTEGER DEFAULT 0",
+            "community_score": "INTEGER DEFAULT 0",
+            "operations_score": "INTEGER DEFAULT 0",
+            "reel_potential": "INTEGER DEFAULT 0",
+            "reel_explanation": "TEXT",
+            "clip_recommendations": "TEXT",
+            "cover_recommendation": "TEXT",
+            "story_category": "TEXT",
+            "trust_state": "TEXT",
+            "explanation": "TEXT"
+        }
+
+        for name, definition in additions.items():
+
+            if name in columns:
+                continue
+
+            cur.execute(
+                f"ALTER TABLE video_intelligence ADD COLUMN {name} {definition}"
+            )
+
+            logger.info(
+                "Added video_intelligence column %s",
+                name
+            )
+
+    ############################################################
+
     def _ensure_media_intelligence_columns(self, cur):
 
         cur.execute("PRAGMA table_info(media_intelligence)")
@@ -11398,6 +11694,8 @@ class DatabaseManager:
             "CREATE INDEX IF NOT EXISTS idx_media_file_modified ON media(file_modified_at)",
             "CREATE INDEX IF NOT EXISTS idx_video_intelligence_media ON video_intelligence(media_id)",
             "CREATE INDEX IF NOT EXISTS idx_video_intelligence_review ON video_intelligence(review_state)",
+            "CREATE INDEX IF NOT EXISTS idx_video_intelligence_reel ON video_intelligence(reel_potential)",
+            "CREATE INDEX IF NOT EXISTS idx_video_intelligence_story ON video_intelligence(story_category)",
             "CREATE INDEX IF NOT EXISTS idx_ai_model ON ai_analysis(model)",
             "CREATE INDEX IF NOT EXISTS idx_ai_provider ON ai_analysis(provider)",
             "CREATE INDEX IF NOT EXISTS idx_ai_last_analyzed ON ai_analysis(last_analyzed)",
