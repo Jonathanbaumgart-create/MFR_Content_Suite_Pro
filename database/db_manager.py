@@ -9,6 +9,11 @@ from database.analysis_queue_schema import (
     analysis_queue_indexes,
     create_analysis_queue_tables
 )
+from database.benchmark_repository import BenchmarkRepository
+from database.benchmark_schema import (
+    benchmark_indexes,
+    create_benchmark_tables
+)
 from database.communication_repository import CommunicationRepository
 from database.communication_schema import (
     communication_indexes,
@@ -29,6 +34,7 @@ class DatabaseManager:
 
         self.db = Path("database") / "mfr_content.db"
         self._analysis_queue_repo = None
+        self._benchmark_repo = None
         self._communication_repo = None
 
         self.initialize()
@@ -1323,6 +1329,7 @@ class DatabaseManager:
 
         create_analysis_queue_tables(cur)
         create_communication_tables(cur)
+        create_benchmark_tables(cur)
 
         ########################################################
         # Content Templates
@@ -10006,6 +10013,74 @@ class DatabaseManager:
 
     ############################################################
 
+    def _benchmark_repository(self):
+
+        if self._benchmark_repo is None:
+            self._benchmark_repo = BenchmarkRepository(self)
+
+        return self._benchmark_repo
+
+    ############################################################
+
+    def save_benchmark_department(self, item):
+
+        return self._benchmark_repository().save_department(item)
+
+    def create_benchmark_import_run(self, item):
+
+        return self._benchmark_repository().create_import_run(item)
+
+    def update_benchmark_import_run(self, import_run_id, item):
+
+        return self._benchmark_repository().update_import_run(
+            import_run_id,
+            item
+        )
+
+    def save_benchmark_record(self, record):
+
+        return self._benchmark_repository().save_record(record)
+
+    def save_benchmark_pattern(self, pattern):
+
+        return self._benchmark_repository().save_pattern(pattern)
+
+    def benchmark_records(self, filters=None, limit=100, offset=0):
+
+        return self._benchmark_repository().records(
+            filters=filters,
+            limit=limit,
+            offset=offset
+        )
+
+    def benchmark_patterns(self, filters=None, limit=50):
+
+        return self._benchmark_repository().patterns(
+            filters=filters,
+            limit=limit
+        )
+
+    def benchmark_insights(self):
+
+        return self._benchmark_repository().insights()
+
+    def review_benchmark_pattern(self, pattern_id, updates):
+
+        return self._benchmark_repository().review_pattern(
+            pattern_id,
+            updates
+        )
+
+    def save_benchmark_experiment(self, item):
+
+        return self._benchmark_repository().save_experiment(item)
+
+    def rollback_benchmark_import_run(self, import_run_id):
+
+        return self._benchmark_repository().rollback_import_run(import_run_id)
+
+    ############################################################
+
     def save_communication_record(self, record):
 
         return self._communication_repository().save_communication_record(record)
@@ -11804,7 +11879,7 @@ class DatabaseManager:
             "CREATE INDEX IF NOT EXISTS idx_comm_edit_learning_created ON communication_edit_learning(created_at)",
             "CREATE INDEX IF NOT EXISTS idx_hashtags_tag ON hashtags(tag)",
             "CREATE INDEX IF NOT EXISTS idx_hashtags_use_count ON hashtags(use_count)",
-        ) + analysis_queue_indexes() + communication_indexes()
+        ) + analysis_queue_indexes() + communication_indexes() + benchmark_indexes()
 
         for statement in indexes:
             cur.execute(statement)

@@ -5,6 +5,7 @@ import time
 from core.app_context import context
 from models.editorial_recommendation import EditorialRecommendation
 from services.logging_service import LoggingService
+from services.benchmark_communications_service import BenchmarkCommunicationsService
 from services.recommendation_candidate_service import RecommendationCandidateService
 from services.recommendation_scoring_service import RecommendationScoringService
 from services.time_service import TimeService
@@ -29,6 +30,7 @@ class EditorialRecommendationService:
             database=self.db
         )
         self.scoring = scoring_service or RecommendationScoringService()
+        self.benchmarks = BenchmarkCommunicationsService(database=self.db)
         self.last_metrics = {}
 
     ############################################################
@@ -184,10 +186,20 @@ class EditorialRecommendationService:
             self.scoring.SCORING_VERSION
         )
 
-        return [
-            recommendation.to_dict()
-            for recommendation in recommendations
-        ]
+        results = []
+        for recommendation in recommendations:
+            item = recommendation.to_dict()
+            item["benchmark_evidence"] = self.benchmarks.advisory_patterns(
+                item,
+                limit=3
+            )
+            if item["benchmark_evidence"]:
+                item.setdefault("source_signals", []).append(
+                    "External benchmark evidence (advisory only)"
+                )
+            results.append(item)
+
+        return results
 
     ############################################################
 

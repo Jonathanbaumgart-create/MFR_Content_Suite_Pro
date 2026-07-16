@@ -1,6 +1,7 @@
 import time
 
 from core.app_context import context
+from services.benchmark_communications_service import BenchmarkCommunicationsService
 from services.decision_explainability_service import DecisionExplainabilityService
 from services.human_feedback_service import HumanFeedbackService
 from services.logging_service import LoggingService
@@ -87,6 +88,7 @@ class CommunicationPackageService:
             database=self.db,
             feedback_service=self.feedback
         )
+        self.benchmarks = BenchmarkCommunicationsService(database=self.db)
         self.last_metrics = {}
 
     ############################################################
@@ -172,6 +174,9 @@ class CommunicationPackageService:
                 recommendation
             ),
             "media_package": media_package,
+            "benchmark_inspiration": self._benchmark_inspiration(
+                recommendation
+            ),
             "platform_media_guidance": media_package.get(
                 "platform_media_guidance",
                 {}
@@ -219,6 +224,30 @@ class CommunicationPackageService:
         )
 
         return package
+
+    ############################################################
+
+    def _benchmark_inspiration(self, recommendation):
+
+        evidence = list(recommendation.get("benchmark_evidence") or [])
+
+        if not evidence:
+            evidence = self.benchmarks.advisory_patterns(
+                recommendation,
+                limit=3
+            )
+
+        return [
+            {
+                "source_department": item.get("source_department", ""),
+                "observed_format": item.get("observed_format", ""),
+                "why_it_may_work": item.get("why_it_may_work", ""),
+                "how_it_was_adapted_for_mfr": item.get("how_to_adapt_for_mfr", ""),
+                "source_limitations": item.get("source_limitations", ""),
+                "internal_only": True
+            }
+            for item in evidence[:3]
+        ]
 
     ############################################################
 

@@ -420,6 +420,15 @@ class ContentGenerationService:
             "communications_intelligence": self._profile_summary(
                 source.get("communications_intelligence", {})
             ),
+            "benchmark_inspiration": [
+                {
+                    "source_department": item.get("source_department", ""),
+                    "observed_format": item.get("observed_format", ""),
+                    "adaptation_note": item.get("how_it_was_adapted_for_mfr", ""),
+                    "internal_only": True
+                }
+                for item in package.get("benchmark_inspiration", [])[:3]
+            ],
             "department_voice_match": {
                 platform: self.communications_intelligence.voice_match(
                     output.get("copy_text", ""),
