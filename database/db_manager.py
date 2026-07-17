@@ -6342,6 +6342,69 @@ class DatabaseManager:
 
     ############################################################
 
+    def operational_activity_candidate_rows(self, since_days=30, limit=300):
+
+        limit = max(1, min(self._to_int(limit) or 300, 1000))
+        since_days = max(1, min(self._to_int(since_days) or 30, 365))
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        added_expr = self._media_added_timestamp_expr()
+        capture_expr = self._media_timestamp_expr("media.capture_time")
+        analyzed_expr = self._media_timestamp_expr("ai_analysis.last_analyzed")
+        window = f"-{since_days} days"
+
+        cur.execute(f"""
+        SELECT
+            media.id AS media_id,
+            media.filename,
+            media.path,
+            media.media_type,
+            media.extension,
+            media.first_seen_at,
+            media.date_added,
+            media.capture_time,
+            media.capture_time_source,
+            media.duration_seconds,
+            media.width,
+            media.height,
+            ai_analysis.provider,
+            ai_analysis.model,
+            ai_analysis.failure_reason,
+            ai_analysis.trust_state,
+            ai_analysis.review_status,
+            ai_analysis.quality_state,
+            ai_analysis.confidence,
+            ai_analysis.last_analyzed,
+            ai_analysis.description AS analysis_description
+        FROM media
+        LEFT JOIN ai_analysis
+        ON ai_analysis.media_id=media.id
+        WHERE
+            datetime({capture_expr}) >= datetime('now', ?)
+            OR datetime({added_expr}) >= datetime('now', ?)
+            OR datetime({analyzed_expr}) >= datetime('now', ?)
+        ORDER BY
+            COALESCE(
+                media.capture_time,
+                media.first_seen_at,
+                media.date_added,
+                ai_analysis.last_analyzed
+            ) DESC,
+            media.id DESC
+        LIMIT ?
+        """, (window, window, window, limit))
+
+        rows = [
+            dict(row)
+            for row in cur.fetchall()
+        ]
+        conn.close()
+
+        return rows
+
+    ############################################################
+
     def media_package_asset_rows(self, media_ids, limit=50):
 
         ids = [

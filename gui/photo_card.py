@@ -2,6 +2,7 @@ import customtkinter as ctk
 import threading
 
 from gui.photo_viewer import PhotoViewer
+from gui.tooltip import ToolTip
 from media.image_dimensions import ImageDimensions
 
 
@@ -46,7 +47,7 @@ class PhotoCard(ctk.CTkFrame):
         super().__init__(
             parent,
             width=190,
-            height=260,
+            height=306,
             corner_radius=8
         )
 
@@ -203,27 +204,80 @@ class PhotoCard(ctk.CTkFrame):
                 pady=(0, 6)
             )
 
+            review = ctk.CTkButton(
+                self.quick_review_row,
+                text="Review",
+                width=78,
+                height=24,
+                fg_color="#38527a",
+                hover_color="#4a6590",
+                command=self.quick_review
+            )
+            review.grid(
+                row=0,
+                column=0,
+                padx=(0, 4),
+                pady=(0, 4)
+            )
+            ToolTip(
+                review,
+                "Open this media in the review viewer."
+            )
+
+            correct = ctk.CTkButton(
+                self.quick_review_row,
+                text="Correct",
+                width=78,
+                height=24,
+                fg_color="#5a4b83",
+                hover_color="#6d5a9c",
+                command=self.quick_review
+            )
+            correct.grid(
+                row=0,
+                column=1,
+                pady=(0, 4)
+            )
+            ToolTip(
+                correct,
+                "Open the viewer to improve or correct analysis."
+            )
+
             approve = ctk.CTkButton(
                 self.quick_review_row,
                 text="Approve",
                 width=78,
                 height=24,
+                fg_color="#287a4d",
+                hover_color="#33945f",
                 command=self.quick_approve
             )
-            approve.pack(
-                side="left",
+            approve.grid(
+                row=1,
+                column=0,
                 padx=(0, 4)
+            )
+            ToolTip(
+                approve,
+                "Approve this review-required real analysis."
             )
 
             reject = ctk.CTkButton(
                 self.quick_review_row,
                 text="Reject",
-                width=68,
+                width=78,
                 height=24,
+                fg_color="#8a3333",
+                hover_color="#a24444",
                 command=self.quick_reject
             )
-            reject.pack(
-                side="left"
+            reject.grid(
+                row=1,
+                column=1
+            )
+            ToolTip(
+                reject,
+                "Reject this weak or misleading analysis."
             )
 
         ##########################################
@@ -408,6 +462,12 @@ class PhotoCard(ctk.CTkFrame):
 
         if self.quick_reject_callback:
             self.quick_reject_callback(self.media_id)
+
+    ##########################################################
+
+    def quick_review(self):
+
+        self.open_viewer()
 
     ##########################################################
 

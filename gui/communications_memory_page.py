@@ -6,6 +6,7 @@ from services.communication_import_service import CommunicationImportService
 from services.communications_memory_service import CommunicationsMemoryService
 from services.logging_service import LoggingService
 from services.time_service import TimeService
+from gui.window_placement import WindowPlacement
 
 
 logger = LoggingService.get_logger("content")
@@ -185,8 +186,8 @@ class CommunicationsMemoryPage(ctk.CTkFrame):
         preview = self.pending_preview or {}
         window = ctk.CTkToplevel(self)
         window.title("Communication Import Preview")
-        window.geometry("950x720")
         window.transient(self.winfo_toplevel())
+        WindowPlacement.center_window(window, 950, 720, parent=self)
         window.lift()
 
         body = ctk.CTkTextbox(

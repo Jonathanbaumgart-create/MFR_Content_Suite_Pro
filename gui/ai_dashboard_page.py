@@ -7,6 +7,7 @@ from services.provider_diagnostics_service import ProviderDiagnosticsService
 from services.time_service import TimeService
 from services.writing_service import WritingService
 from services.photo_review_workflow_service import PhotoReviewWorkflowService
+from gui.window_placement import WindowPlacement
 from gui.photo_viewer import PhotoViewer
 
 
@@ -880,8 +881,8 @@ class AIDashboardPage(ctk.CTkFrame):
         items = self.review.queue(limit=50)
         popup = ctk.CTkToplevel(self)
         popup.title("AI Analysis Review Queue")
-        popup.geometry("900x600")
         popup.transient(self.winfo_toplevel())
+        WindowPlacement.center_window(popup, 900, 600, parent=self)
 
         heading = ctk.CTkLabel(
             popup,

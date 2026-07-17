@@ -10,19 +10,24 @@ from gui.photo_card import PhotoCard
 from gui.photo_viewer import PhotoViewer
 from services.communications_director import CommunicationsDirector
 from services.communications_memory_service import CommunicationsMemoryService
+from services.communications_officer_service import CommunicationsOfficerService
 from services.communications_reasoning_service import CommunicationsReasoningService
 from services.communication_package_service import CommunicationPackageService
+from services.content_director_retrieval_service import ContentDirectorRetrievalService
 from services.content_generation_service import ContentGenerationService
 from services.decision_explainability_service import DecisionExplainabilityService
 from services.editorial_comparison_service import EditorialComparisonService
 from services.logging_service import LoggingService
 from services.thumbnail_service import ThumbnailService
+from gui.window_placement import WindowPlacement
 
 
 logger = LoggingService.get_logger("content")
 
 
 class ContentDirectorPage(ctk.CTkFrame):
+
+    LOAD_TIMEOUT_MS = 30000
 
     def __init__(self, parent):
 
@@ -32,7 +37,9 @@ class ContentDirectorPage(ctk.CTkFrame):
         self.reasoning_service = CommunicationsReasoningService(
             director=self.director
         )
+        self.officer_service = CommunicationsOfficerService()
         self.communication_package_service = CommunicationPackageService()
+        self.retrieval_service = ContentDirectorRetrievalService()
         self.content_generation_service = ContentGenerationService()
         self.explainability_service = DecisionExplainabilityService()
         self.editorial_comparison_service = EditorialComparisonService()
@@ -49,6 +56,12 @@ class ContentDirectorPage(ctk.CTkFrame):
         self.strategy_jobs = {}
         self.strategy_views = set()
         self.ui_queue = queue.Queue()
+        self.loading_state = "idle"
+        self._load_token = 0
+        self._load_timeout_after_id = None
+        self.brief_future = None
+        self.suggestion_future = None
+        self.active_request_id = ""
         self.executor = ThreadPoolExecutor(
             max_workers=2
         )
@@ -108,15 +121,29 @@ class ContentDirectorPage(ctk.CTkFrame):
             padx=(0, 10)
         )
 
-        generate = ctk.CTkButton(
+        self.generate_button = ctk.CTkButton(
             prompt_frame,
             text="Generate Suggestions",
             command=self.generate_suggestions
         )
 
-        generate.grid(
+        self.generate_button.grid(
             row=0,
             column=1
+        )
+
+        self.cancel_button = ctk.CTkButton(
+            prompt_frame,
+            text="Cancel",
+            width=90,
+            command=self.cancel_current_request,
+            state="disabled"
+        )
+
+        self.cancel_button.grid(
+            row=0,
+            column=2,
+            padx=(8, 0)
         )
 
         status_frame = ctk.CTkFrame(
@@ -275,7 +302,11 @@ class ContentDirectorPage(ctk.CTkFrame):
 
     def refresh_brief(self):
 
+        if self.loading_state == "loading":
+            return
+
         if self.brief_cache:
+            self.loading_state = "loaded"
             self.brief = self.brief_cache
             self.render_brief()
             self.current_results = self.brief.get(
@@ -286,28 +317,47 @@ class ContentDirectorPage(ctk.CTkFrame):
             self.render_daily_opportunities()
             return
 
+        self.loading_state = "loading"
+        self._load_token += 1
+        token = self._load_token
+        self.active_request_id = f"brief-{token}"
+        self.generate_button.configure(state="disabled")
+        self.cancel_button.configure(state="normal")
         self.status.configure(
             text="Loading today's communications brief..."
         )
         self.render_loading_results(
             "Preparing today's recommendations..."
         )
-        future = self.executor.submit(
-            self.reasoning_service.todays_communications_brief
+        self.brief_future = self.executor.submit(
+            self.officer_service.generate_fast,
+            force=True
         )
-        future.add_done_callback(
+        self.brief_future.add_done_callback(
             lambda item: self.enqueue_ui(
                 self.finish_refresh_brief,
-                item
+                item,
+                token
             )
+        )
+        self._load_timeout_after_id = self.after(
+            self.LOAD_TIMEOUT_MS,
+            lambda value=token: self.loading_timed_out(value)
         )
 
     ##########################################################
 
-    def finish_refresh_brief(self, future):
+    def finish_refresh_brief(self, future, token=None):
 
         if self._destroyed:
             return
+
+        if token != self._load_token:
+            return
+
+        self.cancel_load_timeout()
+        self.generate_button.configure(state="normal")
+        self.cancel_button.configure(state="disabled")
 
         try:
             self.brief = future.result()
@@ -323,18 +373,72 @@ class ContentDirectorPage(ctk.CTkFrame):
                 )
             )
             self.brief = None
+            self.loading_state = "failed"
             self.status.configure(
                 text=f"Today's Brief error: {ex}"
             )
+            self.render_failure(str(ex))
             return
 
+        self.loading_state = "loaded"
         self.render_brief()
         self.current_results = self.brief.get(
             "recommendations",
             []
         )
+        if not self.current_results:
+            self.loading_state = "empty"
         self.render_results()
         self.render_daily_opportunities()
+
+    ##########################################################
+
+    def loading_timed_out(self, token):
+
+        if self._destroyed or token != self._load_token:
+            return
+
+        self.loading_state = "timed out"
+        self.generate_button.configure(state="normal")
+        self.cancel_button.configure(state="disabled")
+        self.status.configure(
+            text="Content Director is taking longer than expected."
+        )
+        self.render_failure(
+            "Recommendations are still preparing in the background. You can retry without restarting the app."
+        )
+
+    ##########################################################
+
+    def cancel_current_request(self):
+
+        self._load_token += 1
+        self.loading_state = "cancelled"
+        self.cancel_load_timeout()
+        self.generate_button.configure(state="normal")
+        self.cancel_button.configure(state="disabled")
+
+        for future in (self.brief_future, self.suggestion_future):
+            if future and not future.done():
+                future.cancel()
+
+        self.status.configure(
+            text="Request cancelled."
+        )
+        self.render_failure(
+            "Request cancelled. Enter a prompt and retry when ready."
+        )
+
+    ##########################################################
+
+    def cancel_load_timeout(self):
+
+        if self._load_timeout_after_id is not None:
+            try:
+                self.after_cancel(self._load_timeout_after_id)
+            except Exception:
+                pass
+            self._load_timeout_after_id = None
 
     ##########################################################
 
@@ -344,6 +448,10 @@ class ContentDirectorPage(ctk.CTkFrame):
             child.destroy()
 
         if not self.brief:
+            return
+
+        if "library_health" not in self.brief:
+            self.render_fast_brief_summary()
             return
 
         title = ctk.CTkLabel(
@@ -472,6 +580,43 @@ class ContentDirectorPage(ctk.CTkFrame):
 
     ##########################################################
 
+    def render_fast_brief_summary(self):
+
+        summary = self.brief.get("summary", {}) or {}
+        context = self.brief.get("current_context", {}) or {}
+        stage = self.brief.get("brief_stage", "partial")
+        lines = [
+            f"Stage: {stage}",
+            "Recent activity loaded: " +
+            str(len(self.brief.get("recent_mfr_activity", []))),
+            "Historical memory: " +
+            (self.brief.get("communications_memory_status", {}) or {}).get(
+                "status",
+                "Unavailable"
+            ),
+            "Review queue: " + str(summary.get("review_queue_size", 0)),
+            "Season: " + self.format_label(context.get("season", "")),
+            "Active themes: " + self.format_context_list(
+                context.get("active_themes", [])
+            ),
+            "Recommendations still preparing or deferred."
+        ]
+        label = ctk.CTkLabel(
+            self.brief_frame,
+            text="\n".join(lines),
+            justify="left",
+            wraplength=1100
+        )
+        label.grid(
+            row=1,
+            column=0,
+            sticky="w",
+            padx=15,
+            pady=(0, 12)
+        )
+
+    ##########################################################
+
     def render_daily_opportunities(self):
 
         for child in self.daily_frame.winfo_children():
@@ -513,23 +658,44 @@ class ContentDirectorPage(ctk.CTkFrame):
 
     def generate_suggestions(self, opportunity_types=None):
 
+        if self.loading_state == "loading":
+            return
+
         prompt = self.prompt_entry.get().strip()
+        self.loading_state = "loading"
+        self._load_token += 1
+        token = self._load_token
+        self.active_request_id = f"prompt-{token}"
+        self.generate_button.configure(state="disabled")
+        self.cancel_button.configure(state="normal")
         self.status.configure(
             text="Generating communication opportunities..."
         )
-        self.render_loading_results(
-            "Finding recommendations..."
-        )
-        future = self.executor.submit(
+        if not opportunity_types:
+            interpreted = self.retrieval_service.interpret_query(prompt)
+            self.render_prompt_progress(
+                interpreted,
+                "Searching MFR history, operational activity, and compatible media..."
+            )
+        else:
+            self.render_loading_results(
+                "Finding recommendations..."
+            )
+        self.suggestion_future = self.executor.submit(
             self.load_suggestions,
             prompt,
             opportunity_types
         )
-        future.add_done_callback(
+        self.suggestion_future.add_done_callback(
             lambda item: self.enqueue_ui(
                 self.finish_generate_suggestions,
-                item
+                item,
+                token
             )
+        )
+        self._load_timeout_after_id = self.after(
+            self.LOAD_TIMEOUT_MS,
+            lambda value=token: self.loading_timed_out(value)
         )
 
     ##########################################################
@@ -545,20 +711,35 @@ class ContentDirectorPage(ctk.CTkFrame):
                 )
             }
 
+        package = self.retrieval_service.build_prompt_package(
+            prompt,
+            limit=5
+        )
         return {
-            "opportunity_types": self.director.interpret_prompt(prompt),
-            "opportunities": self.reasoning_service.generate_recommendations(
-                prompt,
-                limit=5
-            )
+            "opportunity_types": [
+                package.get("interpreted_topic", {}).get(
+                    "primary_topic",
+                    "general_engagement"
+                )
+            ],
+            "opportunities": [],
+            "production_package": package,
+            "request_id": package.get("request_id", "")
         }
 
     ##########################################################
 
-    def finish_generate_suggestions(self, future):
+    def finish_generate_suggestions(self, future, token=None):
 
         if self._destroyed:
             return
+
+        if token != self._load_token:
+            return
+
+        self.cancel_load_timeout()
+        self.generate_button.configure(state="normal")
+        self.cancel_button.configure(state="disabled")
 
         try:
             result = future.result()
@@ -572,12 +753,30 @@ class ContentDirectorPage(ctk.CTkFrame):
                     ex.__traceback__
                 )
             )
+            self.loading_state = "failed"
             self.status.configure(
                 text=f"Communications Director error: {ex}"
+            )
+            self.render_failure(str(ex))
+            return
+
+        if result.get("production_package"):
+            self.current_results = []
+            self.loading_state = "loaded"
+            topic = result["production_package"].get("interpreted_topic", {})
+            self.status.configure(
+                text=(
+                    "Opportunity type: " +
+                    self.format_label(topic.get("primary_topic", ""))
+                )
+            )
+            self.render_prompt_package(
+                result["production_package"]
             )
             return
 
         self.current_results = result["opportunities"]
+        self.loading_state = "loaded" if self.current_results else "empty"
         labels = [
             self.format_label(item)
             for item in result["opportunity_types"]
@@ -586,6 +785,35 @@ class ContentDirectorPage(ctk.CTkFrame):
             text=f"Opportunity type: {', '.join(labels)}"
         )
         self.render_results()
+
+    ##########################################################
+
+    def render_failure(self, message):
+
+        for child in self.results.winfo_children():
+            child.destroy()
+
+        label = ctk.CTkLabel(
+            self.results,
+            text=message,
+            wraplength=900,
+            justify="left"
+        )
+        label.pack(
+            pady=(30, 10),
+            padx=10,
+            anchor="w"
+        )
+
+        retry = ctk.CTkButton(
+            self.results,
+            text="Retry",
+            command=self.refresh_brief
+        )
+        retry.pack(
+            padx=10,
+            anchor="w"
+        )
 
     ##########################################################
 
@@ -602,6 +830,271 @@ class ContentDirectorPage(ctk.CTkFrame):
         label.pack(
             pady=30
         )
+
+    ##########################################################
+
+    def render_prompt_progress(self, interpreted, message):
+
+        for child in self.results.winfo_children():
+            child.destroy()
+
+        frame = ctk.CTkFrame(
+            self.results,
+            corner_radius=8
+        )
+        frame.pack(
+            fill="x",
+            padx=10,
+            pady=10
+        )
+        frame.grid_columnconfigure(1, weight=1)
+
+        heading = ctk.CTkLabel(
+            frame,
+            text="Preparing Production Package",
+            font=("Segoe UI", 20, "bold")
+        )
+        heading.grid(
+            row=0,
+            column=1,
+            sticky="w",
+            padx=(0, 12),
+            pady=(12, 3)
+        )
+        self.add_caption_line(
+            frame,
+            1,
+            "Interpreted Topic",
+            interpreted.get("label", "")
+        )
+        self.add_caption_line(
+            frame,
+            2,
+            "Secondary Topics",
+            self.format_values(interpreted.get("secondary_topics", []))
+        )
+        self.add_caption_line(
+            frame,
+            3,
+            "Retrieval Status",
+            message
+        )
+
+    ##########################################################
+
+    def render_prompt_package(self, package):
+
+        for child in self.results.winfo_children():
+            child.destroy()
+
+        frame = ctk.CTkFrame(
+            self.results,
+            corner_radius=8
+        )
+        frame.pack(
+            fill="x",
+            padx=10,
+            pady=10
+        )
+        frame.grid_columnconfigure(0, weight=0)
+        frame.grid_columnconfigure(1, weight=1)
+        topic = package.get("interpreted_topic", {})
+        summary = package.get("opportunity_summary", {})
+        media = package.get("media_package", {}) or {}
+        primary = (
+            media.get("primary_image")
+            or media.get("primary_video")
+            or {}
+        )
+
+        if primary:
+            card = PhotoCard(
+                frame,
+                primary.get("media_id"),
+                primary.get("filename", ""),
+                primary.get("path", ""),
+                thumbnail_service=self.thumbnail_service
+            )
+            card.grid(
+                row=0,
+                column=0,
+                rowspan=18,
+                padx=12,
+                pady=12,
+                sticky="nw"
+            )
+
+        title = ctk.CTkLabel(
+            frame,
+            text=(
+                f"{summary.get('what', topic.get('label', 'Communication Package'))} "
+                f"- {summary.get('confidence', 0)}% Confidence"
+            ),
+            font=("Segoe UI", 20, "bold"),
+            wraplength=900,
+            justify="left"
+        )
+        title.grid(
+            row=0,
+            column=1,
+            sticky="ew",
+            padx=(0, 12),
+            pady=(12, 3)
+        )
+        self.add_caption_line(
+            frame,
+            1,
+            "Why Now",
+            summary.get("why_now", "")
+        )
+        self.add_caption_line(
+            frame,
+            2,
+            "Current Context Evidence",
+            self.current_context_text(summary.get("current_context_evidence", {}))
+        )
+        self.add_caption_line(
+            frame,
+            3,
+            "Historical MFR Evidence",
+            self.historical_reference_text(package.get("historical_references", []))
+        )
+        self.add_caption_line(
+            frame,
+            4,
+            "Media Package",
+            self.production_media_text(media)
+        )
+        self.add_caption_line(
+            frame,
+            5,
+            "Facebook",
+            package.get("facebook_draft", {}).get("copy_text", "")
+        )
+        self.add_caption_line(
+            frame,
+            6,
+            "Instagram",
+            package.get("instagram_draft", {}).get("copy_text", "")
+        )
+        self.add_caption_line(
+            frame,
+            7,
+            "Validation Warnings",
+            self.format_values(package.get("validation_warnings", []))
+        )
+        self.add_caption_line(
+            frame,
+            8,
+            "Why Selected",
+            self.format_values(package.get("trust_explanation", []))
+        )
+
+        controls = ctk.CTkFrame(
+            frame,
+            fg_color="transparent"
+        )
+        controls.grid(
+            row=9,
+            column=1,
+            sticky="w",
+            padx=(0, 12),
+            pady=(6, 12)
+        )
+
+        buttons = (
+            ("Copy Facebook", package.get("facebook_draft", {}).get("copy_text", "")),
+            ("Copy Instagram", package.get("instagram_draft", {}).get("copy_text", "")),
+            ("Retry", None),
+        )
+
+        for label, value in buttons:
+            command = (
+                self.generate_suggestions
+                if value is None
+                else lambda name=label, text=value: self.copy_text(name, text)
+            )
+            button = ctk.CTkButton(
+                controls,
+                text=label,
+                width=135,
+                command=command
+            )
+            button.pack(
+                side="left",
+                padx=(0, 8)
+            )
+
+        if primary:
+            open_button = ctk.CTkButton(
+                controls,
+                text="Open Media",
+                width=135,
+                command=lambda item=primary: self.open_package_asset(item)
+            )
+            open_button.pack(
+                side="left",
+                padx=(0, 8)
+            )
+
+    ##########################################################
+
+    def current_context_text(self, evidence):
+
+        evidence = evidence or {}
+        lines = [
+            "Season: " + str(evidence.get("season", "")),
+            "Active themes: " + self.format_values(evidence.get("active_themes", [])),
+            "Alerts: " + self.format_values(
+                [
+                    item.get("summary") or item.get("type") or ""
+                    for item in evidence.get("alerts", [])
+                ]
+            ),
+            "Freshness: " + str(evidence.get("data_freshness", ""))
+        ]
+        return "\n".join(lines)
+
+    def historical_reference_text(self, references):
+
+        lines = []
+        for item in (references or [])[:5]:
+            lines.append(
+                (
+                    f"{item.get('post_date', 'Unknown date')} - "
+                    f"{item.get('similarity_score', 0)}% - "
+                    f"{item.get('caption_excerpt', '')}"
+                )
+            )
+        return "\n".join(lines) if lines else "No close historical MFR reference found."
+
+    def production_media_text(self, media):
+
+        media = media or {}
+        if media.get("no_suitable_media"):
+            return "No suitable media passed the topic compatibility gate. Use a text or graphic-first package."
+
+        rows = []
+        primary = media.get("primary_image") or media.get("primary_video") or {}
+        if primary:
+            rows.append(
+                f"Primary: {primary.get('filename', '')} ({primary.get('trust_state', '')})"
+            )
+
+        for item in media.get("alternates", [])[:4]:
+            rows.append(
+                f"Alternate: {item.get('filename', '')} ({item.get('trust_state', '')})"
+            )
+
+        for item in media.get("excluded_conflicts", [])[:4]:
+            rows.append(
+                "Excluded: " +
+                item.get("filename", "") +
+                " - " +
+                self.format_values(item.get("exclusions", []))
+            )
+
+        return "\n".join(rows) if rows else "No media selected."
 
     ##########################################################
 
@@ -1250,8 +1743,8 @@ class ContentDirectorPage(ctk.CTkFrame):
 
         window = ctk.CTkToplevel(self)
         window.title("Communication Package Preview")
-        window.geometry("900x720")
         window.transient(self.winfo_toplevel())
+        WindowPlacement.center_window(window, 900, 720, parent=self)
         window.lift()
 
         visual_panel = PackageMediaPanel(
@@ -1404,8 +1897,8 @@ class ContentDirectorPage(ctk.CTkFrame):
         )
         window = ctk.CTkToplevel(self)
         window.title("Alternative Media")
-        window.geometry("960x680")
         window.transient(self.winfo_toplevel())
+        WindowPlacement.center_window(window, 960, 680, parent=self)
         window.lift()
 
         frame = ctk.CTkScrollableFrame(window)
@@ -1573,8 +2066,8 @@ class ContentDirectorPage(ctk.CTkFrame):
 
         window = ctk.CTkToplevel(self)
         window.title(asset.get("filename", "Media Preview"))
-        window.geometry("660x540")
         window.transient(self.winfo_toplevel())
+        WindowPlacement.center_window(window, 660, 540, parent=self)
         window.lift()
         panel = PackageMediaPanel(
             window,
@@ -1683,8 +2176,8 @@ class ContentDirectorPage(ctk.CTkFrame):
         explanation = explanation or {}
         window = ctk.CTkToplevel(self)
         window.title("Decision Audit")
-        window.geometry("900x720")
         window.transient(self.winfo_toplevel())
+        WindowPlacement.center_window(window, 900, 720, parent=self)
         window.lift()
 
         textbox = ctk.CTkTextbox(
@@ -2181,8 +2674,8 @@ class ContentDirectorPage(ctk.CTkFrame):
 
         window = ctk.CTkToplevel(self)
         window.title("Generated Content Preview")
-        window.geometry("950x760")
         window.transient(self.winfo_toplevel())
+        WindowPlacement.center_window(window, 950, 760, parent=self)
         window.lift()
 
         selected = {

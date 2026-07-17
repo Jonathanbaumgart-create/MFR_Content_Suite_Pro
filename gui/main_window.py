@@ -13,6 +13,7 @@ from gui.intelligence_page import IntelligenceExplorerPage
 from gui.knowledge_page import KnowledgePage
 from gui.operations_page import OperationsPage
 from gui.scan_page import ScanPage
+from gui.window_placement import WindowPlacement
 
 
 class MainWindow(ctk.CTk):
@@ -21,8 +22,12 @@ class MainWindow(ctk.CTk):
         super().__init__()
 
         self.title("MFR Content Suite Professional")
-        self.geometry("1600x900")
         self.minsize(1200, 800)
+        WindowPlacement.center_window(
+            self,
+            width=1600,
+            height=900
+        )
 
         ctk.set_appearance_mode("Dark")
         ctk.set_default_color_theme("blue")

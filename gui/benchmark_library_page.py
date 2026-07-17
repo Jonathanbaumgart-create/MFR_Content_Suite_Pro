@@ -5,6 +5,7 @@ from tkinter import filedialog
 from core.app_context import context
 from services.benchmark_communications_service import BenchmarkCommunicationsService
 from services.logging_service import LoggingService
+from gui.window_placement import WindowPlacement
 
 
 logger = LoggingService.get_logger("content")
@@ -149,8 +150,8 @@ class BenchmarkLibraryPage(ctk.CTkFrame):
         preview = self.pending_preview or {}
         window = ctk.CTkToplevel(self)
         window.title("Benchmark Import Preview")
-        window.geometry("960x720")
         window.transient(self.winfo_toplevel())
+        WindowPlacement.center_window(window, 960, 720, parent=self)
         window.lift()
 
         body = ctk.CTkTextbox(window, wrap="word")

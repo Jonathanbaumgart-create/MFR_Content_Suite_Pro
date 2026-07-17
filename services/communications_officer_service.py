@@ -11,6 +11,8 @@ from services.knowledge_service import KnowledgeService
 from services.logging_service import LoggingService
 from services.media_priority_service import MediaPriorityService
 from services.media_package_service import MediaPackageService
+from services.current_context_service import CurrentContextService
+from services.operational_activity_service import OperationalActivityService
 from services.time_service import TimeService
 
 
@@ -51,8 +53,280 @@ class CommunicationsOfficerService:
             database=self.db
         )
         self.learning = CommunicationsLearningService(database=self.db)
+        self.context_service = CurrentContextService()
+        self.operational = OperationalActivityService(
+            database=self.db,
+            memory_service=self.memory,
+            context_service=self.context_service
+        )
         self.last_metrics = {}
         self._brief_cache = None
+
+    ############################################################
+
+    def generate_fast(self, now=None, force=False):
+
+        started = perf_time.perf_counter()
+        ran_on_main_thread = threading.current_thread() is threading.main_thread()
+        now = now or TimeService.utc_now()
+        local_now = TimeService.to_local(now) or now
+        yesterday_start, yesterday_end = self._previous_local_day_bounds(
+            local_now
+        )
+        generated_at = TimeService.utc_now_iso()
+        profile = {}
+        stage_status = {}
+        metrics = {}
+        session_id = None
+        session_started_at = TimeService.utc_now_iso()
+        previous_session = {}
+        since_source = "no_previous_home_session_yesterday_fallback"
+
+        try:
+            step = perf_time.perf_counter()
+            session_id = self.db.create_home_session(session_started_at)
+            previous_session = self.db.latest_completed_home_session(
+                before_session_id=session_id
+            )
+            profile["home_session_lookup_seconds"] = round(
+                perf_time.perf_counter() - step,
+                3
+            )
+            since_utc = yesterday_start.isoformat(timespec="seconds")
+
+            if previous_session.get("completed_at"):
+                since_utc = previous_session["completed_at"]
+                since_source = "previous_completed_home_session"
+
+            step = perf_time.perf_counter()
+            current_context = self.context_service.current_context(
+                now=local_now,
+                force=force
+            )
+            profile["stage1_current_context_seconds"] = round(
+                perf_time.perf_counter() - step,
+                3
+            )
+            stage_status["current_context"] = "loaded"
+
+            step = perf_time.perf_counter()
+            metrics = self.db.communications_officer_metrics(
+                since_utc=since_utc
+            )
+            metrics["media_analyzed_since"] = self.db.media_analyzed_count_since(
+                since_utc
+            )
+            metrics["new_media_added_yesterday"] = self.db.media_added_count_between(
+                yesterday_start.isoformat(timespec="seconds"),
+                yesterday_end.isoformat(timespec="seconds")
+            )
+            profile["stage1_metrics_seconds"] = round(
+                perf_time.perf_counter() - step,
+                3
+            )
+            stage_status["metrics"] = "loaded"
+
+            step = perf_time.perf_counter()
+            priority_snapshot = self.priority.preview("today")
+            profile["stage1_priority_seconds"] = round(
+                perf_time.perf_counter() - step,
+                3
+            )
+
+            step = perf_time.perf_counter()
+            activity_clusters = self.operational.clusters_for_window(
+                days=30,
+                limit=80,
+                now=local_now
+            )
+            operational_opportunities = self.operational.communication_opportunities(
+                limit=3,
+                clusters=activity_clusters,
+                current_context=current_context
+            )
+            communications_gaps = self.operational.communications_gaps(
+                clusters=activity_clusters,
+                current_context=current_context
+            )
+            profile["stage1_operational_activity_seconds"] = round(
+                perf_time.perf_counter() - step,
+                3
+            )
+            profile["operational_activity_clusters"] = len(activity_clusters)
+            profile["operational_opportunities"] = len(operational_opportunities)
+            stage_status["recent_activity"] = "loaded"
+
+            step = perf_time.perf_counter()
+            metrics.update(self.db.communications_memory_metrics())
+            memory_status = self._memory_status(metrics)
+            self._attach_historical_evidence(
+                operational_opportunities,
+                activity_clusters
+            )
+            profile["stage2_memory_seconds"] = round(
+                perf_time.perf_counter() - step,
+                3
+            )
+            stage_status["historical_memory"] = "loaded"
+            stage_status["editorial_recommendations"] = "not_started_fast_brief"
+            stage_status["package_enrichment"] = "not_started_fast_brief"
+
+            opportunities = [
+                self._operational_story(item)
+                for item in operational_opportunities
+            ]
+            opportunities.sort(
+                key=lambda item: (
+                    item.get("priority_score", 0),
+                    1 if item.get("uses_reviewed_media") else 0,
+                    item.get("confidence", 0)
+                ),
+                reverse=True
+            )
+            top_story = opportunities[0] if opportunities else self._empty_story()
+            secondary = opportunities[1:4]
+            limitations = self._operational_limitations(
+                current_context,
+                activity_clusters,
+                operational_opportunities
+            )
+            limitations.append(
+                "Editorial recommendations and package enrichment are deferred so recent activity can load quickly."
+            )
+            brief = {
+                "title": "AI Communications Officer Morning Brief",
+                "brief_stage": "partial",
+                "loaded_stages": [
+                    "current_context",
+                    "recent_activity",
+                    "historical_memory"
+                ],
+                "pending_stages": [
+                    "editorial_recommendations",
+                    "package_enrichment"
+                ],
+                "stage_status": stage_status,
+                "generated_at": generated_at,
+                "current_date": local_now.strftime("%A, %B %d, %Y"),
+                "session": {
+                    "session_id": session_id,
+                    "started_at": session_started_at,
+                    "previous_completed_at": previous_session.get("completed_at", ""),
+                    "analyzed_since_source": since_source,
+                    "analyzed_since_utc": since_utc
+                },
+                "summary": {
+                    "new_media_added_yesterday": metrics.get("new_media_added_yesterday", 0),
+                    "media_analyzed_since_last_session": metrics.get("media_analyzed_since", 0),
+                    "media_analyzed_since_source": since_source,
+                    "review_queue_size": metrics.get("review_queue_size", 0),
+                    "approved_media_count": metrics.get("approved_media_count", 0),
+                    "corrected_media_count": metrics.get("corrected_media_count", 0),
+                    "failed_analysis_count": metrics.get("failed_analysis_count", 0),
+                    "videos_awaiting_review": metrics.get("videos_awaiting_review", 0)
+                },
+                "top_story": top_story,
+                "secondary_stories": secondary,
+                "top_three_communication_opportunities": opportunities[:3],
+                "best_communication_opportunities": operational_opportunities,
+                "highest_confidence_editorial_recommendation": {},
+                "recommended_publishing_platforms": top_story.get("recommended_platforms", []),
+                "communications_memory_status": memory_status,
+                "communications_learning": {
+                    "available": False,
+                    "sample_count": 0,
+                    "learning_confidence": 0,
+                    "limitations": [
+                        "Learning summary deferred in fast brief."
+                    ]
+                },
+                "recommended_media_package": top_story.get("media_package", {}),
+                "recommended_videos": self._recommended_videos(
+                    top_story.get("media_package", {})
+                ),
+                "estimated_audience": top_story.get("estimated_audience", []),
+                "confidence": top_story.get("confidence", 0),
+                "why_today_matters": top_story.get("why_today_matters", ""),
+                "review_queue": {
+                    "size": metrics.get("review_queue_size", 0),
+                    "approved": metrics.get("approved_media_count", 0),
+                    "corrected": metrics.get("corrected_media_count", 0),
+                    "failed": metrics.get("failed_analysis_count", 0)
+                },
+                "todays_new_media": {
+                    "added_today": priority_snapshot.get("total", 0),
+                    "photos": priority_snapshot.get("photos", 0),
+                    "videos": priority_snapshot.get("videos", 0),
+                    "unanalyzed": priority_snapshot.get("unanalyzed", 0)
+                },
+                "videos_awaiting_review": metrics.get("videos_awaiting_review", 0),
+                "source_signals": [
+                    "Operational Activity Intelligence",
+                    "Communications Memory",
+                    "Media Priority",
+                    "Human Review trust states",
+                    "Current Context"
+                ],
+                "current_context": current_context,
+                "recent_mfr_activity": activity_clusters[:6],
+                "communications_gaps": communications_gaps,
+                "risks_and_limitations": limitations,
+                "confidence_limitations": limitations
+            }
+            elapsed = round(perf_time.perf_counter() - started, 3)
+            profile["total_service_seconds"] = elapsed
+            profile["tk_render_seconds"] = 0
+            self.last_metrics = {
+                "total_seconds": elapsed,
+                "cache_hit": False,
+                "brief_stage": "partial",
+                "opportunity_count": len(opportunities),
+                "ran_on_main_thread": ran_on_main_thread,
+                "profile": profile,
+                "stage_status": stage_status,
+                "session_id": session_id
+            }
+            self.db.complete_home_session(
+                session_id,
+                status="partial",
+                completed_at=TimeService.utc_now_iso(),
+                duration_seconds=elapsed,
+                summary=brief.get("summary", {}),
+                metrics=self.last_metrics
+            )
+            self._brief_cache = {
+                "local_date": local_now.date().isoformat(),
+                "created_at": perf_time.perf_counter(),
+                "invalidation_sequence": (
+                    CacheInvalidationService.latest().get("sequence", 0)
+                ),
+                "brief": brief,
+                "_metrics": self.last_metrics
+            }
+            logger.info(
+                "Fast Morning Brief generated stage=partial activities=%s opportunities=%s elapsed=%s",
+                len(activity_clusters),
+                len(opportunities),
+                elapsed
+            )
+            return brief
+
+        except Exception:
+            elapsed = round(perf_time.perf_counter() - started, 3)
+            logger.exception(
+                "Fast Morning Brief failed stage_status=%s elapsed=%s",
+                stage_status,
+                elapsed
+            )
+            if session_id:
+                self.db.complete_home_session(
+                    session_id,
+                    status="failed",
+                    completed_at=TimeService.utc_now_iso(),
+                    duration_seconds=elapsed,
+                    metrics={"profile": profile, "stage_status": stage_status}
+                )
+            raise
 
     ############################################################
 
@@ -144,6 +418,37 @@ class CommunicationsOfficerService:
             )
 
             step = perf_time.perf_counter()
+            current_context = self.context_service.current_context(
+                now=local_now
+            )
+            profile["current_context_seconds"] = round(
+                perf_time.perf_counter() - step,
+                3
+            )
+
+            step = perf_time.perf_counter()
+            activity_clusters = self.operational.clusters_for_window(
+                days=30,
+                limit=120,
+                now=local_now
+            )
+            operational_opportunities = self.operational.communication_opportunities(
+                limit=3,
+                clusters=activity_clusters,
+                current_context=current_context
+            )
+            communications_gaps = self.operational.communications_gaps(
+                clusters=activity_clusters,
+                current_context=current_context
+            )
+            profile["operational_activity_seconds"] = round(
+                perf_time.perf_counter() - step,
+                3
+            )
+            profile["operational_activity_clusters"] = len(activity_clusters)
+            profile["operational_opportunities"] = len(operational_opportunities)
+
+            step = perf_time.perf_counter()
             editorial_recommendations = self.editorial.generate_recommendations(
                 limit=self.MORNING_BRIEF_RECOMMENDATION_LIMIT,
                 candidate_limit=self.MORNING_BRIEF_CANDIDATE_LIMIT,
@@ -176,6 +481,10 @@ class CommunicationsOfficerService:
                 )
             finally:
                 self._active_profile = None
+            opportunities = self._merge_operational_opportunities(
+                opportunities,
+                operational_opportunities
+            )
             profile["media_package_lookup_seconds"] = round(
                 perf_time.perf_counter() - step,
                 3
@@ -251,6 +560,7 @@ class CommunicationsOfficerService:
             "videos_awaiting_review": metrics["videos_awaiting_review"],
             "source_signals": [
                 "Editorial Recommendation Engine",
+                "Operational Activity Intelligence",
                 "Communications Memory",
                 "Media Priority",
                 "Human Review trust states",
@@ -258,6 +568,19 @@ class CommunicationsOfficerService:
                 "Video Intelligence",
                 "MFR historical performance learning"
             ],
+            "current_context": current_context,
+            "recent_mfr_activity": activity_clusters[:6],
+            "best_communication_opportunities": operational_opportunities,
+            "communications_gaps": communications_gaps,
+            "risks_and_limitations": self._brief_limitations(
+                opportunities,
+                metrics,
+                memory_status
+            ) + self._operational_limitations(
+                current_context,
+                activity_clusters,
+                operational_opportunities
+            ),
             "confidence_limitations": self._brief_limitations(
                 opportunities,
                 metrics,
@@ -343,7 +666,10 @@ class CommunicationsOfficerService:
             scopes=[
                 "effective_intelligence",
                 "communications_officer",
-                "trust_metrics"
+                "trust_metrics",
+                "current_context",
+                "communications_memory",
+                "communication_package"
             ]
         ):
             return None
@@ -387,6 +713,77 @@ class CommunicationsOfficerService:
         )
 
         return (packaged or fallback)[:3]
+
+    ############################################################
+
+    def _merge_operational_opportunities(self, editorial, operational):
+
+        merged = [
+            self._operational_story(item)
+            for item in (operational or [])
+            if item
+        ]
+        merged.extend(editorial or [])
+        merged = [
+            item
+            for item in merged
+            if item
+        ]
+        merged.sort(
+            key=lambda item: (
+                item.get("priority_score", 0),
+                1 if item.get("uses_reviewed_media") else 0,
+                item.get("confidence", 0)
+            ),
+            reverse=True
+        )
+        return merged[:3]
+
+    def _operational_story(self, opportunity):
+
+        package = opportunity.get("media_package") or {}
+        trust = opportunity.get("trust_level") or "fallback_unreviewed"
+
+        return {
+            "title": opportunity.get("title", ""),
+            "summary": opportunity.get("summary", ""),
+            "editorial_angle": opportunity.get("title", ""),
+            "priority_score": opportunity.get("priority_score", 0),
+            "confidence": opportunity.get("confidence", 0),
+            "estimated_audience": ["Morden residents", "MFR followers"],
+            "recommended_platforms": opportunity.get("recommended_platforms", []),
+            "recommended_posting_window": "Today",
+            "media_package": package,
+            "why_today_matters": opportunity.get("why_now", ""),
+            "why_public_would_care": opportunity.get("why_public_would_care", ""),
+            "why_it_should_outperform": opportunity.get("why_it_should_outperform", ""),
+            "positive_factors": opportunity.get("positive_factors", []),
+            "negative_factors": opportunity.get("negative_factors", []),
+            "confidence_limitations": opportunity.get("confidence_limitations", []),
+            "source_signals": opportunity.get("source_signals", []),
+            "trust_level": trust,
+            "trust_label": opportunity.get("trust_label") or self._trust_label(trust),
+            "trust_summary": (
+                "Operational activity package from approved/corrected media."
+                if opportunity.get("uses_reviewed_media")
+                else "Operational activity package relies on limited unreviewed media."
+            ),
+            "uses_reviewed_media": opportunity.get("uses_reviewed_media", False),
+            "timing_active": True,
+            "timing_reason": opportunity.get("why_now", ""),
+            "reviewed_media_count": (
+                1 if opportunity.get("uses_reviewed_media") else 0
+            ),
+            "approved_media_count": 0,
+            "corrected_media_count": 0,
+            "unreviewed_media_count": (
+                0 if opportunity.get("uses_reviewed_media") else package.get("media_count", 0)
+            ),
+            "supporting_recent_activity": opportunity.get("supporting_recent_activity", {}),
+            "historical_matches": opportunity.get("historical_matches", []),
+            "repetition_risk": opportunity.get("repetition_risk", ""),
+            "suitable_media_count": opportunity.get("suitable_media_count", 0)
+        }
 
     ############################################################
 
@@ -943,6 +1340,68 @@ class CommunicationsOfficerService:
             )
 
         return limitations
+
+    ############################################################
+
+    def _operational_limitations(
+        self,
+        current_context,
+        activity_clusters,
+        operational_opportunities
+    ):
+
+        limitations = []
+
+        if not activity_clusters:
+            limitations.append(
+                "No recent operational activity clusters were found in the bounded activity window."
+            )
+
+        if current_context.get("freshness") != "fresh":
+            limitations.append(
+                "Current context is unavailable or stale."
+            )
+
+        if not current_context.get("weather") and not current_context.get("alerts"):
+            limitations.append(
+                "Weather and alert providers are disabled or unavailable; no warnings were fabricated."
+            )
+
+        if not operational_opportunities:
+            limitations.append(
+                "No operational opportunity passed the media-topic compatibility gate."
+            )
+
+        for item in operational_opportunities or []:
+            if not item.get("uses_reviewed_media"):
+                limitations.append(
+                    f"{item.get('title', 'An opportunity')} uses unreviewed evidence and should be reviewed before posting."
+                )
+
+        return self._unique(limitations)[:8]
+
+    ############################################################
+
+    def _attach_historical_evidence(self, opportunities, activity_clusters):
+
+        clusters_by_id = {
+            cluster.get("activity_id"): cluster
+            for cluster in (activity_clusters or [])
+        }
+
+        for opportunity in opportunities or []:
+            cluster = opportunity.get("supporting_recent_activity") or {}
+            if cluster.get("activity_id") in clusters_by_id:
+                cluster = clusters_by_id[cluster["activity_id"]]
+
+            historical = cluster.get("historical_matches") or opportunity.get(
+                "historical_matches",
+                []
+            )
+            opportunity["historical_matches"] = historical[:3]
+            opportunity["last_similar_mfr_post"] = (
+                historical[0] if historical else {}
+            )
 
     ############################################################
 

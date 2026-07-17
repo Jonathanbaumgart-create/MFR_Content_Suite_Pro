@@ -3,6 +3,7 @@ from pathlib import Path
 
 import customtkinter as ctk
 
+from gui.window_placement import WindowPlacement
 from services.scan_service import ScanService
 
 # Default media library
@@ -246,9 +247,14 @@ class ScanPage(ctk.CTkFrame):
 
         self.report_window = ctk.CTkToplevel(self)
         self.report_window.title("Scan Report")
-        self.report_window.geometry("900x700")
         self.report_window.minsize(700, 500)
         self.report_window.transient(self.winfo_toplevel())
+        WindowPlacement.center_window(
+            self.report_window,
+            900,
+            700,
+            parent=self
+        )
 
         self.report_window.grid_columnconfigure(0, weight=1)
         self.report_window.grid_rowconfigure(1, weight=1)

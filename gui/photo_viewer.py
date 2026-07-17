@@ -1,9 +1,11 @@
 import customtkinter as ctk
 import threading
 import os
+import time
 
 from media.image_loader import ImageLoader
 from media.image_dimensions import ImageDimensions
+from media.preview_image_cache import PreviewImageCache
 from media.thumbnail_cache import ThumbnailCache
 from services.brain_service import BrainService
 from services.decision_explainability_service import DecisionExplainabilityService
@@ -12,6 +14,11 @@ from services.human_feedback_service import HumanFeedbackService
 from services.analysis_review_service import AnalysisReviewService
 from services.photo_review_workflow_service import PhotoReviewWorkflowService
 from services.time_service import TimeService
+from services.logging_service import LoggingService
+from gui.window_placement import WindowPlacement
+
+
+logger = LoggingService.get_logger("gallery")
 
 
 class PhotoViewer(ctk.CTkToplevel):
@@ -32,8 +39,13 @@ class PhotoViewer(ctk.CTkToplevel):
 
         self.title(filename)
 
-        self.geometry("1700x950")
         self.minsize(1200, 800)
+        WindowPlacement.center_window(
+            self,
+            width=1700,
+            height=950,
+            parent=parent.winfo_toplevel()
+        )
 
         self.transient(parent.winfo_toplevel())
         self.lift()
@@ -74,6 +86,10 @@ class PhotoViewer(ctk.CTkToplevel):
         self.resize_after_id = None
         self.image_panel_size = (1, 1)
         self.thumbnail_cache = ThumbnailCache()
+        self.preview_cache = PreviewImageCache(max_items=4)
+        self.prefetch_generation = 0
+        self.last_navigation_started = None
+        self.last_timings = {}
         self.is_video = self._is_video_path(filepath)
 
         self.build_ui()
@@ -406,17 +422,23 @@ class PhotoViewer(ctk.CTkToplevel):
 
     def load_media(self, media_id):
 
+        navigation_started = time.perf_counter()
+        lookup_started = time.perf_counter()
         details = self.review_workflow.media_details(media_id)
+        lookup_seconds = round(time.perf_counter() - lookup_started, 4)
 
         if not details:
             return
 
+        self.last_navigation_started = navigation_started
+        path_started = time.perf_counter()
         self.image_load_token += 1
         self.media_id = int(media_id)
         self.media_details = details
         self.filename = details.get("filename", "")
         self.filepath = details.get("path", "")
         self.is_video = self._is_video_path(self.filepath)
+        path_seconds = round(time.perf_counter() - path_started, 4)
         self.analysis = None
         self.intelligence = None
         self.fire_service_intelligence = None
@@ -437,8 +459,13 @@ class PhotoViewer(ctk.CTkToplevel):
         self.clear_analysis_text()
         self.update_system_player_button()
         self.update_review_progress()
+        self.last_timings = {
+            "database_record_lookup_seconds": lookup_seconds,
+            "image_path_resolution_seconds": path_seconds
+        }
         self.load_source_image_async()
         self.load_analysis()
+        self.prefetch_neighbors()
 
     ##########################################################
 
@@ -474,26 +501,24 @@ class PhotoViewer(ctk.CTkToplevel):
     def load_source_image_worker(self, token):
 
         try:
-            if self.is_video:
-                thumbnail = self.thumbnail_cache.get_thumbnail(
-                    self.filepath
-                )
+            entry = self.preview_cache.get(
+                self.media_id,
+                self.filepath,
+                is_video=self.is_video
+            )
+            image = entry.get("image")
+            error = entry.get("error")
+            timings = dict(entry.get("timings") or {})
+            timings["preview_cache_hit"] = bool(entry.get("cache_hit"))
+            timings["preview_cache_size"] = self.preview_cache.size()
 
-                if thumbnail is None:
-                    image = None
-                else:
-                    image = ImageLoader.load_pil_image(
-                        thumbnail
-                    )
-            else:
-                image = ImageLoader.load_pil_image(
-                    self.filepath
-                )
-            error = None
+            if error:
+                raise error
 
         except Exception as ex:
             image = None
             error = ex
+            timings = {}
 
         try:
             self.after(
@@ -501,7 +526,8 @@ class PhotoViewer(ctk.CTkToplevel):
                 lambda: self.source_image_ready(
                     token,
                     image,
-                    error
+                    error,
+                    timings
                 )
             )
         except Exception:
@@ -509,10 +535,17 @@ class PhotoViewer(ctk.CTkToplevel):
 
     ##########################################################
 
-    def source_image_ready(self, token, image, error):
+    def source_image_ready(self, token, image, error, timings=None):
 
         if token != self.image_load_token:
+            logger.debug(
+                "Ignored stale Photo Viewer image callback media_id=%s token=%s",
+                self.media_id,
+                token
+            )
             return
+
+        timings = dict(timings or {})
 
         if error is not None:
             self.preview.configure(
@@ -525,6 +558,9 @@ class PhotoViewer(ctk.CTkToplevel):
             )
             self.source_image = None
             self.display_image = None
+            self.log_navigation_timings(
+                timings | {"image_error": str(error)}
+            )
             return
 
         if image is None and self.is_video:
@@ -534,10 +570,13 @@ class PhotoViewer(ctk.CTkToplevel):
             )
             self.source_image = None
             self.display_image = None
+            self.log_navigation_timings(timings)
             return
 
         self.source_image = image
         self.redraw_image()
+        self.log_navigation_timings(timings)
+        self.prefetch_neighbors()
 
     ##########################################################
 
@@ -571,20 +610,110 @@ class PhotoViewer(ctk.CTkToplevel):
         if self.source_image is None:
             return
 
+        resize_started = time.perf_counter()
         size = ImageDimensions.fit_size(
             self.source_image.size,
             self.image_panel_size
         )
+        resize_seconds = round(time.perf_counter() - resize_started, 4)
 
+        ctk_started = time.perf_counter()
         self.display_image = ImageLoader.ctk_image_from_pil(
             self.source_image,
             size
         )
+        ctk_seconds = round(time.perf_counter() - ctk_started, 4)
 
+        render_started = time.perf_counter()
         self.preview.configure(
             image=self.display_image,
             text=""
         )
+        render_seconds = round(time.perf_counter() - render_started, 4)
+        self.last_timings.update(
+            {
+                "fit_resize_seconds": resize_seconds,
+                "ctk_image_creation_seconds": ctk_seconds,
+                "gui_render_seconds": render_seconds
+            }
+        )
+
+    ##########################################################
+
+    def prefetch_neighbors(self):
+
+        self.prefetch_generation += 1
+        generation = self.prefetch_generation
+        ids = list(self.review_context.get("ids") or [])
+
+        if not ids:
+            return
+
+        position = self.review_workflow.position_for(
+            ids,
+            self.media_id
+        )
+        neighbor_ids = []
+
+        for offset in (-1, 1, 2):
+            index = position + offset
+
+            if 0 <= index < len(ids):
+                neighbor_ids.append(ids[index])
+
+        for media_id in neighbor_ids[:3]:
+            thread = threading.Thread(
+                target=self.prefetch_worker,
+                args=(generation, media_id),
+                daemon=True
+            )
+            thread.start()
+
+    ##########################################################
+
+    def prefetch_worker(self, generation, media_id):
+
+        if generation != self.prefetch_generation:
+            return
+
+        details_started = time.perf_counter()
+        details = self.review_workflow.media_details(media_id)
+        details_seconds = round(time.perf_counter() - details_started, 4)
+
+        if generation != self.prefetch_generation or not details:
+            return
+
+        self.preview_cache.prefetch(
+            media_id,
+            details.get("path", ""),
+            is_video=self._is_video_path(details.get("path", ""))
+        )
+        logger.debug(
+            "Photo Viewer prefetch media_id=%s details_seconds=%.4f cache_size=%s",
+            media_id,
+            details_seconds,
+            self.preview_cache.size()
+        )
+
+    ##########################################################
+
+    def log_navigation_timings(self, timings):
+
+        merged = dict(self.last_timings)
+        merged.update(timings or {})
+
+        if self.last_navigation_started is not None:
+            merged["navigation_total_seconds"] = round(
+                time.perf_counter() - self.last_navigation_started,
+                4
+            )
+
+        logger.debug(
+            "Photo Viewer timing media_id=%s %s",
+            self.media_id,
+            merged
+        )
+        self.last_timings = merged
 
     ##########################################################
 
@@ -611,7 +740,12 @@ class PhotoViewer(ctk.CTkToplevel):
 
     def load_analysis(self):
 
+        analysis_started = time.perf_counter()
         analysis = self.brain.get_analysis(self.media_id)
+        self.last_timings["analysis_lookup_seconds"] = round(
+            time.perf_counter() - analysis_started,
+            4
+        )
 
         if analysis is None:
             if self.is_video:
@@ -658,8 +792,13 @@ class PhotoViewer(ctk.CTkToplevel):
     def show_analysis(self, analysis):
 
         self.analysis = analysis
+        effective_started = time.perf_counter()
         self.effective_intelligence = self.brain.get_effective_intelligence(
             self.media_id
+        )
+        self.last_timings["effective_intelligence_lookup_seconds"] = round(
+            time.perf_counter() - effective_started,
+            4
         )
         self.intelligence = self.effective_intelligence.get(
             "media_intelligence"
@@ -1251,15 +1390,31 @@ class PhotoViewer(ctk.CTkToplevel):
 
     def approve_analysis(self, force_advance=False):
 
-        self.review.approve(
-            self.media_id,
-            notes="Approved in Photo Viewer"
-        )
-        self.load_analysis()
-        self.after_review_action(
-            "approved",
-            force_advance=force_advance
-        )
+        try:
+            started = time.perf_counter()
+            self.review.approve(
+                self.media_id,
+                notes="Approved in Photo Viewer"
+            )
+            self.last_timings["approval_persistence_seconds"] = round(
+                time.perf_counter() - started,
+                4
+            )
+        except Exception as ex:
+            logger.error(
+                "Photo Viewer approve failed media_id=%s",
+                self.media_id,
+                exc_info=(type(ex), ex, ex.__traceback__)
+            )
+            self.status.configure(text=f"Approve failed: {ex}")
+            return "break"
+
+        should_advance = force_advance or self.auto_advance_var.get()
+
+        if not should_advance:
+            self.load_analysis()
+
+        self.after_review_action("approved", force_advance=force_advance)
 
         return "break"
 
@@ -1267,11 +1422,28 @@ class PhotoViewer(ctk.CTkToplevel):
 
     def reject_analysis(self):
 
-        self.review.reject(
-            self.media_id,
-            notes="Rejected in Photo Viewer"
-        )
-        self.load_analysis()
+        try:
+            started = time.perf_counter()
+            self.review.reject(
+                self.media_id,
+                notes="Rejected in Photo Viewer"
+            )
+            self.last_timings["review_state_update_seconds"] = round(
+                time.perf_counter() - started,
+                4
+            )
+        except Exception as ex:
+            logger.error(
+                "Photo Viewer reject failed media_id=%s",
+                self.media_id,
+                exc_info=(type(ex), ex, ex.__traceback__)
+            )
+            self.status.configure(text=f"Reject failed: {ex}")
+            return "break"
+
+        if not self.auto_advance_var.get():
+            self.load_analysis()
+
         self.after_review_action("rejected")
 
         return "break"
@@ -1983,6 +2155,8 @@ class PhotoViewer(ctk.CTkToplevel):
             self.resize_after_id = None
 
         self.image_load_token += 1
+        self.prefetch_generation += 1
+        self.preview_cache.clear()
         self.source_image = None
         self.display_image = None
 
@@ -2019,8 +2193,13 @@ class CorrectionDialog(ctk.CTkToplevel):
         super().__init__(parent)
 
         self.title(f"Improve Analysis - {filename}")
-        self.geometry("900x760")
         self.transient(parent.winfo_toplevel())
+        WindowPlacement.center_window(
+            self,
+            width=900,
+            height=760,
+            parent=parent
+        )
         self.lift()
 
         self.media_id = media_id

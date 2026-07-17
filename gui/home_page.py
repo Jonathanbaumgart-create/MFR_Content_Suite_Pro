@@ -14,12 +14,15 @@ from services.decision_explainability_service import DecisionExplainabilityServi
 from services.logging_service import LoggingService
 from services.thumbnail_service import ThumbnailService
 from services.time_service import TimeService
+from gui.window_placement import WindowPlacement
 
 
 logger = LoggingService.get_logger("application")
 
 
 class HomePage(ctk.CTkFrame):
+
+    LOAD_TIMEOUT_MS = 30000
 
     def __init__(self, parent):
 
@@ -39,6 +42,9 @@ class HomePage(ctk.CTkFrame):
         self.communications_intelligence_profile = None
         self.brief = None
         self._refresh_after_id = None
+        self._load_timeout_after_id = None
+        self._load_token = 0
+        self.loading_state = "idle"
         self._destroyed = False
 
         self.build_page()
@@ -82,13 +88,13 @@ class HomePage(ctk.CTkFrame):
             sticky="w"
         )
 
-        refresh = ctk.CTkButton(
+        self.refresh_button = ctk.CTkButton(
             header,
             text="Refresh Brief",
             command=self.refresh_brief
         )
 
-        refresh.grid(
+        self.refresh_button.grid(
             row=0,
             column=1,
             sticky="e"
@@ -126,34 +132,53 @@ class HomePage(ctk.CTkFrame):
         if self._destroyed:
             return
 
+        if self.loading_state == "loading":
+            if self.future and not self.future.done():
+                self.future.cancel()
+
         self._refresh_after_id = None
+        self._load_token += 1
+        token = self._load_token
+        self.loading_state = "loading"
+        self.refresh_button.configure(state="disabled")
         self.status.configure(
             text="Preparing today's communication priorities..."
         )
         self.render_loading()
 
         self.future = context.job_manager.submit(
-            self.service.generate
+            self.service.generate_fast,
+            force=True
         )
         self.communications_intelligence_future = None
         self.communications_intelligence_profile = None
 
         logger.info("Communications Officer Morning Brief refresh queued")
-        self.after(150, self.check_brief_future)
+        self._load_timeout_after_id = self.after(
+            self.LOAD_TIMEOUT_MS,
+            lambda value=token: self.loading_timed_out(value)
+        )
+        self.after(150, lambda value=token: self.check_brief_future(value))
 
     ##########################################################
 
-    def check_brief_future(self):
+    def check_brief_future(self, token=None):
 
         if self._destroyed:
+            return
+
+        if token != self._load_token:
             return
 
         if self.future is None:
             return
 
         if not self.future.done():
-            self.after(150, self.check_brief_future)
+            self.after(150, lambda value=token: self.check_brief_future(value))
             return
+
+        self.cancel_load_timeout()
+        self.refresh_button.configure(state="normal")
 
         try:
             self.brief = self.future.result()
@@ -167,15 +192,26 @@ class HomePage(ctk.CTkFrame):
                     ex.__traceback__
                 )
             )
+            self.loading_state = "failed"
             self.status.configure(
                 text=f"Morning Brief error: {ex}"
             )
             self.render_error(str(ex))
             return
 
+        if self.is_empty_brief(self.brief):
+            self.loading_state = "empty"
+            self.status.configure(
+                text="Brief ready, but no reviewed recommendations qualify yet."
+            )
+            self.render_empty()
+            return
+
+        self.loading_state = "loaded"
+        stage = self.brief.get("brief_stage", "complete")
         self.status.configure(
             text=(
-                "Brief ready: " +
+                f"Brief {stage}: " +
                 (
                     TimeService.format_local(
                         self.brief.get("generated_at", "")
@@ -188,6 +224,59 @@ class HomePage(ctk.CTkFrame):
 
     ##########################################################
 
+    def loading_timed_out(self, token):
+
+        if self._destroyed or token != self._load_token:
+            return
+
+        if self.future is not None and self.future.done():
+            return
+
+        if self.brief:
+            self.loading_state = "partial"
+            self.refresh_button.configure(state="normal")
+            self.status.configure(
+                text="Recent activity available; recommendations are still preparing."
+            )
+            self.render_brief()
+            return
+
+        self.loading_state = "timed out"
+        self.refresh_button.configure(state="normal")
+        self.status.configure(
+            text="Morning Brief is taking longer than expected."
+        )
+        self.render_error(
+            "The brief is still preparing in the background. You can keep using the app or retry the refresh."
+        )
+
+    ##########################################################
+
+    def cancel_load_timeout(self):
+
+        if self._load_timeout_after_id is not None:
+            try:
+                self.after_cancel(self._load_timeout_after_id)
+            except Exception:
+                pass
+            self._load_timeout_after_id = None
+
+    ##########################################################
+
+    def is_empty_brief(self, brief):
+
+        if not brief:
+            return True
+
+        return not (
+            brief.get("top_story") or
+            brief.get("top_three_communication_opportunities") or
+            brief.get("editorial_recommendations") or
+            brief.get("recent_mfr_activity")
+        )
+
+    ##########################################################
+
     def render_loading(self):
 
         self.clear_content()
@@ -197,6 +286,26 @@ class HomePage(ctk.CTkFrame):
             text="Preparing proactive recommendations from stored intelligence..."
         )
 
+        label.pack(
+            anchor="w",
+            padx=10,
+            pady=20
+        )
+
+    ##########################################################
+
+    def render_empty(self):
+
+        self.clear_content()
+        label = ctk.CTkLabel(
+            self.content,
+            text=(
+                "No reviewed communication priorities qualify yet. "
+                "Review or approve real analysis, then refresh the brief."
+            ),
+            wraplength=900,
+            justify="left"
+        )
         label.pack(
             anchor="w",
             padx=10,
@@ -222,6 +331,17 @@ class HomePage(ctk.CTkFrame):
             pady=20
         )
 
+        retry = ctk.CTkButton(
+            self.content,
+            text="Retry",
+            command=self.refresh_brief
+        )
+        retry.pack(
+            anchor="w",
+            padx=10,
+            pady=(0, 20)
+        )
+
     ##########################################################
 
     def render_brief(self):
@@ -244,13 +364,18 @@ class HomePage(ctk.CTkFrame):
                 )
             ]
         )
+        self.render_context()
+        self.render_recent_mfr_activity()
         self.render_communication_priorities()
+        self.render_best_operational_opportunities()
         self.render_top_story()
         self.render_secondary_stories()
         self.render_review_queue()
         self.render_new_media()
         self.render_videos_awaiting_review()
         self.render_memory_status()
+        self.render_communications_gaps()
+        self.render_risks_and_limitations()
         self.render_communications_intelligence_status()
         profile = getattr(self.service, "last_metrics", {}).setdefault(
             "profile",
@@ -286,6 +411,68 @@ class HomePage(ctk.CTkFrame):
 
         self.add_section(
             "Today's Communication Priorities",
+            lines
+        )
+
+    ##########################################################
+
+    def render_recent_mfr_activity(self):
+
+        clusters = self.brief.get("recent_mfr_activity", [])
+        lines = []
+
+        for item in clusters[:6]:
+            lines.append(
+                (
+                    f"{item.get('title', '')} - "
+                    f"{item.get('recency_label', '').replace('_', ' ')} - "
+                    f"{item.get('photo_count', 0)} photo(s), "
+                    f"{item.get('video_count', 0)} video(s), "
+                    f"{item.get('reviewed_media_count', 0)} reviewed - "
+                    f"{item.get('confidence', 0)}% confidence."
+                )
+            )
+            evidence = item.get("evidence", [])
+            if evidence:
+                lines.append("  Evidence: " + self.format_list(evidence[:3]))
+
+        if not lines:
+            lines.append("No recent operational activity clusters were found.")
+
+        self.add_section(
+            "Recent MFR Activity",
+            lines
+        )
+
+    ##########################################################
+
+    def render_best_operational_opportunities(self):
+
+        opportunities = self.brief.get("best_communication_opportunities", [])
+        lines = []
+
+        for item in opportunities[:3]:
+            lines.append(
+                (
+                    f"{item.get('title', '')} - "
+                    f"{item.get('suitable_media_count', 0)} suitable media - "
+                    f"{item.get('confidence', 0)}% confidence - "
+                    f"{item.get('repetition_risk', 'unknown')} repetition risk."
+                )
+            )
+            lines.append("  Why now: " + item.get("why_now", ""))
+            if item.get("last_similar_mfr_post"):
+                last = item["last_similar_mfr_post"]
+                lines.append(
+                    "  Last similar MFR post: " +
+                    (TimeService.format_local(last.get("post_date", "")) or last.get("post_date", "") or "Unknown")
+                )
+
+        if not lines:
+            lines.append("No operational communication opportunity is ready yet.")
+
+        self.add_section(
+            "Best Communication Opportunities",
             lines
         )
 
@@ -423,8 +610,8 @@ class HomePage(ctk.CTkFrame):
         package = story.get("media_package", {}) or {}
         window = ctk.CTkToplevel(self)
         window.title("Recommended Media Package")
-        window.geometry("900x640")
         window.transient(self.winfo_toplevel())
+        WindowPlacement.center_window(window, 900, 640, parent=self)
         window.lift()
 
         panel = PackageMediaPanel(
@@ -602,8 +789,8 @@ class HomePage(ctk.CTkFrame):
 
         window = ctk.CTkToplevel(self)
         window.title(asset.get("filename", "Media Preview"))
-        window.geometry("640x520")
         window.transient(self.winfo_toplevel())
+        WindowPlacement.center_window(window, 640, 520, parent=self)
         window.lift()
         panel = PackageMediaPanel(
             window,
@@ -672,8 +859,8 @@ class HomePage(ctk.CTkFrame):
 
         window = ctk.CTkToplevel(self)
         window.title("Communication Package Preview")
-        window.geometry("900x720")
         window.transient(self.winfo_toplevel())
+        WindowPlacement.center_window(window, 900, 720, parent=self)
         window.lift()
 
         visual_panel = PackageMediaPanel(
@@ -843,8 +1030,8 @@ class HomePage(ctk.CTkFrame):
         explanation = explanation or {}
         window = ctk.CTkToplevel(self)
         window.title("Decision Audit")
-        window.geometry("900x720")
         window.transient(self.winfo_toplevel())
+        WindowPlacement.center_window(window, 900, 720, parent=self)
         window.lift()
 
         textbox = ctk.CTkTextbox(
@@ -943,8 +1130,8 @@ class HomePage(ctk.CTkFrame):
 
         window = ctk.CTkToplevel(self)
         window.title("Generated Content Preview")
-        window.geometry("950x760")
         window.transient(self.winfo_toplevel())
+        WindowPlacement.center_window(window, 950, 760, parent=self)
         window.lift()
 
         selected = {"platform": "facebook"}
@@ -1205,6 +1392,36 @@ class HomePage(ctk.CTkFrame):
 
     ##########################################################
 
+    def render_communications_gaps(self):
+
+        gaps = self.brief.get("communications_gaps", [])
+        lines = list(gaps or [])
+
+        if not lines:
+            lines.append("No operational communications gaps were detected.")
+
+        self.add_section(
+            "Communications Gaps",
+            lines[:8]
+        )
+
+    ##########################################################
+
+    def render_risks_and_limitations(self):
+
+        risks = self.brief.get("risks_and_limitations", [])
+        lines = list(risks or [])
+
+        if not lines:
+            lines.append("No major limitations detected for this brief.")
+
+        self.add_section(
+            "Risks and Limitations",
+            lines[:8]
+        )
+
+    ##########################################################
+
     def render_communications_intelligence_status(self):
 
         profile = self.communications_intelligence_profile or {}
@@ -1449,8 +1666,8 @@ class HomePage(ctk.CTkFrame):
 
         window = ctk.CTkToplevel(self)
         window.title(recommendation.get("title", "Recommendation Details"))
-        window.geometry("900x700")
         window.transient(self.winfo_toplevel())
+        WindowPlacement.center_window(window, 900, 700, parent=self)
         window.lift()
 
         frame = ctk.CTkFrame(window)
