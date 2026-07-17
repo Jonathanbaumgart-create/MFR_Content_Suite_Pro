@@ -3990,6 +3990,65 @@ class DatabaseManager:
 
     ############################################################
 
+    def analysis_review_eligible_ids(self, media_ids):
+
+        ids = [
+            self._to_int(media_id)
+            for media_id in media_ids or []
+            if self._to_int(media_id)
+        ]
+
+        if not ids:
+            return []
+
+        placeholders = ",".join("?" for _ in ids)
+        conn = self.connection()
+        cur = conn.cursor()
+        cur.execute(
+            f"""
+            SELECT media.id
+            FROM media
+            JOIN ai_analysis
+            ON ai_analysis.media_id=media.id
+            WHERE media.id IN ({placeholders})
+            AND ai_analysis.provider IS NOT NULL
+            AND ai_analysis.provider!=''
+            AND ai_analysis.provider!='mock'
+            AND (
+                ai_analysis.model IS NULL OR
+                ai_analysis.model NOT LIKE 'mock%'
+            )
+            AND (
+                ai_analysis.failure_reason IS NULL OR
+                ai_analysis.failure_reason=''
+            )
+            AND (
+                ai_analysis.review_status='review_required' OR
+                (
+                    (
+                        ai_analysis.review_status IS NULL OR
+                        ai_analysis.review_status=''
+                    )
+                    AND ai_analysis.trust_state='unreviewed_real'
+                )
+            )
+            """,
+            tuple(ids)
+        )
+        eligible = {
+            row[0]
+            for row in cur.fetchall()
+        }
+        conn.close()
+
+        return [
+            media_id
+            for media_id in ids
+            if media_id in eligible
+        ]
+
+    ############################################################
+
     def record_analysis_review(
         self,
         media_id,

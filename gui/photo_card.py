@@ -37,7 +37,10 @@ class PhotoCard(ctk.CTkFrame):
         duration_seconds=0,
         date_label="",
         filesystem_badge="",
-        selected=False
+        selected=False,
+        open_callback=None,
+        quick_approve_callback=None,
+        quick_reject_callback=None
     ):
 
         super().__init__(
@@ -58,6 +61,9 @@ class PhotoCard(ctk.CTkFrame):
         self.filesystem_badge = filesystem_badge or ""
         self.analysis_status = analysis_status or "Not analyzed"
         self.selection_callback = selection_callback
+        self.open_callback = open_callback
+        self.quick_approve_callback = quick_approve_callback
+        self.quick_reject_callback = quick_reject_callback
         self.thumbnail_service = thumbnail_service
         self.image = None
         self.selected = ctk.BooleanVar(value=bool(selected))
@@ -183,6 +189,42 @@ class PhotoCard(ctk.CTkFrame):
             padx=5,
             pady=(0, 6)
         )
+
+        self.quick_review_row = None
+
+        if self.quick_review_allowed():
+            self.quick_review_row = ctk.CTkFrame(
+                self,
+                fg_color="transparent"
+            )
+            self.quick_review_row.pack(
+                fill="x",
+                padx=8,
+                pady=(0, 6)
+            )
+
+            approve = ctk.CTkButton(
+                self.quick_review_row,
+                text="Approve",
+                width=78,
+                height=24,
+                command=self.quick_approve
+            )
+            approve.pack(
+                side="left",
+                padx=(0, 4)
+            )
+
+            reject = ctk.CTkButton(
+                self.quick_review_row,
+                text="Reject",
+                width=68,
+                height=24,
+                command=self.quick_reject
+            )
+            reject.pack(
+                side="left"
+            )
 
         ##########################################
 
@@ -349,7 +391,31 @@ class PhotoCard(ctk.CTkFrame):
 
     ##########################################################
 
+    def quick_review_allowed(self):
+
+        return self.analysis_status == "Real - Review Required"
+
+    ##########################################################
+
+    def quick_approve(self):
+
+        if self.quick_approve_callback:
+            self.quick_approve_callback(self.media_id)
+
+    ##########################################################
+
+    def quick_reject(self):
+
+        if self.quick_reject_callback:
+            self.quick_reject_callback(self.media_id)
+
+    ##########################################################
+
     def open_viewer(self, event=None):
+
+        if self.open_callback:
+            self.open_callback(self)
+            return "break"
 
         PhotoViewer(
             self,
@@ -376,6 +442,19 @@ class PhotoCard(ctk.CTkFrame):
 
         if notify:
             self.selection_changed()
+
+    ##########################################################
+
+    def set_analysis_status(self, status):
+
+        self.analysis_status = status or self.analysis_status
+        self.status_label.configure(
+            text=self.analysis_status,
+            text_color=self.status_color()
+        )
+
+        if self.quick_review_row is not None and not self.quick_review_allowed():
+            self.quick_review_row.pack_forget()
 
     ##########################################################
 

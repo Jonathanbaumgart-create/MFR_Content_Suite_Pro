@@ -2,9 +2,11 @@ import customtkinter as ctk
 from tkinter import BooleanVar, messagebox
 from collections import deque
 
+import gui.photo_card as photo_card_module
 from gui.photo_card import PhotoCard
 from services.brain_service import BrainService
 from services.gallery_service import GalleryService
+from services.photo_review_workflow_service import PhotoReviewWorkflowService
 from services.thumbnail_service import ThumbnailService
 
 
@@ -20,6 +22,7 @@ class GalleryPage(ctk.CTkFrame):
         super().__init__(parent)
 
         self.service = GalleryService()
+        self.review_workflow = PhotoReviewWorkflowService()
         self.brain = None
 
         self.media = []
@@ -30,6 +33,7 @@ class GalleryPage(ctk.CTkFrame):
         self.visible_media_ids = set()
         self.visible_media_types = {}
         self.cards_by_media_id = {}
+        self.viewer = None
         self.thumbnail_service = ThumbnailService()
         self.loading_cards = False
         self.pending_cards = deque()
@@ -179,6 +183,17 @@ class GalleryPage(ctk.CTkFrame):
         )
 
         analyze_selected.pack(
+            side="left",
+            padx=(0, 10)
+        )
+
+        self.approve_selected_button = ctk.CTkButton(
+            actions,
+            text="Approve Selected",
+            command=self.approve_selected_review_items
+        )
+
+        self.approve_selected_button.pack(
             side="left",
             padx=(0, 10)
         )
@@ -367,7 +382,10 @@ class GalleryPage(ctk.CTkFrame):
                     duration_seconds=duration_seconds,
                     date_label=date_label,
                     filesystem_badge=filesystem_badge,
-                    selected=media_id in self.selected
+                    selected=media_id in self.selected,
+                    open_callback=self.open_card_viewer,
+                    quick_approve_callback=self.quick_approve_media,
+                    quick_reject_callback=self.quick_reject_media
                 )
 
                 self.visible_media_ids.add(media_id)
@@ -418,6 +436,159 @@ class GalleryPage(ctk.CTkFrame):
             self.more.configure(
                 state="normal",
                 text="Load More"
+            )
+
+        self.refresh_selection_controls()
+
+    ########################################################
+
+    def open_card_viewer(self, card):
+
+        context = self.review_workflow.context_from_ids(
+            self.current_context_ids(),
+            card.media_id,
+            label=self.filter_var.get(),
+            review_required_only=self.current_filter() == "review_required"
+        )
+
+        self.viewer = photo_card_module.PhotoViewer(
+            self,
+            card.media_id,
+            card.filename,
+            card.filepath,
+            review_context=context,
+            review_update_callback=self.review_state_changed
+        )
+
+    ########################################################
+
+    def current_context_ids(self):
+
+        ids = [
+            int(media_id)
+            for media_id in self.visible_media_ids
+        ]
+
+        if self.selected:
+            ids = [
+                media_id
+                for media_id in ids
+                if media_id in self.selected
+            ] or list(self.selected)
+
+        return sorted(
+            ids,
+            key=lambda media_id: self.loaded_position(media_id)
+        )
+
+    ########################################################
+
+    def loaded_position(self, media_id):
+
+        for index, child in enumerate(self.scroll.winfo_children()):
+            if isinstance(child, PhotoCard) and child.media_id == media_id:
+                return index
+
+        return 999999
+
+    ########################################################
+
+    def quick_approve_media(self, media_id):
+
+        self.review_workflow.review.approve(
+            media_id,
+            notes="Quick approved from Gallery"
+        )
+        self.review_state_changed(media_id, "approved")
+
+    ########################################################
+
+    def quick_reject_media(self, media_id):
+
+        self.review_workflow.review.reject(
+            media_id,
+            notes="Quick rejected from Gallery"
+        )
+        self.review_state_changed(media_id, "rejected")
+
+    ########################################################
+
+    def approve_selected_review_items(self):
+
+        if not self.selected:
+            self.info.configure(
+                text="No media selected for approval"
+            )
+            return
+
+        preview = self.review_workflow.approve_selected_preview(
+            list(self.selected)
+        )
+
+        if not preview["eligible_count"]:
+            messagebox.showinfo(
+                "Approve Selected",
+                (
+                    f"Selected: {preview['selected_count']:,}\n"
+                    "Eligible review-required items: 0\n"
+                    f"Ineligible skipped: {preview['ineligible_count']:,}"
+                )
+            )
+            return
+
+        if not messagebox.askyesno(
+            "Approve Selected",
+            (
+                "Approve selected review-required media?\n\n"
+                f"Selected: {preview['selected_count']:,}\n"
+                f"Eligible: {preview['eligible_count']:,}\n"
+                f"Ineligible skipped: {preview['ineligible_count']:,}\n\n"
+                "Failed, rejected, corrected, mock, and unanalyzed items "
+                "will not be approved."
+            )
+        ):
+            return
+
+        result = self.review_workflow.approve_selected(
+            list(self.selected),
+            notes="Bulk approved from Gallery"
+        )
+
+        for media_id in result["approved_ids"]:
+            self.review_state_changed(media_id, "approved")
+
+        self.info.configure(
+            text=(
+                f"Approved {result['approved_count']:,}; "
+                f"skipped {result['ineligible_count']:,} ineligible"
+            )
+        )
+
+    ########################################################
+
+    def review_state_changed(self, media_id, review_status):
+
+        status_map = {
+            "approved": "Real - Approved",
+            "corrected": "Real - Corrected",
+            "rejected": "Real - Rejected",
+            "reanalyze_requested": "Real - Review Required"
+        }
+        card = self.cards_by_media_id.get(int(media_id))
+
+        if card is not None:
+            card.set_analysis_status(
+                status_map.get(review_status, card.analysis_status)
+            )
+
+        if self.current_filter() == "review_required" and review_status in (
+            "approved",
+            "corrected",
+            "rejected"
+        ):
+            self.total = max(0, self.total - 1)
+            self.info.configure(
+                text=f"Showing {self.loaded:,} of {self.total:,} media"
             )
 
         self.refresh_selection_controls()

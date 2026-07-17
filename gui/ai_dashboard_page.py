@@ -6,6 +6,7 @@ from services.analysis_review_service import AnalysisReviewService
 from services.provider_diagnostics_service import ProviderDiagnosticsService
 from services.time_service import TimeService
 from services.writing_service import WritingService
+from services.photo_review_workflow_service import PhotoReviewWorkflowService
 from gui.photo_viewer import PhotoViewer
 
 
@@ -17,6 +18,7 @@ class AIDashboardPage(ctk.CTkFrame):
 
         self.brain = BrainService()
         self.review = AnalysisReviewService()
+        self.review_workflow = PhotoReviewWorkflowService()
         self.diagnostics = ProviderDiagnosticsService()
         self.writing = WritingService()
         self.metric_labels = {}
@@ -960,12 +962,32 @@ class AIDashboardPage(ctk.CTkFrame):
 
     def open_review_item(self, item):
 
+        queue = self.review.queue(limit=200)
+        ids = [
+            row["media_id"]
+            for row in queue
+        ]
+        context = self.review_workflow.context_from_ids(
+            ids,
+            item["media_id"],
+            label="AI Dashboard Review Queue",
+            review_required_only=True
+        )
+
         PhotoViewer(
             self,
             item["media_id"],
             item["filename"],
-            item["path"]
+            item["path"],
+            review_context=context,
+            review_update_callback=self.review_item_updated
         )
+
+    ##########################################################
+
+    def review_item_updated(self, media_id, review_status):
+
+        self.refresh_metrics()
 
     ##########################################################
 

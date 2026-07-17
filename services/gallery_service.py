@@ -77,6 +77,12 @@ class GalleryService:
 
     ###########################################################
 
+    def analysis_review_eligible_ids(self, media_ids):
+
+        return context.database.analysis_review_eligible_ids(media_ids)
+
+    ###########################################################
+
     def get_media_by_ids(self, media_ids):
 
         return context.database.get_media_by_ids(media_ids)

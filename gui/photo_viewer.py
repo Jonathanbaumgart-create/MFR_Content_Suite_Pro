@@ -10,12 +10,23 @@ from services.decision_explainability_service import DecisionExplainabilityServi
 from services.editorial_comparison_service import EditorialComparisonService
 from services.human_feedback_service import HumanFeedbackService
 from services.analysis_review_service import AnalysisReviewService
+from services.photo_review_workflow_service import PhotoReviewWorkflowService
 from services.time_service import TimeService
 
 
 class PhotoViewer(ctk.CTkToplevel):
 
-    def __init__(self, parent, media_id, filename, filepath):
+    auto_advance_enabled = True
+
+    def __init__(
+        self,
+        parent,
+        media_id,
+        filename,
+        filepath,
+        review_context=None,
+        review_update_callback=None
+    ):
 
         super().__init__(parent)
 
@@ -38,8 +49,20 @@ class PhotoViewer(ctk.CTkToplevel):
         self.brain = BrainService()
         self.feedback = HumanFeedbackService()
         self.review = AnalysisReviewService()
+        self.review_workflow = PhotoReviewWorkflowService(
+            database=self.brain.db
+        )
         self.editorial = EditorialComparisonService()
         self.explainability = DecisionExplainabilityService()
+        self.review_context = review_context or self.review_workflow.context_from_ids(
+            [media_id],
+            media_id
+        )
+        self.review_update_callback = review_update_callback
+        self.auto_advance_var = ctk.BooleanVar(
+            value=self.__class__.auto_advance_enabled
+        )
+        self.correction_dialog = None
         self.analysis = None
         self.media_details = None
         self.intelligence = None
@@ -57,6 +80,8 @@ class PhotoViewer(ctk.CTkToplevel):
         self.media_details = self.brain.db.get_media_details(media_id)
         self.load_source_image_async()
         self.load_analysis()
+        self.bind_shortcuts()
+        self.update_review_progress()
 
     ##########################################################
 
@@ -81,13 +106,13 @@ class PhotoViewer(ctk.CTkToplevel):
             pady=15
         )
 
-        title = ctk.CTkLabel(
+        self.title_label = ctk.CTkLabel(
             self.image_frame,
             text=self.filename,
             font=("Segoe UI", 22, "bold")
         )
 
-        title.pack(
+        self.title_label.pack(
             anchor="w",
             padx=20,
             pady=(20, 10)
@@ -109,19 +134,18 @@ class PhotoViewer(ctk.CTkToplevel):
             pady=20
         )
 
+        self.system_player_button = ctk.CTkButton(
+            self.image_frame,
+            text="Open Video in System Player",
+            command=self.open_system_player
+        )
+
         if self.is_video:
-            self.system_player_button = ctk.CTkButton(
-                self.image_frame,
-                text="Open Video in System Player",
-                command=self.open_system_player
-            )
             self.system_player_button.pack(
                 anchor="e",
                 padx=20,
                 pady=(0, 12)
             )
-        else:
-            self.system_player_button = None
 
         self.image_frame.bind(
             "<Configure>",
@@ -249,6 +273,57 @@ class PhotoViewer(ctk.CTkToplevel):
             side="left"
         )
 
+        review_tools = ctk.CTkFrame(
+            ai,
+            fg_color="transparent"
+        )
+        review_tools.pack(
+            fill="x",
+            padx=20,
+            pady=(4, 5)
+        )
+
+        self.auto_advance_switch = ctk.CTkSwitch(
+            review_tools,
+            text="Auto Advance: On",
+            variable=self.auto_advance_var,
+            command=self.toggle_auto_advance
+        )
+        self.auto_advance_switch.pack(
+            side="left"
+        )
+        self.toggle_auto_advance()
+
+        self.review_progress = ctk.CTkLabel(
+            ai,
+            text="",
+            justify="left",
+            anchor="w",
+            wraplength=310
+        )
+        self.review_progress.pack(
+            fill="x",
+            padx=20,
+            pady=(2, 6)
+        )
+
+        self.shortcut_help = ctk.CTkLabel(
+            ai,
+            text=(
+                "Shortcuts: Left/Right move, Home/End jump, Esc close, "
+                "A approve, R reject, C correct, N reanalyze, "
+                "Space approve+next"
+            ),
+            justify="left",
+            wraplength=310,
+            text_color="#a8b3c7"
+        )
+        self.shortcut_help.pack(
+            fill="x",
+            padx=20,
+            pady=(0, 6)
+        )
+
         self.content_director_button = ctk.CTkButton(
             ai,
             text="Open in Content Director",
@@ -326,6 +401,73 @@ class PhotoViewer(ctk.CTkToplevel):
             daemon=True
         )
         thread.start()
+
+    ##########################################################
+
+    def load_media(self, media_id):
+
+        details = self.review_workflow.media_details(media_id)
+
+        if not details:
+            return
+
+        self.image_load_token += 1
+        self.media_id = int(media_id)
+        self.media_details = details
+        self.filename = details.get("filename", "")
+        self.filepath = details.get("path", "")
+        self.is_video = self._is_video_path(self.filepath)
+        self.analysis = None
+        self.intelligence = None
+        self.fire_service_intelligence = None
+        self.effective_intelligence = None
+        self.source_image = None
+        self.display_image = None
+
+        self.title(self.filename)
+        self.title_label.configure(text=self.filename)
+        self.preview.configure(
+            image=None,
+            text=(
+                "Loading video preview..."
+                if self.is_video
+                else "Loading image..."
+            )
+        )
+        self.clear_analysis_text()
+        self.update_system_player_button()
+        self.update_review_progress()
+        self.load_source_image_async()
+        self.load_analysis()
+
+    ##########################################################
+
+    def update_system_player_button(self):
+
+        if self.is_video and not self.system_player_button.winfo_ismapped():
+            self.system_player_button.pack(
+                anchor="e",
+                padx=20,
+                pady=(0, 12)
+            )
+        elif not self.is_video and self.system_player_button.winfo_ismapped():
+            self.system_player_button.pack_forget()
+
+    ##########################################################
+
+    def clear_analysis_text(self):
+
+        self.status.configure(
+            text="Status: Loading..."
+        )
+        self.mock_notice.configure(text="")
+        self.facebook_button.configure(state="disabled")
+        self.instagram_button.configure(state="disabled")
+        self.both_button.configure(state="disabled")
+        self.analysis_text.configure(state="normal")
+        self.analysis_text.delete("1.0", "end")
+        self.analysis_text.insert("1.0", "Loading analysis...")
+        self.analysis_text.configure(state="disabled")
 
     ##########################################################
 
@@ -855,6 +997,204 @@ class PhotoViewer(ctk.CTkToplevel):
 
     ##########################################################
 
+    def bind_shortcuts(self):
+
+        bindings = {
+            "<Right>": lambda event: self.navigate_next(),
+            "<Left>": lambda event: self.navigate_previous(),
+            "<Home>": lambda event: self.navigate_first(),
+            "<End>": lambda event: self.navigate_last(),
+            "<Escape>": lambda event: self.destroy(),
+            "<space>": lambda event: self.approve_and_advance_shortcut(),
+            "<Shift-Right>": lambda event: self.approve_and_advance_shortcut(),
+            "<Shift-Left>": lambda event: self.navigate_previous(),
+            "a": lambda event: self.shortcut_approve(),
+            "A": lambda event: self.shortcut_approve(),
+            "c": lambda event: self.shortcut_correct(),
+            "C": lambda event: self.shortcut_correct(),
+            "r": lambda event: self.shortcut_reject(),
+            "R": lambda event: self.shortcut_reject(),
+            "n": lambda event: self.shortcut_reanalyze(),
+            "N": lambda event: self.shortcut_reanalyze()
+        }
+
+        for sequence, command in bindings.items():
+            self.bind(
+                sequence,
+                lambda event, callback=command: self.safe_shortcut(
+                    event,
+                    callback
+                )
+            )
+
+    ##########################################################
+
+    def safe_shortcut(self, event, callback):
+
+        if self.shortcut_blocked():
+            return None
+
+        result = callback(event)
+        return result or "break"
+
+    ##########################################################
+
+    def shortcut_blocked(self):
+
+        if (
+            self.correction_dialog is not None and
+            self.correction_dialog.winfo_exists()
+        ):
+            return True
+
+        focus = self.focus_get()
+
+        if focus is None:
+            return False
+
+        name = focus.winfo_class().lower()
+
+        return any(
+            token in name
+            for token in (
+                "entry",
+                "textbox",
+                "text",
+                "spinbox",
+                "combobox"
+            )
+        )
+
+    ##########################################################
+
+    def navigate_next(self):
+
+        media_id = self.review_workflow.next_id(
+            self.review_context,
+            self.media_id,
+            skip_removed=False
+        )
+        return self.navigate_to_media(media_id)
+
+    ##########################################################
+
+    def navigate_previous(self):
+
+        media_id = self.review_workflow.previous_id(
+            self.review_context,
+            self.media_id
+        )
+        return self.navigate_to_media(media_id)
+
+    ##########################################################
+
+    def navigate_first(self):
+
+        return self.navigate_to_media(
+            self.review_workflow.first_id(self.review_context)
+        )
+
+    ##########################################################
+
+    def navigate_last(self):
+
+        return self.navigate_to_media(
+            self.review_workflow.last_id(self.review_context)
+        )
+
+    ##########################################################
+
+    def navigate_to_media(self, media_id):
+
+        if not media_id or int(media_id) == int(self.media_id):
+            return "break"
+
+        self.review_context["current_media_id"] = int(media_id)
+        self.review_context["position"] = self.review_workflow.position_for(
+            self.review_context.get("ids", []),
+            media_id
+        )
+        self.load_media(media_id)
+
+        return "break"
+
+    ##########################################################
+
+    def toggle_auto_advance(self):
+
+        self.__class__.auto_advance_enabled = bool(
+            self.auto_advance_var.get()
+        )
+        self.auto_advance_switch.configure(
+            text=(
+                "Auto Advance: On"
+                if self.auto_advance_var.get()
+                else "Auto Advance: Off"
+            )
+        )
+
+    ##########################################################
+
+    def update_review_progress(self):
+
+        ids = list(self.review_context.get("ids") or [])
+        total = len(ids)
+        position = (
+            self.review_workflow.position_for(ids, self.media_id) + 1
+            if total
+            else 0
+        )
+        counts = self.review_context.get("session_counts") or {}
+        completed = (
+            int(counts.get("approved", 0)) +
+            int(counts.get("corrected", 0)) +
+            int(counts.get("rejected", 0))
+        )
+        remaining = max(0, total - completed)
+
+        self.review_progress.configure(
+            text=(
+                f"Reviewing {position:,} of {total:,}\n"
+                f"Approved: {counts.get('approved', 0):,}   "
+                f"Corrected: {counts.get('corrected', 0):,}   "
+                f"Rejected: {counts.get('rejected', 0):,}\n"
+                f"Remaining: {remaining:,}"
+            )
+        )
+
+    ##########################################################
+
+    def shortcut_approve(self):
+
+        return self.approve_analysis()
+
+    ##########################################################
+
+    def approve_and_advance_shortcut(self):
+
+        return self.approve_analysis(force_advance=True)
+
+    ##########################################################
+
+    def shortcut_correct(self):
+
+        self.open_correction_dialog()
+        return "break"
+
+    ##########################################################
+
+    def shortcut_reject(self):
+
+        return self.reject_analysis()
+
+    ##########################################################
+
+    def shortcut_reanalyze(self):
+
+        return self.request_reanalysis()
+
+    ##########################################################
+
     def open_system_player(self):
 
         try:
@@ -876,24 +1216,52 @@ class PhotoViewer(ctk.CTkToplevel):
 
     def open_correction_dialog(self):
 
-        CorrectionDialog(
+        self.correction_dialog = CorrectionDialog(
             self,
             self.media_id,
             self.filename,
             self.feedback,
-            on_saved=self.load_analysis,
+            on_saved=self.correction_saved,
             open_media_callback=self.open_suggested_media
+        )
+        self.correction_dialog.protocol(
+            "WM_DELETE_WINDOW",
+            self.correction_dialog_closed
         )
 
     ##########################################################
 
-    def approve_analysis(self):
+    def correction_dialog_closed(self):
+
+        if self.correction_dialog is not None:
+            self.correction_dialog.destroy()
+
+        self.correction_dialog = None
+
+    ##########################################################
+
+    def correction_saved(self, saved=0):
+
+        self.load_analysis()
+
+        if saved:
+            self.after_review_action("corrected")
+
+    ##########################################################
+
+    def approve_analysis(self, force_advance=False):
 
         self.review.approve(
             self.media_id,
             notes="Approved in Photo Viewer"
         )
         self.load_analysis()
+        self.after_review_action(
+            "approved",
+            force_advance=force_advance
+        )
+
+        return "break"
 
     ##########################################################
 
@@ -904,16 +1272,88 @@ class PhotoViewer(ctk.CTkToplevel):
             notes="Rejected in Photo Viewer"
         )
         self.load_analysis()
+        self.after_review_action("rejected")
+
+        return "break"
 
     ##########################################################
 
     def request_reanalysis(self):
 
+        current_id = self.media_id
+
         self.review.request_reanalysis(
-            self.media_id,
+            current_id,
             notes="Reanalysis requested in Photo Viewer"
         )
-        self.analyze_photo()
+        self.brain.analyze_selected(
+            [current_id],
+            force=True,
+            progress_callback=self.analysis_progress
+        )
+        self.after_review_action("reanalyzed")
+
+        return "break"
+
+    ##########################################################
+
+    def after_review_action(self, action, force_advance=False):
+
+        current_id = self.media_id
+        next_id = None
+
+        if force_advance or self.auto_advance_var.get():
+            ids = list(self.review_context.get("ids") or [])
+            current_position = self.review_workflow.position_for(
+                ids,
+                current_id
+            )
+            next_position = current_position + 1
+
+            if next_position < len(ids):
+                next_id = ids[next_position]
+
+        count_key = {
+            "approved": "approved",
+            "corrected": "corrected",
+            "rejected": "rejected",
+            "reanalyzed": "reanalyzed"
+        }.get(action)
+
+        if count_key:
+            self.review_workflow.record_session_action(
+                self.review_context,
+                count_key
+            )
+
+        if self.review_update_callback:
+            self.review_update_callback(
+                current_id,
+                (
+                    "reanalyze_requested"
+                    if action == "reanalyzed"
+                    else action
+                )
+            )
+
+        if action in ("approved", "corrected", "rejected"):
+            self.review_workflow.remove_reviewed_from_queue(
+                self.review_context,
+                current_id
+            )
+
+        self.update_review_progress()
+
+        if force_advance or self.auto_advance_var.get():
+            if next_id is None and not self.review_context.get("review_required_only"):
+                next_id = self.review_workflow.next_id(
+                    self.review_context,
+                    current_id,
+                    skip_removed=True
+                )
+
+            if next_id:
+                self.navigate_to_media(next_id)
 
     ##########################################################
 
@@ -1816,7 +2256,7 @@ class CorrectionDialog(ctk.CTkToplevel):
         )
 
         if self.on_saved:
-            self.on_saved()
+            self.on_saved(saved)
 
     ##########################################################
 
@@ -1842,7 +2282,7 @@ class CorrectionDialog(ctk.CTkToplevel):
         )
 
         if self.on_saved:
-            self.on_saved()
+            self.on_saved(0)
 
     ##########################################################
 
