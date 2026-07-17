@@ -4,6 +4,7 @@ import time as perf_time
 
 from core.app_context import context
 from services.cache_invalidation_service import CacheInvalidationService
+from services.communications_learning_service import CommunicationsLearningService
 from services.communications_memory_service import CommunicationsMemoryService
 from services.editorial_recommendation_service import EditorialRecommendationService
 from services.knowledge_service import KnowledgeService
@@ -49,6 +50,7 @@ class CommunicationsOfficerService:
         self.media_packages = MediaPackageService(
             database=self.db
         )
+        self.learning = CommunicationsLearningService(database=self.db)
         self.last_metrics = {}
         self._brief_cache = None
 
@@ -226,6 +228,7 @@ class CommunicationsOfficerService:
                 []
             ),
             "communications_memory_status": memory_status,
+            "communications_learning": self._learning_brief(),
             "recommended_media_package": top_story.get("media_package", {}),
             "recommended_videos": self._recommended_videos(
                 top_story.get("media_package", {})
@@ -252,7 +255,8 @@ class CommunicationsOfficerService:
                 "Media Priority",
                 "Human Review trust states",
                 "Reviewed Media Intelligence",
-                "Video Intelligence"
+                "Video Intelligence",
+                "MFR historical performance learning"
             ],
             "confidence_limitations": self._brief_limitations(
                 opportunities,
@@ -687,6 +691,48 @@ class CommunicationsOfficerService:
                 "recommendation_history_count",
                 0
             )
+        }
+
+    ############################################################
+
+    def _learning_brief(self):
+
+        try:
+            summary = self.learning.dashboard()
+        except Exception as ex:
+            logger.warning(
+                "Communications learning summary unavailable: %s",
+                ex
+            )
+            return {
+                "available": False,
+                "sample_count": 0,
+                "learning_confidence": 0,
+                "limitations": [
+                    "No communications performance learning is available yet."
+                ]
+            }
+
+        return {
+            "available": bool(summary.get("sample_count", 0)),
+            "sample_count": summary.get("sample_count", 0),
+            "learning_confidence": summary.get("learning_confidence", 0),
+            "recent_successful_formats": summary.get(
+                "recent_successful_formats",
+                []
+            )[:5],
+            "topics_cooling_down": summary.get("topics_cooling_down", [])[:5],
+            "topics_trending": summary.get("topics_trending", [])[:5],
+            "campaign_opportunities": summary.get("campaign_health", {}),
+            "reel_opportunities": summary.get("reel_performance", {}),
+            "media_performance_summary": summary.get("media_performance", {}),
+            "historical_comparisons": {
+                "baseline_engagement_score": summary.get(
+                    "baseline_engagement_score",
+                    0
+                )
+            },
+            "limitations": summary.get("learning_limitations", [])
         }
 
     ############################################################

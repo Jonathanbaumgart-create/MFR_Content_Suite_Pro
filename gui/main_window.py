@@ -3,6 +3,7 @@ import customtkinter as ctk
 from core.app_context import context
 from gui.ai_dashboard_page import AIDashboardPage
 from gui.benchmark_library_page import BenchmarkLibraryPage
+from gui.communications_learning_page import CommunicationsLearningPage
 from gui.communications_memory_page import CommunicationsMemoryPage
 from gui.content_director_page import ContentDirectorPage
 from gui.dashboard_page import DashboardPage
@@ -108,6 +109,8 @@ class MainWindow(ctk.CTk):
             ("Content Director", self.show_content_director),
 
             ("Comm Memory", self.show_communications_memory),
+
+            ("Learning", self.show_communications_learning),
 
             ("Benchmarks", self.show_benchmarks),
 
@@ -299,6 +302,24 @@ class MainWindow(ctk.CTk):
         self.clear_page()
 
         self.current_page = CommunicationsMemoryPage(
+            self.workspace
+        )
+
+        self.current_page.grid(
+            row=0,
+            column=0,
+            sticky="nsew",
+            padx=25,
+            pady=25
+        )
+
+    ##########################################################
+
+    def show_communications_learning(self):
+
+        self.clear_page()
+
+        self.current_page = CommunicationsLearningPage(
             self.workspace
         )
 

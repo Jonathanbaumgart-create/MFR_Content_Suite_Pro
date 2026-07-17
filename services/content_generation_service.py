@@ -429,6 +429,9 @@ class ContentGenerationService:
                 }
                 for item in package.get("benchmark_inspiration", [])[:3]
             ],
+            "performance_prediction": dict(
+                package.get("performance_prediction") or {}
+            ),
             "department_voice_match": {
                 platform: self.communications_intelligence.voice_match(
                     output.get("copy_text", ""),

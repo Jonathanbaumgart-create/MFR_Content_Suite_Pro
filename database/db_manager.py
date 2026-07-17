@@ -15,6 +15,11 @@ from database.benchmark_schema import (
     create_benchmark_tables
 )
 from database.communication_repository import CommunicationRepository
+from database.communication_learning_repository import CommunicationLearningRepository
+from database.communication_learning_schema import (
+    communication_learning_indexes,
+    create_communication_learning_tables
+)
 from database.communication_schema import (
     communication_indexes,
     create_communication_tables
@@ -36,6 +41,7 @@ class DatabaseManager:
         self._analysis_queue_repo = None
         self._benchmark_repo = None
         self._communication_repo = None
+        self._communication_learning_repo = None
 
         self.initialize()
 
@@ -1330,6 +1336,7 @@ class DatabaseManager:
         create_analysis_queue_tables(cur)
         create_communication_tables(cur)
         create_benchmark_tables(cur)
+        create_communication_learning_tables(cur)
 
         ########################################################
         # Content Templates
@@ -10022,6 +10029,66 @@ class DatabaseManager:
 
     ############################################################
 
+    def _communication_learning_repository(self):
+
+        if self._communication_learning_repo is None:
+            self._communication_learning_repo = CommunicationLearningRepository(self)
+
+        return self._communication_learning_repo
+
+    ############################################################
+
+    def create_communication_learning_import_run(self, item):
+
+        return self._communication_learning_repository().create_import_run(item)
+
+    def update_communication_learning_import_run(self, import_run_id, item):
+
+        return self._communication_learning_repository().update_import_run(
+            import_run_id,
+            item
+        )
+
+    def save_communication_learning_record(self, record):
+
+        return self._communication_learning_repository().save_record(record)
+
+    def communication_learning_records(self, filters=None, limit=500):
+
+        return self._communication_learning_repository().records(
+            filters=filters,
+            limit=limit
+        )
+
+    def save_communication_learning_profile(self, item):
+
+        return self._communication_learning_repository().save_profile(item)
+
+    def save_communication_learning_summary(self, item):
+
+        return self._communication_learning_repository().save_summary(item)
+
+    def latest_communication_learning_summary(self):
+
+        return self._communication_learning_repository().latest_summary()
+
+    def review_communication_learning_record(self, learning_id, updates):
+
+        return self._communication_learning_repository().review_record(
+            learning_id,
+            updates
+        )
+
+    def save_communication_experiment(self, item):
+
+        return self._communication_learning_repository().save_experiment(item)
+
+    def communication_experiments(self, limit=25):
+
+        return self._communication_learning_repository().experiments(limit)
+
+    ############################################################
+
     def save_benchmark_department(self, item):
 
         return self._benchmark_repository().save_department(item)
@@ -11879,7 +11946,7 @@ class DatabaseManager:
             "CREATE INDEX IF NOT EXISTS idx_comm_edit_learning_created ON communication_edit_learning(created_at)",
             "CREATE INDEX IF NOT EXISTS idx_hashtags_tag ON hashtags(tag)",
             "CREATE INDEX IF NOT EXISTS idx_hashtags_use_count ON hashtags(use_count)",
-        ) + analysis_queue_indexes() + communication_indexes() + benchmark_indexes()
+        ) + analysis_queue_indexes() + communication_indexes() + benchmark_indexes() + communication_learning_indexes()
 
         for statement in indexes:
             cur.execute(statement)

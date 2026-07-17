@@ -2,6 +2,7 @@ import time
 
 from core.app_context import context
 from services.benchmark_communications_service import BenchmarkCommunicationsService
+from services.communications_learning_service import CommunicationsLearningService
 from services.decision_explainability_service import DecisionExplainabilityService
 from services.human_feedback_service import HumanFeedbackService
 from services.logging_service import LoggingService
@@ -89,6 +90,7 @@ class CommunicationPackageService:
             feedback_service=self.feedback
         )
         self.benchmarks = BenchmarkCommunicationsService(database=self.db)
+        self.learning = CommunicationsLearningService(database=self.db)
         self.last_metrics = {}
 
     ############################################################
@@ -177,6 +179,7 @@ class CommunicationPackageService:
             "benchmark_inspiration": self._benchmark_inspiration(
                 recommendation
             ),
+            "performance_prediction": {},
             "platform_media_guidance": media_package.get(
                 "platform_media_guidance",
                 {}
@@ -207,6 +210,9 @@ class CommunicationPackageService:
             package,
             recommendation=recommendation,
             persist=False
+        )
+        package["performance_prediction"] = self.learning.performance_prediction(
+            package
         )
 
         self.last_metrics = {
