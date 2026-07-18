@@ -13,6 +13,7 @@ from services.media_priority_service import MediaPriorityService
 from services.media_package_service import MediaPackageService
 from services.current_context_service import CurrentContextService
 from services.operational_activity_service import OperationalActivityService
+from services.seasonal_communications_service import SeasonalCommunicationsService
 from services.time_service import TimeService
 
 
@@ -59,6 +60,7 @@ class CommunicationsOfficerService:
             memory_service=self.memory,
             context_service=self.context_service
         )
+        self.seasonal = SeasonalCommunicationsService(database=self.db)
         self.last_metrics = {}
         self._brief_cache = None
 
@@ -161,7 +163,8 @@ class CommunicationsOfficerService:
             memory_status = self._memory_status(metrics)
             self._attach_historical_evidence(
                 operational_opportunities,
-                activity_clusters
+                activity_clusters,
+                local_now
             )
             profile["stage2_memory_seconds"] = round(
                 perf_time.perf_counter() - step,
@@ -447,6 +450,11 @@ class CommunicationsOfficerService:
             )
             profile["operational_activity_clusters"] = len(activity_clusters)
             profile["operational_opportunities"] = len(operational_opportunities)
+            self._attach_historical_evidence(
+                operational_opportunities,
+                activity_clusters,
+                local_now
+            )
 
             step = perf_time.perf_counter()
             editorial_recommendations = self.editorial.generate_recommendations(
@@ -752,6 +760,7 @@ class CommunicationsOfficerService:
             "confidence": opportunity.get("confidence", 0),
             "estimated_audience": ["Morden residents", "MFR followers"],
             "recommended_platforms": opportunity.get("recommended_platforms", []),
+            "next_action_options": self._next_action_options(opportunity),
             "recommended_posting_window": "Today",
             "media_package": package,
             "why_today_matters": opportunity.get("why_now", ""),
@@ -761,6 +770,11 @@ class CommunicationsOfficerService:
             "negative_factors": opportunity.get("negative_factors", []),
             "confidence_limitations": opportunity.get("confidence_limitations", []),
             "source_signals": opportunity.get("source_signals", []),
+            "year_over_year_signal": opportunity.get("year_over_year_signal", {}),
+            "historical_timing_signal": opportunity.get(
+                "historical_timing_signal",
+                ""
+            ),
             "trust_level": trust,
             "trust_label": opportunity.get("trust_label") or self._trust_label(trust),
             "trust_summary": (
@@ -784,6 +798,43 @@ class CommunicationsOfficerService:
             "repetition_risk": opportunity.get("repetition_risk", ""),
             "suitable_media_count": opportunity.get("suitable_media_count", 0)
         }
+
+    ############################################################
+
+    def _next_action_options(self, opportunity):
+
+        title = str(opportunity.get("title", "")).lower()
+        if "recruit" in title or "volunteer" in title:
+            labels = [
+                "Direct recruitment appeal",
+                "Training and skills story",
+                "Community-service impact"
+            ]
+        elif "smoke" in title and "alarm" in title:
+            labels = [
+                "Household checklist",
+                "Fire-prevention campaign refresh",
+                "Test-and-replace explainer"
+            ]
+        elif "smoke" in title or "air quality" in title:
+            labels = [
+                "General smoke-safety reminder",
+                "Air-quality checklist",
+                "Historical wording refresh"
+            ]
+        elif "water" in title:
+            labels = [
+                "Direct water-safety reminder",
+                "Historical campaign refresh",
+                "Water rescue education"
+            ]
+        else:
+            labels = [
+                "Direct safety reminder",
+                "Historical campaign refresh",
+                "Community-oriented story"
+            ]
+        return labels[:3]
 
     ############################################################
 
@@ -1382,7 +1433,12 @@ class CommunicationsOfficerService:
 
     ############################################################
 
-    def _attach_historical_evidence(self, opportunities, activity_clusters):
+    def _attach_historical_evidence(
+        self,
+        opportunities,
+        activity_clusters,
+        local_now=None
+    ):
 
         clusters_by_id = {
             cluster.get("activity_id"): cluster
@@ -1402,6 +1458,22 @@ class CommunicationsOfficerService:
             opportunity["last_similar_mfr_post"] = (
                 historical[0] if historical else {}
             )
+            signal = self.seasonal.opportunity_signal(
+                opportunity,
+                current_date=local_now,
+                limit=3
+            )
+            opportunity["year_over_year_signal"] = signal
+            opportunity["historical_timing_signal"] = signal.get("summary", "")
+            if signal.get("summary"):
+                source_signals = list(opportunity.get("source_signals") or [])
+                source_signals.append(
+                    "Year-over-year Communications Memory: " +
+                    signal["summary"]
+                )
+                opportunity["source_signals"] = self._unique(source_signals)[:10]
+            if signal.get("communications_gap_risk"):
+                opportunity["repetition_risk"] = signal["communications_gap_risk"]
 
     ############################################################
 

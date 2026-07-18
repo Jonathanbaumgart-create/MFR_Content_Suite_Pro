@@ -117,6 +117,50 @@ def media_dates_by_name(db, filename):
     return row
 
 
+class FakeVideoVisionService:
+
+    def provider_key(self):
+
+        return "fake_video"
+
+    def model_name(self):
+
+        return "fake-video-local"
+
+    def provider_capabilities(self):
+
+        return {
+            "supports_images": True,
+            "supports_video_frames": True,
+            "supports_multi_image_prompt": False,
+            "recommended_frame_count": 2,
+            "timeout": 1,
+            "maximum_resolution": 640,
+            "production_approved": True,
+            "cpu_safe": True,
+            "gpu_dependent": False
+        }
+
+
+class FakeVideoAIService:
+
+    def analyze_image(self, image_path, vision_provider, prompt_context=""):
+
+        return {
+            "description": "Training video frame with apparatus and firefighters visible.",
+            "people_count": 2,
+            "people": ["firefighters"],
+            "apparatus": ["engine"],
+            "equipment": ["training hose"],
+            "activities": ["training"],
+            "setting": "training ground",
+            "visible_text": [],
+            "uncertain_observations": [],
+            "confidence": 0.72,
+            "parse_status": "ok"
+        }
+
+
 def main():
 
     original_cwd = os.getcwd()
@@ -255,7 +299,11 @@ def main():
             assert thumb is not None and thumb.exists(), thumb
             assert cache.get_thumbnail(media_dir / "corrupt_video.avi") is None
 
-            brain = BrainService(database=db)
+            brain = BrainService(
+                database=db,
+                ai_service=FakeVideoAIService(),
+                vision_service=FakeVideoVisionService()
+            )
             analysis = brain._analyze_video_and_save(
                 video_id,
                 str(media_dir / "training_video.avi")

@@ -1,4 +1,5 @@
 import json
+import re
 import tempfile
 import time
 from dataclasses import asdict, dataclass, field
@@ -94,7 +95,24 @@ class VideoIntelligenceService:
         "command",
         "utility",
         "brush truck",
-        "ambulance"
+        "ambulance",
+        "police vehicle",
+        "emergency vehicle"
+    }
+    VIDEO_ACTIVITY_STOP_TERMS = {
+        "unknown",
+        "none",
+        "video_metadata",
+        "video metadata",
+        "metadata",
+        "landscape",
+        "landscape orientation",
+        "portrait",
+        "portrait orientation",
+        "short_form_video",
+        "short form video",
+        "unknown people",
+        "video"
     }
 
     def __init__(
@@ -156,7 +174,7 @@ class VideoIntelligenceService:
         frames = self._read_sampled_frames(video_path, timestamps)
         observations = []
 
-        if analyze_frames and self.vision and self.vision.provider_key() != "mock":
+        if analyze_frames and self._provider_supports_video_frames():
             observations = self._analyze_frames(
                 frames[:self._max_analyzed_frames()],
                 media_id
@@ -507,7 +525,12 @@ class VideoIntelligenceService:
                 ("uncertain_observations", "uncertain")
             ):
                 for value in self._list(observation.get(key)):
-                    self._add_term(values[target], value)
+                    if target == "activities":
+                        self._add_activity_term(values[target], value)
+                    elif target in ("apparatus", "equipment", "people"):
+                        self._add_entity_term(values[target], value, target)
+                    else:
+                        self._add_term(values[target], value)
 
             self._add_term(values["settings"], observation.get("setting"))
             self._add_term(values["all"], observation.get("description"))
@@ -523,7 +546,7 @@ class VideoIntelligenceService:
             "apparatus_name"
         ):
             self._add_term(values["all"], filesystem.get(key))
-            self._add_term(values["activities"], filesystem.get(key))
+            self._add_activity_term(values["activities"], filesystem.get(key))
 
         for key in (
             "normalized_scene",
@@ -532,7 +555,7 @@ class VideoIntelligenceService:
             "search_text"
         ):
             self._add_term(values["all"], effective.get(key))
-            self._add_term(values["activities"], effective.get(key))
+            self._add_activity_term(values["activities"], effective.get(key))
 
         for key, target in (
             ("apparatus_tags", "apparatus"),
@@ -543,18 +566,29 @@ class VideoIntelligenceService:
             ("recommended_uses", "activities")
         ):
             for value in self._list(effective.get(key)):
-                self._add_term(values[target], value)
+                if target == "activities":
+                    self._add_activity_term(values[target], value)
+                else:
+                    self._add_entity_term(values[target], value, target)
 
         for collection in ("apparatus", "equipment", "activities", "settings", "all"):
             for value in list(values[collection]):
                 lower = value.lower()
                 if any(term in lower for term in self.PPE_TERMS):
-                    values["ppe"].add(value)
+                    self._add_entity_term(values["ppe"], value, "ppe")
                 if any(term in lower for term in self.EQUIPMENT_TERMS):
-                    values["equipment"].add(value)
+                    self._add_entity_term(values["equipment"], value, "equipment")
                 if any(term in lower for term in self.APPARATUS_TERMS):
-                    values["apparatus"].add(value)
+                    self._add_entity_term(values["apparatus"], value, "apparatus")
                 values["all"].add(value)
+
+        values["activities"] = set(self._activity_candidates(values))
+        for key in ("apparatus", "equipment", "ppe", "people"):
+            values[key] = {
+                self._clean_entity_term(value, key)
+                for value in values[key]
+            }
+            values[key] = {value for value in values[key] if value}
 
         return values
 
@@ -649,15 +683,25 @@ class VideoIntelligenceService:
         if story_category != "Unknown":
             return story_category.lower().replace(" ", "_")
 
-        for value in sorted(values["activities"]):
-            if value and value != "unknown":
+        for value in self._activity_candidates(values):
+            if value not in ("manual video review", "reel candidate", "archive candidate"):
                 return value
 
-        return "unknown"
+        if values["apparatus"]:
+            return "apparatus visibility"
+
+        if values["equipment"]:
+            return "equipment visibility"
+
+        if values["people"]:
+            return "people visible"
+
+        candidates = self._activity_candidates(values)
+        return candidates[0] if candidates else "manual video review"
 
     def _secondary_activity(self, values, primary):
 
-        for value in sorted(values["activities"]):
+        for value in self._activity_candidates(values):
             if value and value != primary:
                 return value
 
@@ -925,7 +969,7 @@ class VideoIntelligenceService:
 
     def _max_analyzed_frames(self):
 
-        return max(
+        configured = max(
             0,
             int(
                 self.config.get(
@@ -933,6 +977,30 @@ class VideoIntelligenceService:
                     self.DEFAULT_MAX_ANALYZED_FRAMES
                 )
             )
+        )
+
+        if self.vision and hasattr(self.vision, "provider_capabilities"):
+            capabilities = self.vision.provider_capabilities()
+            recommended = int(
+                capabilities.get("recommended_frame_count", configured) or configured
+            )
+            return max(0, min(configured, recommended))
+
+        return configured
+
+    def _provider_supports_video_frames(self):
+
+        if not self.vision:
+            return False
+
+        if not hasattr(self.vision, "provider_capabilities"):
+            return self.vision.provider_key() != "mock"
+
+        capabilities = self.vision.provider_capabilities()
+        return bool(
+            capabilities.get("supports_images")
+            and capabilities.get("supports_video_frames")
+            and capabilities.get("production_approved")
         )
 
     def _position_label(self, timestamp, timestamps):
@@ -980,10 +1048,38 @@ class VideoIntelligenceService:
             return []
 
         if isinstance(value, list):
-            return value
+            flattened = []
+            for item in value:
+                flattened.extend(self._list(item))
+            return flattened
 
         if isinstance(value, tuple):
-            return list(value)
+            return self._list(list(value))
+
+        if isinstance(value, dict):
+            values = []
+            for key in (
+                "type",
+                "name",
+                "label",
+                "activity",
+                "description",
+                "text",
+                "value"
+            ):
+                values.extend(self._list(value.get(key)))
+
+            for key in (
+                "lights",
+                "details",
+                "equipment",
+                "apparatus",
+                "ppe",
+                "activities"
+            ):
+                values.extend(self._list(value.get(key)))
+
+            return values
 
         if isinstance(value, str):
             text = value.strip()
@@ -993,7 +1089,9 @@ class VideoIntelligenceService:
             try:
                 decoded = json.loads(text)
                 if isinstance(decoded, list):
-                    return decoded
+                    return self._list(decoded)
+                if isinstance(decoded, dict):
+                    return self._list(decoded)
             except Exception:
                 pass
 
@@ -1011,6 +1109,144 @@ class VideoIntelligenceService:
             text = str(item or "").strip()
             if text:
                 target.add(text)
+
+    def _add_entity_term(self, target, value, kind):
+
+        for item in self._list(value):
+            text = self._clean_entity_term(item, kind)
+            if text:
+                target.add(text)
+
+    def _add_activity_term(self, target, value):
+
+        for item in self._list(value):
+            text = self._clean_activity(item)
+            if text:
+                target.add(text)
+
+    def _activity_candidates(self, values):
+
+        candidates = []
+        seen = set()
+
+        for value in sorted(values["activities"]):
+            text = self._clean_activity(value)
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            candidates.append(text)
+
+        return candidates
+
+    def _clean_entity_term(self, value, kind):
+
+        text = str(value or "").strip()
+        if not text:
+            return ""
+
+        lower = " ".join(text.lower().replace("_", " ").split())
+
+        if any(marker in text for marker in ("{", "}", "[", "]", "\"", "'")):
+            extracted = []
+            for key in ("type", "name", "label", "description", "text"):
+                extracted.extend(
+                    re.findall(
+                        rf"[\"']{key}[\"']\s*:\s*[\"']([^\"']+)[\"']",
+                        text,
+                        flags=re.IGNORECASE
+                    )
+                )
+            for candidate in extracted:
+                cleaned = self._clean_entity_term(candidate, kind)
+                if cleaned:
+                    return cleaned
+            return ""
+
+        if kind == "apparatus":
+            if "police" in lower and "vehicle" in lower:
+                return "police vehicle"
+            if "emergency vehicle" in lower:
+                return "emergency vehicle"
+            if "ambulance" in lower:
+                return "ambulance"
+            for term in self.APPARATUS_TERMS:
+                if term in lower:
+                    return term
+
+        if kind == "equipment":
+            if "pedestrian crossing" in lower or "traffic signal" in lower:
+                return "traffic control"
+            for term in self.EQUIPMENT_TERMS:
+                if term in lower:
+                    return term
+
+        if kind == "ppe":
+            for term in self.PPE_TERMS:
+                if term in lower:
+                    return term
+
+        if kind == "people":
+            if "person" in lower or "people" in lower:
+                return "people visible"
+            if "firefighter" in lower:
+                return "firefighter"
+
+        if len(lower) <= 48 and len(lower.split()) <= 5:
+            return lower
+
+        return ""
+
+    def _clean_activity(self, value):
+
+        text = str(value or "").strip()
+        if not text:
+            return ""
+
+        text = text.replace("_", " ")
+        lower = " ".join(text.lower().split())
+
+        if lower in self.VIDEO_ACTIVITY_STOP_TERMS:
+            return ""
+
+        if re.match(r"^\d+\s*x\s*\d+", lower):
+            return ""
+
+        if "no temporal activity is inferred" in lower:
+            return ""
+
+        if "video media stored" in lower:
+            return ""
+
+        if "{" in lower or "}" in lower or "[" in lower or "]" in lower:
+            return ""
+
+        mapped = (
+            ("emergency response", "emergency response"),
+            ("public education", "public education"),
+            ("fire prevention", "fire prevention"),
+            ("community event", "community event"),
+            ("community", "community event"),
+            ("recruit", "recruitment"),
+            ("training", "training"),
+            ("incident", "incident response"),
+            ("operation", "operations"),
+            ("apparatus", "apparatus visibility"),
+            ("equipment", "equipment visibility"),
+            ("manual footage review", "manual video review"),
+            ("requires review", "manual video review"),
+            ("candidate for reel", "reel candidate"),
+            ("archive", "archive candidate")
+        )
+
+        for token, label in mapped:
+            if token in lower:
+                return label
+
+        words = lower.split()
+        if len(words) <= 5 and len(lower) <= 48:
+            return lower
+
+        return ""
 
     def _score(self, value):
 

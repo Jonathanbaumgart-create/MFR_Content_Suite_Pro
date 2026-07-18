@@ -1968,6 +1968,7 @@ class DatabaseManager:
             ai_analysis.model,
 
             ai_analysis.failure_reason,
+            ai_analysis.failure_category,
 
             ai_analysis.trust_state,
 
@@ -2079,6 +2080,12 @@ class DatabaseManager:
 
         if queue_state == "Analyzing":
             return "Analyzing"
+
+        if (
+            row["media_type"] == "video"
+            and row["failure_category"] == "unsupported_provider"
+        ):
+            return "Unsupported Provider"
 
         if row["failure_reason"]:
             return "Failed"
@@ -10426,6 +10433,14 @@ class DatabaseManager:
     def effective_communication_memory(self, limit=500):
 
         return self._communication_repository().effective_communication_memory(limit)
+
+    def effective_communication_memory_between(self, start_date, end_date, limit=250):
+
+        return self._communication_repository().effective_communication_memory_between(
+            start_date,
+            end_date,
+            limit
+        )
 
     def communication_memory_topic_summary(self, limit=50):
 

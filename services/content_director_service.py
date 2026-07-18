@@ -3,6 +3,7 @@ from datetime import datetime
 from core.app_context import context
 from services.knowledge_service import KnowledgeService
 from services.logging_service import LoggingService
+from services.seasonal_communications_service import SeasonalCommunicationsService
 
 
 logger = LoggingService.get_logger("content")
@@ -209,6 +210,9 @@ class ContentDirectorService:
         self.knowledge = KnowledgeService(
             database=self.db
         )
+        self.seasonal = SeasonalCommunicationsService(
+            database=self.db
+        )
         self.graph = None
 
     ############################################################
@@ -307,10 +311,16 @@ class ContentDirectorService:
             len(recommendations[:limit])
         )
 
+        seasonal = self.seasonal.around_this_time(
+            topic=prompt or " ".join(opportunities),
+            limit=5
+        )
+
         return {
             "prompt": prompt,
             "opportunity_types": opportunities,
-            "recommendations": recommendations[:limit]
+            "recommendations": recommendations[:limit],
+            "around_this_time": seasonal
         }
 
     ############################################################

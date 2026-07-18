@@ -405,6 +405,16 @@ class HomePage(ctk.CTkFrame):
                     f"{item.get('why_today_matters', '')}"
                 )
             )
+            signal = item.get("year_over_year_signal") or {}
+            if signal.get("summary"):
+                lines.append(
+                    "  Around this time: " + signal.get("summary", "")
+                )
+            if signal.get("communications_gap_risk"):
+                lines.append(
+                    "  Timing risk: " +
+                    signal.get("communications_gap_risk", "")
+                )
 
         if not lines:
             lines.append("No reviewed communication priority is ready yet.")
@@ -467,6 +477,11 @@ class HomePage(ctk.CTkFrame):
                     "  Last similar MFR post: " +
                     (TimeService.format_local(last.get("post_date", "")) or last.get("post_date", "") or "Unknown")
                 )
+            signal = item.get("year_over_year_signal") or {}
+            if signal.get("summary"):
+                lines.append(
+                    "  Around this time: " + signal.get("summary", "")
+                )
 
         if not lines:
             lines.append("No operational communication opportunity is ready yet.")
@@ -487,11 +502,22 @@ class HomePage(ctk.CTkFrame):
         lines = [
             story.get("summary", ""),
             "Why today: " + story.get("why_today_matters", ""),
+            (
+                "Around this time: " +
+                (story.get("year_over_year_signal", {}) or {}).get(
+                    "summary",
+                    "No same-period historical signal."
+                )
+            ),
             "Why the public would care: " + story.get("why_public_would_care", ""),
             "Why it should outperform: " + story.get("why_it_should_outperform", ""),
             "Trust: " + story.get("trust_label", "Trust state unknown"),
             story.get("trust_summary", ""),
             "Platforms: " + self.format_list(story.get("recommended_platforms", [])),
+            (
+                "Next action options: " +
+                self.format_list(story.get("next_action_options", []))
+            ),
             "Estimated audience: " + self.format_list(story.get("estimated_audience", [])),
             (
                 "Best photo: " +

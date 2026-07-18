@@ -3,9 +3,11 @@ from tkinter import BooleanVar, messagebox
 from collections import deque
 
 import gui.photo_card as photo_card_module
+from gui.gallery_analysis_inspector import GalleryAnalysisInspector
 from gui.photo_card import PhotoCard
 from services.brain_service import BrainService
 from services.gallery_service import GalleryService
+from services.gallery_analysis_inspector_service import GalleryAnalysisInspectorService
 from services.photo_review_workflow_service import PhotoReviewWorkflowService
 from services.thumbnail_service import ThumbnailService
 
@@ -16,6 +18,9 @@ class GalleryPage(ctk.CTkFrame):
     CARD_RENDER_CHUNK = 4
     CARD_RENDER_DELAY_MS = 50
     MAX_SELECTION_IDS = 10000
+    ACTIVE_QUEUE_POLL_MS = 1000
+    IDLE_QUEUE_POLL_MS = 4000
+    session_panel_collapsed = False
 
     def __init__(self, parent):
 
@@ -33,9 +38,17 @@ class GalleryPage(ctk.CTkFrame):
         self.visible_media_ids = set()
         self.visible_media_types = {}
         self.cards_by_media_id = {}
+        self.selected_inspector_media_id = None
         self.viewer = None
         self.thumbnail_service = ThumbnailService()
+        self.inspector_service = GalleryAnalysisInspectorService()
         self.loading_cards = False
+        self._destroyed = False
+        self._queue_poll_after_id = None
+        self._queue_poll_token = 0
+        self.queue_summary = {}
+        self.selected_eligible_count = 0
+        self.session_panel_collapsed = self.__class__.session_panel_collapsed
         self.pending_cards = deque()
         self.filter_var = ctk.StringVar(value="All Media")
         self.sort_var = ctk.StringVar(value="Added Date: Newest First")
@@ -293,13 +306,44 @@ class GalleryPage(ctk.CTkFrame):
             side="left"
         )
 
-        self.scroll = ctk.CTkScrollableFrame(self)
+        self.build_analysis_status_panel()
 
-        self.scroll.pack(
+        self.content = ctk.CTkFrame(
+            self,
+            fg_color="transparent"
+        )
+
+        self.content.pack(
             fill="both",
             expand=True,
             padx=20,
             pady=20
+        )
+        self.content.grid_columnconfigure(0, weight=1)
+        self.content.grid_columnconfigure(1, weight=0)
+        self.content.grid_rowconfigure(0, weight=1)
+
+        self.scroll = ctk.CTkScrollableFrame(self.content)
+
+        self.scroll.grid(
+            row=0,
+            column=0,
+            sticky="nsew",
+            padx=(0, 12)
+        )
+
+        self.inspector = GalleryAnalysisInspector(
+            self.content,
+            service=self.inspector_service,
+            next_callback=self.select_next_inspector_item,
+            previous_callback=self.select_previous_inspector_item,
+            review_callback=self.review_state_changed,
+            reanalyze_callback=self.reanalyze_media_from_inspector
+        )
+        self.inspector.grid(
+            row=0,
+            column=1,
+            sticky="ns"
         )
 
         self.more = ctk.CTkButton(
@@ -316,6 +360,404 @@ class GalleryPage(ctk.CTkFrame):
         self.refresh_selection_controls()
 
         self.load_more()
+        self.refresh_queue_summary()
+        self.start_queue_polling()
+
+    ########################################################
+
+    def build_analysis_status_panel(self):
+
+        self.analysis_panel = ctk.CTkFrame(
+            self,
+            fg_color="#20242b",
+            corner_radius=8
+        )
+        self.analysis_panel.pack(
+            fill="x",
+            padx=20,
+            pady=(10, 0)
+        )
+        self.analysis_panel.grid_columnconfigure(0, weight=1)
+
+        header = ctk.CTkFrame(
+            self.analysis_panel,
+            fg_color="transparent"
+        )
+        header.grid(
+            row=0,
+            column=0,
+            sticky="ew",
+            padx=10,
+            pady=(8, 4)
+        )
+        header.grid_columnconfigure(0, weight=1)
+
+        self.queue_title = ctk.CTkLabel(
+            header,
+            text="Analysis Queue",
+            font=("Segoe UI", 15, "bold"),
+            anchor="w"
+        )
+        self.queue_title.grid(
+            row=0,
+            column=0,
+            sticky="w"
+        )
+
+        self.session_toggle_button = ctk.CTkButton(
+            header,
+            text="Session Details",
+            width=130,
+            height=28,
+            command=self.toggle_session_panel
+        )
+        self.session_toggle_button.grid(
+            row=0,
+            column=1,
+            padx=(8, 0)
+        )
+
+        self.queue_summary_label = ctk.CTkLabel(
+            self.analysis_panel,
+            text="Selected: 0 | Queue idle",
+            anchor="w",
+            justify="left",
+            wraplength=900
+        )
+        self.queue_summary_label.grid(
+            row=1,
+            column=0,
+            sticky="ew",
+            padx=10,
+            pady=(0, 4)
+        )
+
+        self.queue_detail_label = ctk.CTkLabel(
+            self.analysis_panel,
+            text="Estimated time unavailable",
+            anchor="w",
+            justify="left",
+            wraplength=900,
+            font=("Segoe UI", 11)
+        )
+        self.queue_detail_label.grid(
+            row=2,
+            column=0,
+            sticky="ew",
+            padx=10,
+            pady=(0, 6)
+        )
+
+        controls = ctk.CTkFrame(
+            self.analysis_panel,
+            fg_color="transparent"
+        )
+        controls.grid(
+            row=3,
+            column=0,
+            sticky="ew",
+            padx=10,
+            pady=(0, 8)
+        )
+
+        self.pause_resume_button = ctk.CTkButton(
+            controls,
+            text="Pause Queue",
+            width=120,
+            command=self.pause_or_resume_queue
+        )
+        self.pause_resume_button.pack(
+            side="left",
+            padx=(0, 8)
+        )
+
+        self.cancel_queue_button = ctk.CTkButton(
+            controls,
+            text="Cancel Queue",
+            width=120,
+            fg_color="#7a3434",
+            hover_color="#963f3f",
+            command=self.cancel_queue
+        )
+        self.cancel_queue_button.pack(
+            side="left",
+            padx=(0, 8)
+        )
+
+        self.retry_failed_button = ctk.CTkButton(
+            controls,
+            text="Retry Failed",
+            width=120,
+            command=self.retry_failed_queue
+        )
+        self.retry_failed_button.pack(
+            side="left",
+            padx=(0, 8)
+        )
+
+        self.open_ai_dashboard_button = ctk.CTkButton(
+            controls,
+            text="Open AI Dashboard",
+            width=150,
+            command=self.open_ai_dashboard
+        )
+        self.open_ai_dashboard_button.pack(
+            side="left"
+        )
+
+        self.session_panel = ctk.CTkFrame(
+            self.analysis_panel,
+            fg_color="#171a20",
+            corner_radius=8
+        )
+        self.session_panel.grid(
+            row=4,
+            column=0,
+            sticky="ew",
+            padx=10,
+            pady=(0, 10)
+        )
+
+        self.session_detail_label = ctk.CTkLabel(
+            self.session_panel,
+            text="No current analysis session.",
+            anchor="w",
+            justify="left",
+            wraplength=900,
+            font=("Segoe UI", 11)
+        )
+        self.session_detail_label.pack(
+            fill="x",
+            padx=10,
+            pady=8
+        )
+
+        self.apply_session_panel_state()
+
+    ########################################################
+
+    def refresh_queue_summary(self):
+
+        if self._destroyed:
+            return
+
+        try:
+            summary = self.service.analysis_queue_summary()
+        except Exception as ex:
+            self.queue_summary_label.configure(
+                text=f"Analysis Queue: status unavailable ({ex})"
+            )
+            return
+
+        self.queue_summary = summary
+        selected_count = len(self.selected)
+        eligible_count = self.selected_eligible_count
+        provider = summary.get("provider") or self.brain_service().vision.provider_key()
+        model = summary.get("model") or self.brain_service().vision.model_name()
+        total = int(summary.get("total") or 0)
+        completed = int(summary.get("completed") or 0)
+        failed = int(summary.get("failed") or 0)
+        cancelled = int(summary.get("cancelled") or 0)
+        queued = int(summary.get("queued") or 0)
+        running = int(summary.get("running") or 0)
+        progress = int(summary.get("progress_percent") or 0)
+        current = summary.get("current_filename") or "No active media"
+
+        if total:
+            headline = (
+                f"Selected: {selected_count:,} | Eligible: {eligible_count:,} | "
+                f"{completed:,} of {total:,} complete | Progress: {progress}%"
+            )
+        else:
+            headline = (
+                f"Selected: {selected_count:,} | Eligible: {eligible_count:,} | "
+                "Queue idle"
+            )
+
+        self.queue_summary_label.configure(text=headline)
+        self.queue_detail_label.configure(
+            text=(
+                f"Running: {running:,} | Queued: {queued:,} | "
+                f"Failed: {failed:,} | Cancelled: {cancelled:,} | "
+                f"Current: {current} | Provider: {provider} | Model: {model} | "
+                f"Elapsed: {summary.get('elapsed', '0s')} | "
+                f"{summary.get('eta', 'Estimated time unavailable')}"
+            )
+        )
+        self.session_detail_label.configure(
+            text=(
+                f"Status: {summary.get('status', 'Idle')}\n"
+                f"Session: {summary.get('session_id', '') or 'None'} | "
+                f"Created: {summary.get('created_at', '') or 'Unknown'}\n"
+                f"Total: {total:,} | Completed: {completed:,} | "
+                f"Failed: {failed:,} | Remaining: {summary.get('remaining', 0):,}\n"
+                f"Active workers: {running:,} | Worker status: "
+                f"{summary.get('worker_status', '') or 'Idle'} | "
+                f"Resume count: {summary.get('resume_count', 0)}"
+            )
+        )
+        self.pause_resume_button.configure(
+            text=(
+                "Resume Queue"
+                if summary.get("status") == "Paused"
+                else "Pause Queue"
+            )
+        )
+
+    ########################################################
+
+    def refresh_visible_analysis_statuses(self):
+
+        if self._destroyed or not self.visible_media_ids:
+            return
+
+        try:
+            statuses = self.service.analysis_media_statuses(
+                list(self.visible_media_ids)
+            )
+        except Exception:
+            return
+
+        selected_status_changed = False
+        for media_id, status in statuses.items():
+            card = self.cards_by_media_id.get(int(media_id))
+            if not card:
+                continue
+            if status and card.analysis_status != status:
+                card.set_analysis_status(status)
+                if int(media_id) == int(self.selected_inspector_media_id or 0):
+                    selected_status_changed = True
+
+        if selected_status_changed:
+            card = self.cards_by_media_id.get(
+                int(self.selected_inspector_media_id or 0)
+            )
+            if card:
+                self.inspector.inspect_media(
+                    card.media_id,
+                    card.filename,
+                    card.filepath,
+                    media_type=card.media_type
+                )
+
+    ########################################################
+
+    def start_queue_polling(self):
+
+        self._queue_poll_token += 1
+        self.schedule_queue_poll(active=False)
+
+    def schedule_queue_poll(self, active=False):
+
+        if self._destroyed:
+            return
+
+        delay = self.ACTIVE_QUEUE_POLL_MS if active else self.IDLE_QUEUE_POLL_MS
+        token = self._queue_poll_token
+        self._queue_poll_after_id = self.after(
+            delay,
+            lambda: self.poll_analysis_queue(token)
+        )
+
+    def poll_analysis_queue(self, token):
+
+        if self._destroyed or token != self._queue_poll_token:
+            return
+
+        self.refresh_queue_summary()
+        self.refresh_visible_analysis_statuses()
+        active = bool(
+            self.queue_summary.get("queued")
+            or self.queue_summary.get("running")
+            or self.queue_summary.get("status") in (
+                "Queued",
+                "Running",
+                "Recoverable",
+                "Interrupted"
+            )
+        )
+        self.schedule_queue_poll(active=active)
+
+    ########################################################
+
+    def current_eligible_selection_count(self):
+
+        if not self.selected:
+            return 0
+
+        try:
+            preview = self.service.analysis_selection_preview(
+                list(self.selected),
+                force=bool(self.force_reanalysis_var.get()),
+                retry_failed=bool(self.retry_failed_var.get())
+            )
+            return len(preview.get("queueable_ids", []))
+        except Exception:
+            return 0
+
+    def update_selected_eligible_count(self):
+
+        self.selected_eligible_count = self.current_eligible_selection_count()
+        return self.selected_eligible_count
+
+    ########################################################
+
+    def toggle_session_panel(self):
+
+        self.session_panel_collapsed = not self.session_panel_collapsed
+        self.__class__.session_panel_collapsed = self.session_panel_collapsed
+        self.apply_session_panel_state()
+
+    def apply_session_panel_state(self):
+
+        if self.session_panel_collapsed:
+            self.session_panel.grid_remove()
+            self.session_toggle_button.configure(text="Show Session")
+        else:
+            self.session_panel.grid()
+            self.session_toggle_button.configure(text="Hide Session")
+
+    ########################################################
+
+    def pause_or_resume_queue(self):
+
+        summary = self.queue_summary or {}
+        brain = self.brain_service()
+        if summary.get("status") == "Paused":
+            brain.resume_queue()
+            self.info.configure(text="Analysis queue resumed")
+        else:
+            brain.pause_queue()
+            self.info.configure(text="Analysis queue paused")
+        self.refresh_queue_summary()
+
+    def cancel_queue(self):
+
+        if not messagebox.askyesno(
+            "Cancel Queue",
+            "Cancel queued analysis items? Running work may finish or fail safely."
+        ):
+            return
+
+        canceled = self.brain_service().cancel_queued_jobs()
+        self.info.configure(text=f"Cancelled {canceled:,} queued item(s)")
+        self.refresh_queue_summary()
+        self.refresh_visible_analysis_statuses()
+
+    def retry_failed_queue(self):
+
+        handle = self.brain_service().retry_failed_analysis(
+            progress_callback=self.analysis_progress
+        )
+        self.info.configure(text=f"Retrying {len(handle):,} failed item(s)")
+        self.refresh_queue_summary()
+        self.start_queue_polling()
+
+    def open_ai_dashboard(self):
+
+        root = self.winfo_toplevel()
+        if hasattr(root, "show_ai_dashboard"):
+            root.show_ai_dashboard()
 
     ########################################################
 
@@ -384,6 +826,7 @@ class GalleryPage(ctk.CTkFrame):
                     filesystem_badge=filesystem_badge,
                     selected=media_id in self.selected,
                     open_callback=self.open_card_viewer,
+                    inspect_callback=self.inspect_card,
                     quick_approve_callback=self.quick_approve_media,
                     quick_reject_callback=self.quick_reject_media
                 )
@@ -439,6 +882,8 @@ class GalleryPage(ctk.CTkFrame):
             )
 
         self.refresh_selection_controls()
+        self.refresh_visible_analysis_statuses()
+        self.refresh_queue_summary()
 
     ########################################################
 
@@ -459,6 +904,105 @@ class GalleryPage(ctk.CTkFrame):
             review_context=context,
             review_update_callback=self.review_state_changed
         )
+
+    ########################################################
+
+    def inspect_card(self, card):
+
+        self.selected_inspector_media_id = int(card.media_id)
+        self.inspector.inspect_media(
+            card.media_id,
+            card.filename,
+            card.filepath,
+            media_type=card.media_type
+        )
+        self.highlight_inspected_card()
+
+    ########################################################
+
+    def highlight_inspected_card(self):
+
+        for media_id, card in self.cards_by_media_id.items():
+            if int(media_id) == int(self.selected_inspector_media_id or 0):
+                card.configure(border_width=2, border_color="#4ea1ff")
+            else:
+                card.configure(border_width=0)
+
+    ########################################################
+
+    def select_next_inspector_item(self):
+
+        next_id = self.next_context_media_id()
+        if next_id:
+            self.select_inspector_media(next_id)
+
+    ########################################################
+
+    def select_previous_inspector_item(self):
+
+        previous_id = self.previous_context_media_id()
+        if previous_id:
+            self.select_inspector_media(previous_id)
+
+    ########################################################
+
+    def next_context_media_id(self):
+
+        ids = self.current_context_ids()
+        if not ids:
+            return None
+
+        try:
+            position = ids.index(int(self.selected_inspector_media_id))
+        except Exception:
+            return ids[0]
+
+        for candidate in ids[position + 1:]:
+            if self.current_filter() == "review_required":
+                card = self.cards_by_media_id.get(candidate)
+                if card and card.analysis_status != "Real - Review Required":
+                    continue
+            return candidate
+
+        return None
+
+    ########################################################
+
+    def previous_context_media_id(self):
+
+        ids = self.current_context_ids()
+        if not ids:
+            return None
+
+        try:
+            position = ids.index(int(self.selected_inspector_media_id))
+        except Exception:
+            return ids[-1]
+
+        if position <= 0:
+            return None
+
+        return ids[position - 1]
+
+    ########################################################
+
+    def select_inspector_media(self, media_id):
+
+        card = self.cards_by_media_id.get(int(media_id))
+
+        if card is None:
+            return
+
+        self.inspect_card(card)
+
+    ########################################################
+
+    def reanalyze_media_from_inspector(self, media_id):
+
+        card = self.cards_by_media_id.get(int(media_id))
+
+        if card is not None:
+            card.set_analysis_status("Queued")
 
     ########################################################
 
@@ -592,6 +1136,8 @@ class GalleryPage(ctk.CTkFrame):
             )
 
         self.refresh_selection_controls()
+        self.highlight_inspected_card()
+        self.refresh_queue_summary()
 
     ########################################################
 
@@ -606,6 +1152,13 @@ class GalleryPage(ctk.CTkFrame):
             text=f"Selected: {len(self.selected):,}"
         )
         self.refresh_visible_selection_state()
+        self.update_selected_eligible_count()
+        self.refresh_queue_summary()
+
+        if selected:
+            card = self.cards_by_media_id.get(int(media_id))
+            if card:
+                self.inspect_card(card)
 
     ########################################################
 
@@ -634,6 +1187,7 @@ class GalleryPage(ctk.CTkFrame):
 
         self.loaded = 0
         self.selected.clear()
+        self.selected_inspector_media_id = None
         self.visible_media_ids.clear()
         self.visible_media_types.clear()
         self.cards_by_media_id.clear()
@@ -648,6 +1202,7 @@ class GalleryPage(ctk.CTkFrame):
         self.selected_label.configure(
             text="Selected: 0"
         )
+        self.update_selected_eligible_count()
         self.refresh_selection_controls()
         self.more.configure(
             state="normal",
@@ -668,6 +1223,7 @@ class GalleryPage(ctk.CTkFrame):
         self.selected.clear()
         self.refresh_visible_selection_state()
         self.update_selected_label()
+        self.refresh_queue_summary()
 
     ########################################################
 
@@ -676,6 +1232,7 @@ class GalleryPage(ctk.CTkFrame):
         self.selected.update(self.visible_media_ids)
         self.refresh_visible_selection_state()
         self.update_selected_label()
+        self.refresh_queue_summary()
 
     ########################################################
 
@@ -685,6 +1242,7 @@ class GalleryPage(ctk.CTkFrame):
         self.selected.update(ids)
         self.refresh_visible_selection_state()
         self.update_selected_label()
+        self.refresh_queue_summary()
 
     ########################################################
 
@@ -694,6 +1252,7 @@ class GalleryPage(ctk.CTkFrame):
         self.selected.update(ids)
         self.refresh_visible_selection_state()
         self.update_selected_label()
+        self.refresh_queue_summary()
 
     ########################################################
 
@@ -703,6 +1262,7 @@ class GalleryPage(ctk.CTkFrame):
         self.selected.update(ids)
         self.refresh_visible_selection_state()
         self.update_selected_label()
+        self.refresh_queue_summary()
 
     ########################################################
 
@@ -720,6 +1280,7 @@ class GalleryPage(ctk.CTkFrame):
 
         self.refresh_visible_selection_state()
         self.update_selected_label()
+        self.refresh_queue_summary()
 
     ########################################################
 
@@ -749,6 +1310,8 @@ class GalleryPage(ctk.CTkFrame):
         self.selected_label.configure(
             text=f"Selected: {len(self.selected):,}"
         )
+        self.update_selected_eligible_count()
+        self.refresh_queue_summary()
 
     ########################################################
 
@@ -834,9 +1397,20 @@ class GalleryPage(ctk.CTkFrame):
             progress_callback=self.analysis_progress
         )
 
+        for media_id in queueable:
+            card = self.cards_by_media_id.get(int(media_id))
+            if card is not None:
+                card.set_analysis_status("Queued")
+
         self.info.configure(
-            text=f"Queued {len(queueable):,} selected media for analysis"
+            text=(
+                f"Queued {len(queueable):,} selected media for analysis. "
+                "Selection preserved."
+            )
         )
+        self.refresh_queue_summary()
+        self.refresh_visible_analysis_statuses()
+        self.start_queue_polling()
 
     ########################################################
 
@@ -886,14 +1460,31 @@ class GalleryPage(ctk.CTkFrame):
 
         self.after(
             0,
-            lambda: self.info.configure(
-                text=text
-            )
+            lambda: self.analysis_progress_update(text)
         )
 
     ########################################################
 
+    def analysis_progress_update(self, text):
+
+        if self._destroyed:
+            return
+
+        self.info.configure(text=text)
+        self.refresh_queue_summary()
+        self.refresh_visible_analysis_statuses()
+
+    ########################################################
+
     def destroy(self):
+
+        self._destroyed = True
+        self._queue_poll_token += 1
+        if self._queue_poll_after_id:
+            try:
+                self.after_cancel(self._queue_poll_after_id)
+            except Exception:
+                pass
 
         if hasattr(self, "thumbnail_service"):
             self.thumbnail_service.shutdown()

@@ -40,6 +40,7 @@ class PhotoCard(ctk.CTkFrame):
         filesystem_badge="",
         selected=False,
         open_callback=None,
+        inspect_callback=None,
         quick_approve_callback=None,
         quick_reject_callback=None
     ):
@@ -63,6 +64,7 @@ class PhotoCard(ctk.CTkFrame):
         self.analysis_status = analysis_status or "Not analyzed"
         self.selection_callback = selection_callback
         self.open_callback = open_callback
+        self.inspect_callback = inspect_callback
         self.quick_approve_callback = quick_approve_callback
         self.quick_reject_callback = quick_reject_callback
         self.thumbnail_service = thumbnail_service
@@ -294,17 +296,29 @@ class PhotoCard(ctk.CTkFrame):
                 "<Double-Button-1>",
                 self.open_viewer
             )
+            widget.bind(
+                "<Button-1>",
+                self.inspect
+            )
 
         if self.video_label is not None:
             self.video_label.bind(
                 "<Double-Button-1>",
                 self.open_viewer
             )
+            self.video_label.bind(
+                "<Button-1>",
+                self.inspect
+            )
 
         if self.filesystem_label is not None:
             self.filesystem_label.bind(
                 "<Double-Button-1>",
                 self.open_viewer
+            )
+            self.filesystem_label.bind(
+                "<Button-1>",
+                self.inspect
             )
 
         if self.thumbnail_service:
@@ -385,6 +399,9 @@ class PhotoCard(ctk.CTkFrame):
 
         colors = {
             "Analyzing": "#f6c453",
+            "Extracting Frames": "#f6c453",
+            "Analyzing Frames": "#f6c453",
+            "Summarizing": "#f6c453",
             "Queued": "#9fb7ff",
             "Interrupted": "#ffcf7a",
             "Analyzed": "#7bd88f",
@@ -396,6 +413,8 @@ class PhotoCard(ctk.CTkFrame):
             "Effective Intelligence": "#7bd88f",
             "Human Corrected": "#c9a8ff",
             "Failed": "#ff8a8a",
+            "Unsupported Provider": "#ff8a8a",
+            "Cancelled": "#ffcf7a",
             "Mock": "#ffcf7a",
             "Mock/Test Data": "#ffcf7a",
             "Not analyzed": "#a8a8a8"
@@ -483,6 +502,15 @@ class PhotoCard(ctk.CTkFrame):
             self.filename,
             self.filepath
         )
+
+    ##########################################################
+
+    def inspect(self, event=None):
+
+        if self.inspect_callback:
+            self.inspect_callback(self)
+
+        return None
 
     ##########################################################
 

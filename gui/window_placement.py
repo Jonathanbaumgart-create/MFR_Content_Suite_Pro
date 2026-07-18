@@ -34,10 +34,20 @@ class WindowPlacement:
             y = min(max(0, y), max(0, work_height - height))
             geometry = f"{width}x{height}+{x}+{y}"
             try:
+                window.update()
+            except Exception:
+                pass
+            try:
                 window.wm_geometry(geometry)
             except Exception:
                 window.geometry(geometry)
             window.update_idletasks()
+            current_width, current_height = WindowPlacement._geometry_size(window)
+            if current_width != width or current_height != height:
+                try:
+                    window.update()
+                except Exception:
+                    pass
         except Exception:
             if width and height:
                 window.geometry(f"{int(width)}x{int(height)}")

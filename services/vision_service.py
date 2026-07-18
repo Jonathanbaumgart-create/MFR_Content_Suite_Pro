@@ -48,6 +48,24 @@ class VisionProvider(ABC):
 
         return self.settings.get("model", "unknown")
 
+    def capabilities(self):
+
+        return {
+            "supports_images": True,
+            "supports_video_frames": False,
+            "supports_multi_image_prompt": False,
+            "cpu_safe": bool(self.settings.get("cpu_safe", False)),
+            "gpu_dependent": bool(self.settings.get("gpu_dependent", False)),
+            "recommended_frame_count": int(
+                self.settings.get("recommended_frame_count", 1) or 1
+            ),
+            "timeout": self.settings.get("timeout"),
+            "maximum_resolution": self.settings.get("analysis_max_dimension"),
+            "production_approved": bool(
+                self.settings.get("production_approved", False)
+            )
+        }
+
 
 class OllamaVisionProvider(VisionProvider):
 
@@ -332,12 +350,55 @@ No Markdown fences. No introductory text.
   "safety_concerns": [],
   "public_use_risks": [],
   "uncertain_observations": [],
-  "confidence": 0.0
+                "confidence": 0.0
 }
 """).strip()
 
+    def capabilities(self):
+
+        data = super().capabilities()
+        data.update(
+            {
+                "supports_images": True,
+                "supports_video_frames": bool(
+                    self.settings.get("supports_video_frames", True)
+                ),
+                "supports_multi_image_prompt": bool(
+                    self.settings.get("supports_multi_image_prompt", False)
+                ),
+                "recommended_frame_count": int(
+                    self.settings.get("recommended_frame_count", 3) or 3
+                ),
+                "maximum_resolution": self.settings.get(
+                    "analysis_max_dimension",
+                    1536
+                ),
+                "production_approved": bool(
+                    self.settings.get("production_approved", True)
+                )
+            }
+        )
+        return data
+
 
 class MockVisionProvider(VisionProvider):
+
+    def capabilities(self):
+
+        data = super().capabilities()
+        data.update(
+            {
+                "supports_images": True,
+                "supports_video_frames": False,
+                "supports_multi_image_prompt": False,
+                "cpu_safe": True,
+                "gpu_dependent": False,
+                "recommended_frame_count": 0,
+                "maximum_resolution": 0,
+                "production_approved": False
+            }
+        )
+        return data
 
     def analyze(self, image_path: str, prompt_context: str = "") -> str:
         model = self.model_name()
@@ -477,6 +538,17 @@ class VisionService:
             self._provider_key,
             {}
         )
+
+    def provider_capabilities(self):
+
+        if hasattr(self._provider, "capabilities"):
+            capabilities = self._provider.capabilities()
+        else:
+            capabilities = {}
+
+        capabilities["provider"] = self.provider_key()
+        capabilities["model"] = self.model_name()
+        return capabilities
 
     def _provider_from_config(self):
 

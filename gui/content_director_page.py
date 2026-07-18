@@ -884,6 +884,10 @@ class ContentDirectorPage(ctk.CTkFrame):
 
     def render_prompt_package(self, package):
 
+        if package.get("options") and not package.get("selected_option_id"):
+            self.render_prompt_options(package)
+            return
+
         for child in self.results.winfo_children():
             child.destroy()
 
@@ -962,30 +966,36 @@ class ContentDirectorPage(ctk.CTkFrame):
         self.add_caption_line(
             frame,
             4,
+            "Around This Time in Previous Years",
+            self.around_this_time_text(package.get("around_this_time", {}))
+        )
+        self.add_caption_line(
+            frame,
+            5,
             "Media Package",
             self.production_media_text(media)
         )
         self.add_caption_line(
             frame,
-            5,
+            6,
             "Facebook",
             package.get("facebook_draft", {}).get("copy_text", "")
         )
         self.add_caption_line(
             frame,
-            6,
+            7,
             "Instagram",
             package.get("instagram_draft", {}).get("copy_text", "")
         )
         self.add_caption_line(
             frame,
-            7,
+            8,
             "Validation Warnings",
             self.format_values(package.get("validation_warnings", []))
         )
         self.add_caption_line(
             frame,
-            8,
+            9,
             "Why Selected",
             self.format_values(package.get("trust_explanation", []))
         )
@@ -995,7 +1005,7 @@ class ContentDirectorPage(ctk.CTkFrame):
             fg_color="transparent"
         )
         controls.grid(
-            row=9,
+            row=10,
             column=1,
             sticky="w",
             padx=(0, 12),
@@ -1037,6 +1047,353 @@ class ContentDirectorPage(ctk.CTkFrame):
                 padx=(0, 8)
             )
 
+        if package.get("around_this_time", {}).get("matches"):
+            memory_controls = ctk.CTkFrame(
+                frame,
+                fg_color="transparent"
+            )
+            memory_controls.grid(
+                row=11,
+                column=1,
+                sticky="w",
+                padx=(0, 12),
+                pady=(0, 12)
+            )
+            for label, command in (
+                (
+                    "Use as Reference",
+                    lambda item=package: self.copy_text(
+                        "Around This Time Reference",
+                        self.around_this_time_text(item.get("around_this_time", {}))
+                    )
+                ),
+                (
+                    "Generate Updated Version",
+                    lambda item=package: self.generate_updated_from_memory(item)
+                ),
+                (
+                    "View in Communications Memory",
+                    lambda item=package: self.show_around_this_time_memory(item)
+                )
+            ):
+                ctk.CTkButton(
+                    memory_controls,
+                    text=label,
+                    width=170,
+                    command=command
+                ).pack(
+                    side="left",
+                    padx=(0, 8)
+                )
+
+    ##########################################################
+
+    def render_prompt_options(self, package):
+
+        for child in self.results.winfo_children():
+            child.destroy()
+
+        frame = ctk.CTkFrame(
+            self.results,
+            corner_radius=8
+        )
+        frame.pack(
+            fill="both",
+            expand=True,
+            padx=10,
+            pady=10
+        )
+
+        topic = package.get("interpreted_topic", {}) or {}
+        heading = ctk.CTkLabel(
+            frame,
+            text=(
+                "Content Options - " +
+                topic.get("label", "Communication Opportunity")
+            ),
+            font=("Segoe UI", 20, "bold"),
+            anchor="w"
+        )
+        heading.pack(
+            fill="x",
+            padx=12,
+            pady=(12, 4)
+        )
+
+        if package.get("option_limit_reason"):
+            ctk.CTkLabel(
+                frame,
+                text=package.get("option_limit_reason", ""),
+                wraplength=980,
+                justify="left",
+                text_color="#d4b483"
+            ).pack(
+                fill="x",
+                padx=12,
+                pady=(0, 8)
+            )
+
+        ctk.CTkLabel(
+            frame,
+            text=(
+                "Around This Time in Previous Years\n" +
+                self.around_this_time_text(package.get("around_this_time", {}))
+            ),
+            wraplength=980,
+            justify="left",
+            anchor="w"
+        ).pack(
+            fill="x",
+            padx=12,
+            pady=(0, 8)
+        )
+
+        options_frame = ctk.CTkFrame(
+            frame,
+            fg_color="transparent"
+        )
+        options_frame.pack(
+            fill="x",
+            padx=12,
+            pady=(6, 12)
+        )
+
+        for option in package.get("options", [])[:5]:
+            self.render_prompt_option_card(
+                options_frame,
+                package,
+                option
+            )
+
+    def render_prompt_option_card(self, parent, package, option):
+
+        card = ctk.CTkFrame(
+            parent,
+            corner_radius=8
+        )
+        card.pack(
+            fill="x",
+            pady=(0, 10)
+        )
+        card.grid_columnconfigure(1, weight=1)
+
+        media = option.get("media_package", {}) or {}
+        primary = media.get("primary_image") or media.get("primary_video") or {}
+        if primary:
+            thumb = PhotoCard(
+                card,
+                primary.get("media_id"),
+                primary.get("filename", ""),
+                primary.get("path", ""),
+                thumbnail_service=self.thumbnail_service
+            )
+            thumb.grid(
+                row=0,
+                column=0,
+                rowspan=4,
+                padx=10,
+                pady=10,
+                sticky="nw"
+            )
+
+        title = ctk.CTkLabel(
+            card,
+            text=(
+                f"{option.get('title', '')} - "
+                f"{option.get('confidence', 0)}% - "
+                f"{option.get('recommended_format', '')}"
+            ),
+            font=("Segoe UI", 16, "bold"),
+            wraplength=850,
+            justify="left"
+        )
+        title.grid(
+            row=0,
+            column=1,
+            sticky="ew",
+            padx=10,
+            pady=(10, 2)
+        )
+        summary = ctk.CTkLabel(
+            card,
+            text=(
+                option.get("strategic_angle", "") +
+                "\nAudience: " +
+                self.format_values(option.get("target_audience", [])) +
+                "\nTiming: " +
+                (option.get("year_over_year_evidence", {}) or {}).get(
+                    "summary",
+                    ""
+                )
+            ),
+            wraplength=850,
+            justify="left",
+            anchor="w"
+        )
+        summary.grid(
+            row=1,
+            column=1,
+            sticky="ew",
+            padx=10,
+            pady=(0, 4)
+        )
+        warning_text = self.format_values(option.get("validation_warnings", [])[:2])
+        if warning_text:
+            ctk.CTkLabel(
+                card,
+                text="Warnings: " + warning_text,
+                wraplength=850,
+                justify="left",
+                text_color="#d4b483"
+            ).grid(
+                row=2,
+                column=1,
+                sticky="ew",
+                padx=10,
+                pady=(0, 4)
+            )
+
+        controls = ctk.CTkFrame(
+            card,
+            fg_color="transparent"
+        )
+        controls.grid(
+            row=3,
+            column=1,
+            sticky="w",
+            padx=10,
+            pady=(4, 10)
+        )
+
+        buttons = (
+            (
+                "View Full Option",
+                lambda item=option: self.render_prompt_package(
+                    self.package_for_option(package, item)
+                )
+            ),
+            (
+                "Use This Option",
+                lambda item=option: self.use_prompt_option(package, item)
+            ),
+            (
+                "Copy Facebook",
+                lambda item=option: self.copy_text(
+                    "Facebook",
+                    item.get("facebook_caption", "")
+                )
+            ),
+            (
+                "Copy Instagram",
+                lambda item=option: self.copy_text(
+                    "Instagram",
+                    item.get("instagram_caption", "")
+                )
+            ),
+            (
+                "Change Media",
+                lambda item=option: self.render_prompt_package(
+                    self.package_for_option(package, item)
+                )
+            ),
+            (
+                "Regenerate This Option",
+                lambda item=option: self.regenerate_prompt_option(
+                    package,
+                    item
+                )
+            ),
+            (
+                "Create Publication Draft",
+                lambda item=option: self.create_option_publication_draft(
+                    package,
+                    item
+                )
+            )
+        )
+        for label, command in buttons:
+            ctk.CTkButton(
+                controls,
+                text=label,
+                width=150,
+                command=command
+            ).pack(
+                side="left",
+                padx=(0, 6)
+            )
+
+    def package_for_option(self, package, option):
+
+        selected = dict(package or {})
+        selected["selected_option_id"] = option.get("option_id", "")
+        selected["opportunity_summary"] = dict(
+            package.get("opportunity_summary", {}) or {}
+        )
+        selected["opportunity_summary"]["what"] = option.get("title", "")
+        selected["opportunity_summary"]["why_now"] = option.get(
+            "why_relevant_now",
+            ""
+        )
+        selected["opportunity_summary"]["confidence"] = option.get(
+            "confidence",
+            0
+        )
+        selected["facebook_draft"] = option.get("facebook_draft", {})
+        selected["instagram_draft"] = option.get("instagram_draft", {})
+        selected["facebook_caption"] = option.get("facebook_caption", "")
+        selected["instagram_caption"] = option.get("instagram_caption", "")
+        selected["media_package"] = option.get("media_package", {})
+        selected["historical_references"] = option.get(
+            "historical_references",
+            []
+        )
+        selected["validation_warnings"] = option.get(
+            "validation_warnings",
+            []
+        )
+        selected["selected_option"] = option
+        return selected
+
+    def use_prompt_option(self, package, option):
+
+        self.status.configure(
+            text="Selected option: " + option.get("title", "")
+        )
+        self.render_prompt_package(
+            self.package_for_option(package, option)
+        )
+
+    def create_option_publication_draft(self, package, option):
+
+        draft = self.retrieval_service.create_publication_draft(
+            package,
+            option.get("option_id", "")
+        )
+        if draft.get("persisted"):
+            self.status.configure(
+                text="Publication draft saved for " + option.get("title", "")
+            )
+        else:
+            self.status.configure(
+                text="Publication draft was prepared but not saved."
+            )
+
+    def regenerate_prompt_option(self, package, option):
+
+        result = self.retrieval_service.regenerate_option(
+            package,
+            option.get("option_id", "")
+        )
+        if result.get("status") != "ready":
+            self.status.configure(
+                text=result.get("reason", "Option could not be regenerated.")
+            )
+            return
+        self.status.configure(
+            text="Regenerated option: " + option.get("title", "")
+        )
+        self.render_prompt_options(result["package"])
+
     ##########################################################
 
     def current_context_text(self, evidence):
@@ -1067,6 +1424,94 @@ class ContentDirectorPage(ctk.CTkFrame):
                 )
             )
         return "\n".join(lines) if lines else "No close historical MFR reference found."
+
+    def around_this_time_text(self, seasonal):
+
+        seasonal = seasonal or {}
+        lines = []
+        if seasonal.get("summary"):
+            lines.append(seasonal["summary"])
+        if seasonal.get("matching_years"):
+            lines.append(
+                "Matching years: " +
+                self.format_values(seasonal.get("matching_years", []))
+            )
+        if seasonal.get("last_related_post"):
+            lines.append(
+                "Last related post: " +
+                str(seasonal.get("last_related_post", ""))
+            )
+        if seasonal.get("current_year_already_communicated"):
+            lines.append("Current year coverage: already communicated.")
+        if seasonal.get("communications_gap_risk"):
+            lines.append(
+                "Gap/repetition signal: " +
+                seasonal.get("communications_gap_risk", "")
+            )
+        for item in seasonal.get("matches", [])[:4]:
+            lines.append(
+                (
+                    f"{item.get('date', 'Unknown date')} - "
+                    f"{item.get('similarity_score', 0)}% - "
+                    f"{item.get('topic') or item.get('program') or item.get('campaign') or 'MFR memory'} - "
+                    f"{item.get('caption_excerpt', '')}"
+                )
+            )
+            evidence = item.get("seasonal_timing_evidence", [])
+            if evidence:
+                lines.append("  Evidence: " + self.format_values(evidence[:3]))
+            if item.get("safe_reuse_note"):
+                lines.append("  Safety: " + item["safe_reuse_note"])
+        for limitation in seasonal.get("limitations", [])[:2]:
+            lines.append("Limitation: " + str(limitation))
+        return "\n".join(lines) if lines else "No same-period MFR memory found."
+
+    def generate_updated_from_memory(self, package):
+
+        topic = package.get("interpreted_topic", {}) or {}
+        prompt = (
+            "Generate an updated public communication for "
+            f"{topic.get('label') or package.get('prompt') or 'this topic'} "
+            "using prior MFR same-season posts as reference only. "
+            "Do not reuse old dates, warnings, event facts, or calls to action "
+            "unless they are verified in current context."
+        )
+        self.prompt_entry.delete(0, "end")
+        self.prompt_entry.insert(0, prompt)
+        self.generate_suggestions()
+
+    def show_around_this_time_memory(self, package):
+
+        window = ctk.CTkToplevel(self)
+        window.title("Around This Time in Communications Memory")
+        window.geometry("760x520")
+        try:
+            window.transient(self.winfo_toplevel())
+        except Exception:
+            pass
+        textbox = ctk.CTkTextbox(
+            window,
+            wrap="word"
+        )
+        textbox.pack(
+            fill="both",
+            expand=True,
+            padx=12,
+            pady=(12, 8)
+        )
+        textbox.insert(
+            "1.0",
+            self.around_this_time_text(package.get("around_this_time", {}))
+        )
+        textbox.configure(state="disabled")
+        ctk.CTkButton(
+            window,
+            text="Close",
+            width=110,
+            command=window.destroy
+        ).pack(
+            pady=(0, 12)
+        )
 
     def production_media_text(self, media):
 
@@ -2153,7 +2598,7 @@ class ContentDirectorPage(ctk.CTkFrame):
 
         if not selected:
             self.show_decision_audit({
-                "headline": "No selected media",
+                "headline": "No media selected",
                 "summary": "This package has no primary media asset.",
                 "limiting_factors": [
                     "Generate or choose a recommendation with media support first."

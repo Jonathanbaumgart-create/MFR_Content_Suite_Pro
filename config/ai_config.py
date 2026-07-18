@@ -32,10 +32,24 @@ AI_CONFIG = {
             "vision_diagnostics_timeout": 120,
             "analysis_max_dimension": 1536,
             "analysis_retry_max_dimension": 1024,
-            "analysis_max_payload_bytes": 12000000
+            "analysis_max_payload_bytes": 12000000,
+            "supports_images": True,
+            "supports_video_frames": True,
+            "supports_multi_image_prompt": False,
+            "recommended_frame_count": 3,
+            "production_approved": True,
+            "cpu_safe": False,
+            "gpu_dependent": True
         },
         "mock": {
-            "model": "mock"
+            "model": "mock",
+            "supports_images": True,
+            "supports_video_frames": False,
+            "supports_multi_image_prompt": False,
+            "recommended_frame_count": 0,
+            "production_approved": False,
+            "cpu_safe": True,
+            "gpu_dependent": False
         }
     }
 }

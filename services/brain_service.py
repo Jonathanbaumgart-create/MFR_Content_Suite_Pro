@@ -1435,11 +1435,66 @@ class BrainService:
     def _analyze_video_and_save(self, media_id, video_path):
 
         started = time.perf_counter()
+        capabilities = self._video_provider_capabilities()
+        provider = self.vision.provider_key()
+        model = self.vision.model_name()
+        self._video_stage("Extracting Frames")
         metadata = self.video.inspect(video_path)
         self.db.update_media_video_metadata(
             media_id,
             metadata
         )
+
+        if not capabilities.get("supported"):
+            failure_reason = capabilities.get(
+                "reason",
+                "Video analysis unavailable with current provider"
+            )
+            self.db.save_ai_failure(
+                media_id,
+                {
+                    "analysis_duration": time.perf_counter() - started,
+                    "provider": provider,
+                    "retry_count": 0,
+                    "failure_reason": failure_reason,
+                    "failure_category": "unsupported_provider",
+                    "model": model,
+                    "raw_response": "",
+                    "parse_status": "unsupported_provider",
+                    "parse_warnings": [
+                        failure_reason
+                    ],
+                    "confidence": 0,
+                    "request_metadata": {
+                        "provider_capabilities": capabilities.get(
+                            "capabilities",
+                            {}
+                        ),
+                        "video_metadata": metadata
+                    },
+                    "preprocessing_metadata": metadata,
+                    "provider_attempts": [],
+                    "provider_response_excerpt": "",
+                    "provider_status_code": 0,
+                    "quality_state": "unsupported_provider",
+                    "trust_state": "failed",
+                    "review_status": "failed",
+                    "media_context": "video"
+                }
+            )
+            logger.warning(
+                "Video analysis unavailable media_id=%s provider=%s model=%s reason=%s",
+                media_id,
+                provider,
+                model,
+                failure_reason
+            )
+            raise VisionProviderError(
+                failure_reason,
+                category="unsupported_provider",
+                request_metadata=capabilities.get("capabilities", {})
+            )
+
         analysis = self.video.video_analysis_from_metadata(
             media_id,
             video_path,
@@ -1455,6 +1510,7 @@ class BrainService:
             media_id,
             saved
         )
+        self._video_stage("Analyzing Frames")
         self.video_intelligence.generate_and_save(
             media_id,
             video_path,
@@ -1468,8 +1524,57 @@ class BrainService:
                 self.config.get("video_frame_analysis_enabled", True)
             )
         )
+        self._video_stage("Summarizing")
 
         return saved
+
+    ############################################################
+
+    def _video_provider_capabilities(self):
+
+        capabilities = (
+            self.vision.provider_capabilities()
+            if hasattr(self.vision, "provider_capabilities")
+            else {}
+        )
+
+        if not capabilities.get("supports_images"):
+            return {
+                "supported": False,
+                "reason": "Video analysis unavailable with current provider: image analysis is not supported.",
+                "capabilities": capabilities
+            }
+
+        if not capabilities.get("supports_video_frames"):
+            return {
+                "supported": False,
+                "reason": "Video analysis unavailable with current provider: sampled video frames are not supported.",
+                "capabilities": capabilities
+            }
+
+        if not capabilities.get("production_approved"):
+            return {
+                "supported": False,
+                "reason": "Video analysis unavailable with current provider: provider is not approved for production video review.",
+                "capabilities": capabilities
+            }
+
+        return {
+            "supported": True,
+            "reason": "",
+            "capabilities": capabilities
+        }
+
+    def _video_stage(self, status):
+
+        if not self._active_session_id:
+            return
+
+        self._db_optional(
+            "heartbeat_analysis_session",
+            self._active_session_id,
+            status
+        )
 
     ############################################################
 
@@ -1675,10 +1780,16 @@ class BrainService:
                     skipped += 1
                     continue
 
-                self._analyze_and_save(
-                    media_id,
-                    path
-                )
+                if media_type == "video":
+                    self._analyze_video_and_save(
+                        media_id,
+                        path
+                    )
+                else:
+                    self._analyze_and_save(
+                        media_id,
+                        path
+                    )
                 analyzed += 1
 
             except Exception:

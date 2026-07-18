@@ -1213,6 +1213,96 @@ class CommunicationRepository:
 
     ############################################################
 
+    def effective_communication_memory_between(self, start_date, end_date, limit=250):
+
+        conn = self.database.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute("""
+        SELECT *
+        FROM communication_records
+        WHERE import_status='active'
+        AND COALESCE(normalized_date_utc, original_date) >= ?
+        AND COALESCE(normalized_date_utc, original_date) < ?
+        ORDER BY original_date DESC, communication_id DESC
+        LIMIT ?
+        """,
+        (
+            start_date,
+            end_date,
+            self._to_int(limit) or 250,
+        ))
+        record_rows = cur.fetchall()
+        communication_ids = [
+            row["communication_id"]
+            for row in record_rows
+        ]
+
+        if not communication_ids:
+            conn.close()
+            return []
+
+        placeholders = ",".join("?" for _value in communication_ids)
+        cur.execute(f"""
+        SELECT *
+        FROM communication_editorial_intelligence
+        WHERE active=1
+        AND communication_id IN ({placeholders})
+        ORDER BY id DESC
+        """,
+        tuple(communication_ids))
+        intelligence_rows = cur.fetchall()
+        cur.execute(f"""
+        SELECT *
+        FROM communication_intelligence_corrections
+        WHERE active=1
+        AND communication_id IN ({placeholders})
+        ORDER BY correction_id
+        """,
+        tuple(communication_ids))
+        correction_rows = cur.fetchall()
+        cur.execute(f"""
+        SELECT *
+        FROM communication_deliveries
+        WHERE communication_id IN ({placeholders})
+        ORDER BY published_at DESC, delivery_id DESC
+        """,
+        tuple(communication_ids))
+        delivery_rows = cur.fetchall()
+        conn.close()
+
+        intelligence_by_id = {}
+        for row in intelligence_rows:
+            communication_id = row["communication_id"]
+            if communication_id not in intelligence_by_id:
+                intelligence_by_id[communication_id] = row
+
+        corrections_by_id = {}
+        for row in correction_rows:
+            corrections_by_id.setdefault(
+                row["communication_id"],
+                []
+            ).append(row)
+
+        deliveries_by_id = {}
+        for row in delivery_rows:
+            deliveries_by_id.setdefault(
+                row["communication_id"],
+                []
+            ).append(row)
+
+        return [
+            self._effective_communication_from_rows(
+                record,
+                intelligence_by_id.get(record["communication_id"]),
+                corrections_by_id.get(record["communication_id"], []),
+                deliveries_by_id.get(record["communication_id"], [])
+            )
+            for record in record_rows
+        ]
+
+    ############################################################
+
     def communication_memory_topic_summary(self, limit=50):
 
         conn = self.database.connection()
