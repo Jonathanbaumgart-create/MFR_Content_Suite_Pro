@@ -8,6 +8,7 @@ from gui.communications_memory_page import CommunicationsMemoryPage
 from gui.content_director_page import ContentDirectorPage
 from gui.dashboard_page import DashboardPage
 from gui.gallery_page import GalleryPage
+from gui.helmet_cam_page import HelmetCamPage
 from gui.home_page import HomePage
 from gui.intelligence_page import IntelligenceExplorerPage
 from gui.knowledge_page import KnowledgePage
@@ -109,6 +110,8 @@ class MainWindow(ctk.CTk):
 
             ("Gallery", self.show_gallery),
 
+            ("Helmet Cam", self.show_helmet_cam),
+
             ("Intelligence", self.show_intelligence),
 
             ("Content Director", self.show_content_director),
@@ -199,6 +202,24 @@ class MainWindow(ctk.CTk):
         self.clear_page()
 
         self.current_page = GalleryPage(
+            self.workspace
+        )
+
+        self.current_page.grid(
+            row=0,
+            column=0,
+            sticky="nsew",
+            padx=25,
+            pady=25
+        )
+
+    ##########################################################
+
+    def show_helmet_cam(self):
+
+        self.clear_page()
+
+        self.current_page = HelmetCamPage(
             self.workspace
         )
 

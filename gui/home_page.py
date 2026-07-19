@@ -10,6 +10,7 @@ from services.communication_package_service import CommunicationPackageService
 from services.communications_intelligence_service import CommunicationsIntelligenceService
 from services.communications_officer_service import CommunicationsOfficerService
 from services.content_generation_service import ContentGenerationService
+from services.daily_communications_officer_service import DailyCommunicationsOfficerService
 from services.decision_explainability_service import DecisionExplainabilityService
 from services.logging_service import LoggingService
 from services.thumbnail_service import ThumbnailService
@@ -28,7 +29,7 @@ class HomePage(ctk.CTkFrame):
 
         super().__init__(parent)
 
-        self.service = CommunicationsOfficerService()
+        self.service = DailyCommunicationsOfficerService()
         self.package_service = CommunicationPackageService()
         self.content_generation_service = ContentGenerationService()
         self.explainability_service = DecisionExplainabilityService()
@@ -147,7 +148,7 @@ class HomePage(ctk.CTkFrame):
         self.render_loading()
 
         self.future = context.job_manager.submit(
-            self.service.generate_fast,
+            self.service.generate,
             force=True
         )
         self.communications_intelligence_future = None
@@ -364,6 +365,7 @@ class HomePage(ctk.CTkFrame):
                 )
             ]
         )
+        self.render_daily_post_packages()
         self.render_context()
         self.render_recent_mfr_activity()
         self.render_communication_priorities()
@@ -628,6 +630,180 @@ class HomePage(ctk.CTkFrame):
             padx=(0, 8),
             pady=12
         )
+
+    ##########################################################
+
+    def render_daily_post_packages(self):
+
+        packages = self.brief.get("daily_post_packages", [])
+
+        if not packages:
+            return
+
+        section = ctk.CTkFrame(
+            self.content,
+            fg_color="#20242b",
+            corner_radius=8
+        )
+        section.pack(
+            fill="x",
+            padx=10,
+            pady=(0, 16)
+        )
+
+        title = ctk.CTkLabel(
+            section,
+            text="Today's Three Daily Post Packages",
+            font=("Segoe UI", 18, "bold")
+        )
+        title.pack(
+            anchor="w",
+            padx=14,
+            pady=(12, 6)
+        )
+
+        for package in packages[:3]:
+            card = ctk.CTkFrame(
+                section,
+                fg_color="#252b34",
+                corner_radius=8
+            )
+            card.pack(
+                fill="x",
+                padx=12,
+                pady=(6, 10)
+            )
+
+            header = ctk.CTkLabel(
+                card,
+                text=(
+                    f"Option {package.get('option_number', '')}: "
+                    f"{package.get('option_title') or package.get('title', '')}"
+                ),
+                font=("Segoe UI", 15, "bold"),
+                anchor="w"
+            )
+            header.pack(
+                fill="x",
+                padx=12,
+                pady=(10, 2)
+            )
+
+            details = [
+                f"Strategy: {package.get('strategy', '')}",
+                f"Why today: {package.get('why_today', '')}",
+                f"Confidence: {package.get('confidence', 0)}%",
+                f"Media trust: {package.get('media_trust_state', '')}",
+                f"Format: {package.get('recommended_format', '')}",
+                (
+                    "Historical evidence: " +
+                    (package.get("historical_evidence_summary") or "No close historical match found.")
+                )
+            ]
+
+            text = ctk.CTkLabel(
+                card,
+                text="\n".join(details),
+                wraplength=1050,
+                justify="left",
+                anchor="w"
+            )
+            text.pack(
+                fill="x",
+                padx=12,
+                pady=(0, 8)
+            )
+
+            captions = ctk.CTkTextbox(
+                card,
+                height=150,
+                wrap="word"
+            )
+            captions.pack(
+                fill="x",
+                padx=12,
+                pady=(0, 8)
+            )
+            captions.insert(
+                "1.0",
+                (
+                    "Facebook\n"
+                    f"{package.get('facebook_caption', '')}\n\n"
+                    "Instagram\n"
+                    f"{package.get('instagram_caption', '')}"
+                )
+            )
+            captions.configure(state="disabled")
+
+            warning_text = " | ".join(package.get("warnings") or [])
+            if warning_text:
+                warning = ctk.CTkLabel(
+                    card,
+                    text=warning_text,
+                    text_color="#ffcf7a",
+                    wraplength=1050,
+                    justify="left"
+                )
+                warning.pack(
+                    fill="x",
+                    padx=12,
+                    pady=(0, 8)
+                )
+
+            actions = ctk.CTkFrame(
+                card,
+                fg_color="transparent"
+            )
+            actions.pack(
+                fill="x",
+                padx=12,
+                pady=(0, 10)
+            )
+
+            ctk.CTkButton(
+                actions,
+                text="Copy Facebook",
+                width=130,
+                command=lambda item=package: self.copy_daily_text(
+                    item,
+                    "facebook_caption"
+                )
+            ).pack(side="left", padx=(0, 8))
+            ctk.CTkButton(
+                actions,
+                text="Copy Instagram",
+                width=130,
+                command=lambda item=package: self.copy_daily_text(
+                    item,
+                    "instagram_caption"
+                )
+            ).pack(side="left", padx=(0, 8))
+
+            primary = package.get("primary_media") or {}
+            if primary:
+                ctk.CTkButton(
+                    actions,
+                    text="Open Media",
+                    width=110,
+                    command=lambda item=primary: self.open_media_asset(item)
+                ).pack(side="left", padx=(0, 8))
+
+            ctk.CTkButton(
+                actions,
+                text="Media Package",
+                width=130,
+                command=lambda item=package: self.show_story_media_package(
+                    {
+                        "media_package": item.get("media_package", {})
+                    }
+                )
+            ).pack(side="left")
+
+    def copy_daily_text(self, package, key):
+
+        self.clipboard_clear()
+        self.clipboard_append((package or {}).get(key, ""))
+        self.status.configure(text="Daily package text copied.")
 
     ##########################################################
 

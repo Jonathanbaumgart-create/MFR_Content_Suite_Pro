@@ -1,5 +1,7 @@
 class WindowPlacement:
 
+    GEOMETRY_RETRIES = 8
+
     @staticmethod
     def center_window(window, width=None, height=None, parent=None):
 
@@ -34,20 +36,26 @@ class WindowPlacement:
             y = min(max(0, y), max(0, work_height - height))
             geometry = f"{width}x{height}+{x}+{y}"
             try:
-                window.update()
+                window.deiconify()
             except Exception:
                 pass
             try:
-                window.wm_geometry(geometry)
+                window.minsize(width, height)
             except Exception:
-                window.geometry(geometry)
-            window.update_idletasks()
-            current_width, current_height = WindowPlacement._geometry_size(window)
-            if current_width != width or current_height != height:
+                pass
+            for _attempt in range(WindowPlacement.GEOMETRY_RETRIES):
                 try:
+                    window.wm_geometry(geometry)
+                except Exception:
+                    window.geometry(geometry)
+                try:
+                    window.update_idletasks()
                     window.update()
                 except Exception:
                     pass
+                current_width, current_height = WindowPlacement._geometry_size(window)
+                if current_width == width and current_height == height:
+                    break
         except Exception:
             if width and height:
                 window.geometry(f"{int(width)}x{int(height)}")

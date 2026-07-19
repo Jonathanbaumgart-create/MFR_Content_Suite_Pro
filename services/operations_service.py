@@ -106,6 +106,8 @@ class OperationsService:
             "ai_analyzed_count": analyzed,
             "media_intelligence_count": intelligence,
             "video_intelligence_count": self.db.video_intelligence_count(),
+            "helmet_camera_sources": len(self.db.helmet_camera_sources()),
+            "helmet_camera_segments": len(self.db.helmet_camera_segments(limit=10000)),
             "fire_service_intelligence_count": fire_service,
             "fire_service_unknown_count": self.db.fire_service_unknown_count(),
             "top_fire_service_incident_types": self.db.fire_service_top_values(

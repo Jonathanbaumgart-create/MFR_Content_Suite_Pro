@@ -704,6 +704,114 @@ class DatabaseManager:
         """)
 
         ########################################################
+        # Sprint 46: Analysis Tiers / Helmet Camera Intelligence
+        ########################################################
+
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS media_analysis_tiers(
+
+            media_id INTEGER,
+
+            tier TEXT,
+
+            provider TEXT,
+
+            model TEXT,
+
+            status TEXT,
+
+            score INTEGER DEFAULT 0,
+
+            summary TEXT,
+
+            evidence_json TEXT,
+
+            started_at TEXT,
+
+            completed_at TEXT,
+
+            elapsed_seconds REAL DEFAULT 0,
+
+            PRIMARY KEY(media_id, tier)
+
+        )
+
+        """)
+
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS helmet_camera_sources(
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            root_path TEXT UNIQUE,
+
+            source_identity TEXT,
+
+            available INTEGER DEFAULT 0,
+
+            last_scanned_at TEXT,
+
+            media_count INTEGER DEFAULT 0,
+
+            notes TEXT
+
+        )
+
+        """)
+
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS helmet_camera_segments(
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            media_id INTEGER,
+
+            source_path TEXT,
+
+            start_seconds REAL,
+
+            end_seconds REAL,
+
+            duration_seconds REAL,
+
+            reel_score INTEGER DEFAULT 0,
+
+            technical_score INTEGER DEFAULT 0,
+
+            motion_score INTEGER DEFAULT 0,
+
+            clarity_score INTEGER DEFAULT 0,
+
+            exposure_score INTEGER DEFAULT 0,
+
+            audio_score INTEGER DEFAULT 0,
+
+            risk_level TEXT,
+
+            risk_flags TEXT,
+
+            reason_selected TEXT,
+
+            visual_summary TEXT,
+
+            cover_frame_seconds REAL DEFAULT 0,
+
+            status TEXT,
+
+            analysis_version TEXT,
+
+            generated_at TEXT,
+
+            UNIQUE(media_id, start_seconds, end_seconds)
+
+        )
+
+        """)
+
+        ########################################################
         # Decision Explainability / Audit Trail
         ########################################################
 
@@ -11094,6 +11202,282 @@ class DatabaseManager:
 
     ############################################################
 
+    def save_media_analysis_tier(self, media_id, tier):
+
+        tier = tier or {}
+        conn = self.connection()
+        cur = conn.cursor()
+        cur.execute("""
+        INSERT OR REPLACE INTO media_analysis_tiers(
+            media_id,
+            tier,
+            provider,
+            model,
+            status,
+            score,
+            summary,
+            evidence_json,
+            started_at,
+            completed_at,
+            elapsed_seconds
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            self._to_int(media_id),
+            tier.get("tier", ""),
+            tier.get("provider", ""),
+            tier.get("model", ""),
+            tier.get("status", ""),
+            self._to_int(tier.get("score")),
+            tier.get("summary", ""),
+            self._to_json(tier.get("evidence") or {}),
+            tier.get("started_at", ""),
+            tier.get("completed_at", ""),
+            self._to_float(tier.get("elapsed_seconds"))
+        ))
+        conn.commit()
+        conn.close()
+
+    def media_analysis_tier(self, media_id, tier):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute("""
+        SELECT *
+        FROM media_analysis_tiers
+        WHERE media_id=?
+        AND tier=?
+        """,
+        (
+            self._to_int(media_id),
+            tier
+        ))
+        row = cur.fetchone()
+        conn.close()
+
+        if not row:
+            return {}
+
+        return {
+            "media_id": row["media_id"],
+            "tier": row["tier"] or "",
+            "provider": row["provider"] or "",
+            "model": row["model"] or "",
+            "status": row["status"] or "",
+            "score": row["score"] or 0,
+            "summary": row["summary"] or "",
+            "evidence": self._from_json(row["evidence_json"]),
+            "started_at": row["started_at"] or "",
+            "completed_at": row["completed_at"] or "",
+            "elapsed_seconds": row["elapsed_seconds"] or 0
+        }
+
+    def media_rows_by_ids(self, media_ids, limit=500):
+
+        ids = [
+            self._to_int(media_id)
+            for media_id in list(media_ids or [])[:self._to_int(limit)]
+            if self._to_int(media_id)
+        ]
+
+        if not ids:
+            return []
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        placeholders = ",".join("?" for _ in ids)
+        cur.execute(f"""
+        SELECT *
+        FROM media
+        WHERE id IN ({placeholders})
+        """, tuple(ids))
+        rows = [
+            dict(row)
+            for row in cur.fetchall()
+        ]
+        conn.close()
+        by_id = {
+            row["id"]: row
+            for row in rows
+        }
+
+        return [
+            by_id[media_id]
+            for media_id in ids
+            if media_id in by_id
+        ]
+
+    def media_rows_under_path(self, root_path, limit=500):
+
+        root = str(root_path or "").rstrip("\\/")
+
+        if not root:
+            return []
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute("""
+        SELECT *
+        FROM media
+        WHERE path LIKE ?
+        ORDER BY COALESCE(capture_time, first_seen_at, date_added) DESC,
+                 id DESC
+        LIMIT ?
+        """,
+        (
+            root + "%",
+            self._to_int(limit)
+        ))
+        rows = [
+            dict(row)
+            for row in cur.fetchall()
+        ]
+        conn.close()
+        return rows
+
+    def save_helmet_camera_source(self, source):
+
+        source = source or {}
+        conn = self.connection()
+        cur = conn.cursor()
+        cur.execute("""
+        INSERT INTO helmet_camera_sources(
+            root_path,
+            source_identity,
+            available,
+            last_scanned_at,
+            media_count,
+            notes
+        )
+        VALUES(?,?,?,?,?,?)
+        ON CONFLICT(root_path)
+        DO UPDATE SET
+            source_identity=excluded.source_identity,
+            available=excluded.available,
+            last_scanned_at=excluded.last_scanned_at,
+            media_count=excluded.media_count,
+            notes=excluded.notes
+        """,
+        (
+            source.get("root_path", ""),
+            source.get("source_identity", "Helmet Camera"),
+            1 if source.get("available") else 0,
+            source.get("last_scanned_at", TimeService.utc_now_iso()),
+            self._to_int(source.get("media_count")),
+            source.get("notes", "")
+        ))
+        conn.commit()
+        conn.close()
+
+    def helmet_camera_sources(self):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute("""
+        SELECT *
+        FROM helmet_camera_sources
+        ORDER BY root_path
+        """)
+        rows = [
+            dict(row)
+            for row in cur.fetchall()
+        ]
+        conn.close()
+        return rows
+
+    def save_helmet_camera_segments(self, media_id, segments):
+
+        conn = self.connection()
+        cur = conn.cursor()
+        now = TimeService.utc_now_iso()
+
+        for segment in segments or []:
+            cur.execute("""
+            INSERT OR REPLACE INTO helmet_camera_segments(
+                media_id,
+                source_path,
+                start_seconds,
+                end_seconds,
+                duration_seconds,
+                reel_score,
+                technical_score,
+                motion_score,
+                clarity_score,
+                exposure_score,
+                audio_score,
+                risk_level,
+                risk_flags,
+                reason_selected,
+                visual_summary,
+                cover_frame_seconds,
+                status,
+                analysis_version,
+                generated_at
+            )
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                self._to_int(media_id),
+                segment.get("source_path", ""),
+                self._to_float(segment.get("start_seconds")),
+                self._to_float(segment.get("end_seconds")),
+                self._to_float(segment.get("duration_seconds")),
+                self._to_int(segment.get("reel_score")),
+                self._to_int(segment.get("technical_score")),
+                self._to_int(segment.get("motion_score")),
+                self._to_int(segment.get("clarity_score")),
+                self._to_int(segment.get("exposure_score")),
+                self._to_int(segment.get("audio_score")),
+                segment.get("risk_level", ""),
+                self._to_json(segment.get("risk_flags") or []),
+                segment.get("reason_selected", ""),
+                segment.get("visual_summary", ""),
+                self._to_float(segment.get("cover_frame_seconds")),
+                segment.get("status", ""),
+                segment.get("analysis_version", ""),
+                segment.get("generated_at", now)
+            ))
+
+        conn.commit()
+        conn.close()
+
+    def helmet_camera_segments(self, media_id=None, limit=50):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        params = []
+        where = ""
+
+        if media_id:
+            where = "WHERE media_id=?"
+            params.append(self._to_int(media_id))
+
+        params.append(self._to_int(limit))
+        cur.execute(f"""
+        SELECT *
+        FROM helmet_camera_segments
+        {where}
+        ORDER BY reel_score DESC, generated_at DESC
+        LIMIT ?
+        """, tuple(params))
+        rows = []
+
+        for row in cur.fetchall():
+            item = dict(row)
+            item["risk_flags"] = self._from_json(item.get("risk_flags"))
+            rows.append(item)
+
+        conn.close()
+        return rows
+
+    ############################################################
+
     def _analysis_from_row(self, row):
 
         return {
@@ -12113,6 +12497,12 @@ class DatabaseManager:
             "CREATE INDEX IF NOT EXISTS idx_home_sessions_status ON home_sessions(status)",
             "CREATE INDEX IF NOT EXISTS idx_home_sessions_completed ON home_sessions(completed_at)",
             "CREATE INDEX IF NOT EXISTS idx_home_sessions_started ON home_sessions(started_at)",
+            "CREATE INDEX IF NOT EXISTS idx_media_analysis_tiers_tier ON media_analysis_tiers(tier)",
+            "CREATE INDEX IF NOT EXISTS idx_media_analysis_tiers_status ON media_analysis_tiers(status)",
+            "CREATE INDEX IF NOT EXISTS idx_helmet_sources_root ON helmet_camera_sources(root_path)",
+            "CREATE INDEX IF NOT EXISTS idx_helmet_segments_media ON helmet_camera_segments(media_id)",
+            "CREATE INDEX IF NOT EXISTS idx_helmet_segments_score ON helmet_camera_segments(reel_score)",
+            "CREATE INDEX IF NOT EXISTS idx_helmet_segments_status ON helmet_camera_segments(status)",
             "CREATE INDEX IF NOT EXISTS idx_decision_audit_decision ON decision_audit_history(decision_id)",
             "CREATE INDEX IF NOT EXISTS idx_decision_audit_type_subject ON decision_audit_history(decision_type, subject_id)",
             "CREATE INDEX IF NOT EXISTS idx_decision_audit_generated ON decision_audit_history(generated_at)",

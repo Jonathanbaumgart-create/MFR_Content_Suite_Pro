@@ -2,9 +2,11 @@ import customtkinter as ctk
 from tkinter import BooleanVar, messagebox
 from collections import deque
 
+from core.app_context import context
 import gui.photo_card as photo_card_module
 from gui.gallery_analysis_inspector import GalleryAnalysisInspector
 from gui.photo_card import PhotoCard
+from services.analysis_tier_service import AnalysisTierService
 from services.brain_service import BrainService
 from services.gallery_service import GalleryService
 from services.gallery_analysis_inspector_service import GalleryAnalysisInspectorService
@@ -41,6 +43,7 @@ class GalleryPage(ctk.CTkFrame):
         self.selected_inspector_media_id = None
         self.viewer = None
         self.thumbnail_service = ThumbnailService()
+        self.analysis_tiers = AnalysisTierService()
         self.inspector_service = GalleryAnalysisInspectorService()
         self.loading_cards = False
         self._destroyed = False
@@ -53,6 +56,7 @@ class GalleryPage(ctk.CTkFrame):
         self.pending_cards = deque()
         self.filter_var = ctk.StringVar(value="All Media")
         self.sort_var = ctk.StringVar(value="Added Date: Newest First")
+        self.analysis_tier_var = ctk.StringVar(value="Fast Index")
         self.force_reanalysis_var = BooleanVar(value=False)
         self.retry_failed_var = BooleanVar(value=False)
         self.filter_map = {
@@ -197,6 +201,21 @@ class GalleryPage(ctk.CTkFrame):
         )
 
         analyze_selected.pack(
+            side="left",
+            padx=(0, 10)
+        )
+
+        self.analysis_tier_menu = ctk.CTkOptionMenu(
+            actions,
+            values=[
+                "Fast Index",
+                "Fast Screen",
+                "Deep Analyze"
+            ],
+            variable=self.analysis_tier_var,
+            width=135
+        )
+        self.analysis_tier_menu.pack(
             side="left",
             padx=(0, 10)
         )
@@ -1456,6 +1475,11 @@ class GalleryPage(ctk.CTkFrame):
             self.info.configure(text="No media selected for analysis")
             return
 
+        tier = self.analysis_tier_var.get()
+        if tier in ("Fast Index", "Fast Screen"):
+            self.run_fast_analysis_tier(tier)
+            return
+
         force = bool(self.force_reanalysis_var.get())
         retry_failed = bool(self.retry_failed_var.get())
         preview = self.service.analysis_selection_preview(
@@ -1481,6 +1505,17 @@ class GalleryPage(ctk.CTkFrame):
             return
 
         brain = self.brain_service()
+        deep_warning = self.analysis_tiers.deep_analysis_warning(
+            len(queueable)
+        )
+        if deep_warning.get("explicit_opt_in_required"):
+            if not messagebox.askyesno(
+                "Deep Analyze Selected",
+                deep_warning["message"] +
+                "\n\nDeep analysis is selective and demand-driven. Continue?"
+            ):
+                return
+
         warning = brain.provider_bulk_warning()
 
         if warning:
@@ -1510,6 +1545,79 @@ class GalleryPage(ctk.CTkFrame):
         self.refresh_queue_summary()
         self.refresh_visible_analysis_statuses()
         self.start_queue_polling()
+
+    ########################################################
+
+    def run_fast_analysis_tier(self, tier):
+
+        media_ids = list(self.selected)
+
+        if not media_ids:
+            self.info.configure(text="No media selected for analysis")
+            return
+
+        if tier == "Fast Screen" and len(media_ids) > 50:
+            if not messagebox.askyesno(
+                "Fast Screen Selected",
+                (
+                    f"Fast Screen is bounded candidate screening. Screen "
+                    f"the first 50 of {len(media_ids):,} selected media?"
+                )
+            ):
+                return
+            media_ids = media_ids[:50]
+
+        if tier == "Fast Index":
+            future = context.job_manager.submit(
+                self.analysis_tiers.fast_index,
+                media_ids
+            )
+        else:
+            future = context.job_manager.submit(
+                self.analysis_tiers.fast_screen,
+                media_ids,
+                topic=self.filter_var.get()
+            )
+
+        self.info.configure(
+            text=f"{tier} started for {len(media_ids):,} selected media."
+        )
+        self.after(
+            150,
+            lambda item=future, label=tier: self.check_fast_analysis_tier(
+                item,
+                label
+            )
+        )
+
+    def check_fast_analysis_tier(self, future, tier):
+
+        if self._destroyed:
+            return
+
+        if not future.done():
+            self.after(
+                150,
+                lambda item=future, label=tier: self.check_fast_analysis_tier(
+                    item,
+                    label
+                )
+            )
+            return
+
+        try:
+            result = future.result()
+        except Exception as ex:
+            self.info.configure(text=f"{tier} failed: {ex}")
+            return
+
+        self.info.configure(
+            text=(
+                f"{tier} complete: {result.get('processed', 0):,} media, "
+                f"{result.get('provider_calls', 0):,} provider calls, "
+                f"{result.get('elapsed_seconds', 0)}s."
+            )
+        )
 
     ########################################################
 

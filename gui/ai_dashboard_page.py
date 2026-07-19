@@ -2,6 +2,7 @@ import customtkinter as ctk
 from tkinter import messagebox
 from pathlib import Path
 
+from config.ai_task_routing import AI_TASK_ROUTING
 from services.brain_service import BrainService
 from services.analysis_review_service import AnalysisReviewService
 from services.provider_diagnostics_service import ProviderDiagnosticsService
@@ -385,6 +386,35 @@ class AIDashboardPage(ctk.CTkFrame):
             padx=15,
             pady=(0, 12)
         )
+
+        routing = ctk.CTkLabel(
+            panel,
+            text=self.routing_summary(),
+            justify="left",
+            wraplength=1100,
+            text_color="#9fb7ff"
+        )
+        routing.pack(
+            anchor="w",
+            padx=15,
+            pady=(0, 12)
+        )
+
+    ##########################################################
+
+    def routing_summary(self):
+
+        lines = ["Task Routing:"]
+
+        for task, route in AI_TASK_ROUTING.items():
+            lines.append(
+                (
+                    f"- {task.replace('_', ' ').title()}: "
+                    f"{route.get('provider')} / {route.get('model')}"
+                )
+            )
+
+        return "\n".join(lines)
 
     ##########################################################
 
