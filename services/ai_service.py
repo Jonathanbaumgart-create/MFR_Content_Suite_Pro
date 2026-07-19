@@ -19,23 +19,34 @@ class AIService:
 
     def parse_analysis(self, text, model="unknown"):
 
-        raw_response = "" if text is None else str(text)
+        raw_response = self._raw_text(text)
         warnings = []
         parse_status = self.STATUS_VALID
+        failure_category = ""
+        normalization_evidence = []
 
         if not raw_response.strip():
             data = {}
             parse_status = self.STATUS_EMPTY
+            failure_category = "empty_response"
             warnings.append("Provider returned empty output")
         else:
-            data, parse_status, warnings = self._parse_json(raw_response)
+            (
+                data,
+                parse_status,
+                warnings,
+                failure_category,
+                normalization_evidence
+            ) = self._parse_json(raw_response)
 
         analysis = self._normalize_analysis(
             data,
             model,
             raw_response,
             parse_status,
-            warnings
+            warnings,
+            failure_category,
+            normalization_evidence
         )
 
         return analysis
@@ -61,38 +72,79 @@ class AIService:
 
     def _parse_json(self, raw_response):
 
-        text = self._strip_fence(raw_response.strip())
+        original = raw_response.strip()
+        text, fence = self._strip_fence(original)
         warnings = []
+        evidence = []
+
+        if fence:
+            warnings.append("Removed JSON/code fence before parsing")
+            evidence.append("markdown_wrapped_json")
 
         try:
-            return json.loads(text), self.STATUS_VALID, warnings
-        except Exception:
-            pass
+            return (
+                json.loads(text),
+                self.STATUS_REPAIRED if fence else self.STATUS_VALID,
+                warnings,
+                "markdown_wrapped_json" if fence else "",
+                evidence
+            )
+        except json.JSONDecodeError as ex:
+            first_error = ex
+        except Exception as ex:
+            first_error = ex
 
         extracted = self._extract_json_object(text)
 
         if extracted and extracted != text:
             warnings.append("Extracted JSON object from surrounding text")
+            evidence.append("extra_text_around_json")
 
             try:
-                return json.loads(extracted), self.STATUS_REPAIRED, warnings
-            except Exception:
+                return (
+                    json.loads(extracted),
+                    self.STATUS_REPAIRED,
+                    warnings,
+                    "extra_text_around_json",
+                    evidence
+                )
+            except Exception as ex:
+                first_error = ex
                 text = extracted
 
         repaired = self._repair_truncated_json(text)
 
         if repaired and repaired != text:
             warnings.append("Repaired truncated JSON braces")
+            evidence.append("truncated_response")
 
             try:
-                return json.loads(repaired), self.STATUS_PARTIAL, warnings
+                return (
+                    json.loads(repaired),
+                    self.STATUS_PARTIAL,
+                    warnings,
+                    "truncated_response",
+                    evidence
+                )
             except Exception:
                 pass
 
-        logger.warning("AI response was not valid structured JSON")
-        warnings.append("Could not parse provider output as JSON")
+        category = "malformed_json"
+        if not extracted:
+            category = "malformed_json"
+        if "unterminated" in str(first_error).lower():
+            category = "truncated_response"
 
-        return {}, self.STATUS_INVALID, warnings
+        logger.warning(
+            "AI response was not valid structured JSON category=%s error=%s",
+            category,
+            first_error
+        )
+        warnings.append(
+            "Could not parse provider output as JSON: " + category
+        )
+
+        return {}, self.STATUS_INVALID, warnings, category, evidence
 
     ############################################################
 
@@ -102,13 +154,18 @@ class AIService:
         model,
         raw_response,
         parse_status,
-        warnings
+        warnings,
+        failure_category="",
+        normalization_evidence=None
     ):
+
+        normalization_evidence = list(normalization_evidence or [])
 
         if not isinstance(data, dict):
             data = {}
             warnings.append("JSON root was not an object")
             parse_status = self.STATUS_INVALID
+            failure_category = failure_category or "unsupported_response_shape"
 
         description = self._text(data.get("description"))
         people = self._list(data.get("people"))
@@ -126,13 +183,24 @@ class AIService:
             {"indoor", "outdoor", "mixed", "unknown"},
             "unknown"
         )
-        confidence = self._confidence(data.get("confidence"), warnings)
+        confidence_value = self._confidence_value(data)
+        confidence = self._confidence(confidence_value, warnings)
         people_count = self._people_count(
             data.get("people_count"),
             description,
             people,
             warnings
         )
+        validation_category = self._validation_failure_category(
+            data,
+            description,
+            confidence,
+            people_count,
+            warnings
+        )
+        if validation_category:
+            parse_status = self.STATUS_INVALID
+            failure_category = validation_category
         visual_facts = self._visual_fact_count(
             description,
             people_count,
@@ -173,6 +241,13 @@ class AIService:
         )
         overall_score = int(round(confidence * 100))
 
+        parser_classification = self._parser_classification(parse_status)
+        persisted_failure_category = (
+            failure_category
+            if parser_classification == "invalid"
+            else ""
+        )
+
         return {
             "description": description,
             "scene_type": scene_type,
@@ -205,6 +280,22 @@ class AIService:
             "raw_response": raw_response,
             "parse_status": parse_status,
             "parse_warnings": warnings,
+            "parser_classification": parser_classification,
+            "failure_category": persisted_failure_category,
+            "provider_failure_category": persisted_failure_category,
+            "normalization_evidence": normalization_evidence,
+            "user_facing_reason": self._user_reason(persisted_failure_category),
+            "technical_detail": self._technical_detail(
+                persisted_failure_category,
+                warnings
+            ),
+            "retryable": persisted_failure_category in {
+                "empty_response",
+                "truncated_response",
+                "malformed_json",
+                "markdown_wrapped_json",
+                "extra_text_around_json"
+            },
             "structured_field_completeness": self._completeness({
                 "description": description,
                 "people_count": people_count,
@@ -221,13 +312,29 @@ class AIService:
 
     ############################################################
 
+    def _raw_text(self, value):
+
+        if value is None:
+            return ""
+
+        if isinstance(value, (dict, list)):
+            try:
+                return json.dumps(value)
+            except Exception:
+                return str(value)
+
+        return str(value)
+
+    ############################################################
+
     def _strip_fence(self, text):
 
         if text.startswith("```"):
             text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.I)
             text = re.sub(r"\s*```$", "", text)
+            return text.strip(), True
 
-        return text.strip()
+        return text.strip(), False
 
     ############################################################
 
@@ -330,6 +437,26 @@ class AIService:
 
     ############################################################
 
+    def _confidence_value(self, data):
+
+        for key in (
+            "confidence",
+            "overall_score",
+            "communications_score",
+            "community_score",
+            "education_score",
+            "technical_score"
+        ):
+
+            value = data.get(key)
+
+            if value is not None and value != "":
+                return value
+
+        return None
+
+    ############################################################
+
     def _people_count(self, value, description, people, warnings):
 
         count = self._int(value)
@@ -357,6 +484,97 @@ class AIService:
             warnings.append("Inferred people_count from description text")
 
         return count
+
+    ############################################################
+
+    def _validation_failure_category(
+        self,
+        data,
+        description,
+        confidence,
+        people_count,
+        warnings
+    ):
+
+        if not data:
+            return ""
+
+        if not description or len(description.strip()) < 8:
+            warnings.append("Missing usable description")
+            return "missing_required_fields"
+
+        raw_confidence = self._confidence_value(data)
+        try:
+            raw_confidence_float = float(raw_confidence)
+        except Exception:
+            return "invalid_field_types"
+
+        if raw_confidence_float < 0 or raw_confidence_float > 100:
+            warnings.append("Confidence was outside supported range")
+            return "invalid_field_types"
+
+        raw_people_count = data.get("people_count")
+        if raw_people_count is not None:
+            try:
+                raw_people_int = int(raw_people_count)
+            except Exception:
+                return "invalid_field_types"
+            if raw_people_int < 0 or raw_people_int > 1000:
+                warnings.append("people_count was outside supported range")
+                return "invalid_field_types"
+
+        for key in (
+            "people",
+            "apparatus",
+            "equipment",
+            "activities",
+            "visible_text",
+            "safety_concerns",
+            "public_use_risks",
+            "uncertain_observations"
+        ):
+            value = data.get(key)
+            if value is not None and not isinstance(value, (list, str)):
+                warnings.append(f"{key} used an unsupported field type")
+                return "invalid_field_types"
+
+        return ""
+
+    ############################################################
+
+    def _parser_classification(self, parse_status):
+
+        if parse_status == self.STATUS_VALID:
+            return "valid"
+        if parse_status == self.STATUS_REPAIRED:
+            return "normalized_valid"
+        if parse_status == self.STATUS_PARTIAL:
+            return "partial_valid"
+        return "invalid"
+
+    ############################################################
+
+    def _user_reason(self, category):
+
+        return {
+            "empty_response": "Ollama returned no analysis text.",
+            "truncated_response": "The model response appeared incomplete.",
+            "malformed_json": "The model returned malformed JSON.",
+            "markdown_wrapped_json": "The model wrapped JSON in Markdown.",
+            "extra_text_around_json": "The model added text around the JSON.",
+            "unsupported_response_shape": "Ollama returned an unsupported response shape.",
+            "missing_required_fields": "The model omitted required analysis fields.",
+            "invalid_field_types": "The model returned unsupported field values."
+        }.get(category or "", "")
+
+    ############################################################
+
+    def _technical_detail(self, category, warnings):
+
+        if not category:
+            return ""
+
+        return "; ".join([category] + [str(item) for item in warnings[:4]])
 
     ############################################################
 

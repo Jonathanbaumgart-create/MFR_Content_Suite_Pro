@@ -1,7 +1,10 @@
 import os
+import json
+import re
 import threading
 import time
 import uuid
+from pathlib import Path
 
 from concurrent.futures import Future
 
@@ -35,7 +38,16 @@ class VisionParseError(RuntimeError):
 
         self.analysis = analysis
         status = analysis.get("parse_status", "invalid_response")
-        super().__init__(f"Vision provider returned {status}")
+        self.category = (
+            analysis.get("failure_category") or
+            analysis.get("provider_failure_category") or
+            "parser_rejected"
+        )
+        reason = (
+            analysis.get("user_facing_reason") or
+            f"Vision provider returned {status}"
+        )
+        super().__init__(reason)
 
 
 class BulkAnalysisHandle:
@@ -170,7 +182,7 @@ class BrainService:
             f"Model: {failure.get('model', '')}\n"
             f"Last error: {failure.get('failure_reason', '')}\n\n"
             "Run Provider Diagnostics first, try CPU mode, try a smaller "
-            "vision model, or switch to mock for testing."
+            "vision model. Mock remains available for testing only."
         )
 
     ############################################################
@@ -240,12 +252,25 @@ class BrainService:
     def pause_queue(self):
 
         self.jobs.pause()
+        if self._active_session_id:
+            self._db_optional(
+                "pause_analysis_session",
+                self._active_session_id,
+                "Paused by user"
+            )
 
     ############################################################
 
     def resume_queue(self):
 
         self.jobs.resume()
+        if self._active_session_id:
+            self.db.update_analysis_session(
+                self._active_session_id,
+                status=AnalysisSessionStatus.RUNNING,
+                worker_status="claiming",
+                cancel_reason=""
+            )
 
     ############################################################
 
@@ -255,9 +280,15 @@ class BrainService:
 
         canceled = self.jobs.cancel_queued()
 
-        if self._active_session_id:
+        session_id = self._active_session_id
+
+        if not session_id:
+            session = self.db.latest_incomplete_analysis_session()
+            session_id = session.get("session_id") if session else None
+
+        if session_id:
             canceled += self.db.cancel_analysis_session(
-                self._active_session_id,
+                session_id,
                 "Canceled by user"
             )
 
@@ -600,6 +631,10 @@ class BrainService:
 
         return bool(future and not self._future_done(future))
 
+    def session_has_active_worker(self, session_id):
+
+        return self._session_has_active_worker(session_id)
+
     ############################################################
 
     def _future_done(self, future):
@@ -759,7 +794,7 @@ class BrainService:
             worker_id,
             process_id=os.getpid(),
             thread_id=str(threading.get_ident()),
-            status="Active"
+            status="starting"
         )
         self.db.update_analysis_session(
             session_id,
@@ -773,6 +808,7 @@ class BrainService:
         processed = 0
         stop_status = "Completed"
         stop_reason = ""
+        worker_stop_status = "stopped"
 
         try:
             while not self._bulk_cancel.is_set():
@@ -781,7 +817,7 @@ class BrainService:
                 self._db_optional(
                     "heartbeat_analysis_session",
                     session_id,
-                    "Active"
+                    "claiming"
                 )
                 batch = self.db.next_analysis_queue_batch(
                     session_id,
@@ -789,6 +825,11 @@ class BrainService:
                 )
 
                 if not batch:
+                    self._db_optional(
+                        "heartbeat_analysis_session",
+                        session_id,
+                        "idle"
+                    )
                     break
 
                 for item in batch:
@@ -827,6 +868,7 @@ class BrainService:
             if self._bulk_cancel.is_set():
                 stop_status = "Canceled"
                 stop_reason = "Canceled by user"
+                worker_stop_status = "stopped"
                 self.db.cancel_analysis_session(
                     session_id,
                     "Canceled by user"
@@ -834,6 +876,7 @@ class BrainService:
             elif max_items is not None and processed >= max_items:
                 stop_status = "Paused"
                 stop_reason = "Paused after controlled recovery validation"
+                worker_stop_status = "stopped"
                 self._db_optional(
                     "pause_analysis_session",
                     session_id,
@@ -854,6 +897,7 @@ class BrainService:
         except Exception as error:
             stop_status = "Failed"
             stop_reason = str(error)
+            worker_stop_status = "failed"
             self.db.reset_stale_analysis_items(session_id)
             self._db_optional(
                 "mark_analysis_session_recoverable",
@@ -876,7 +920,7 @@ class BrainService:
                 self._db_optional(
                     "mark_analysis_worker_stopped",
                     session_id,
-                    stop_status,
+                    worker_stop_status,
                     reason=stop_reason
                 )
             except Exception:
@@ -909,7 +953,7 @@ class BrainService:
         self._db_optional(
             "heartbeat_analysis_session",
             session_id,
-            "Waiting for Provider"
+            "analyzing"
         )
 
         try:
@@ -936,7 +980,7 @@ class BrainService:
             self._db_optional(
                 "heartbeat_analysis_session",
                 session_id,
-                "Active"
+                "idle"
             )
             self.db.mark_analysis_queue_completed(
                 queue_id,
@@ -968,7 +1012,7 @@ class BrainService:
             self._db_optional(
                 "heartbeat_analysis_session",
                 session_id,
-                "Active"
+                "idle"
             )
             self.db.refresh_analysis_session_counts(session_id)
 
@@ -986,6 +1030,8 @@ class BrainService:
             summary.get("skipped_count", 0)
         ):
             status = AnalysisSessionStatus.FAILED
+        elif failed:
+            status = AnalysisSessionStatus.COMPLETED_WITH_FAILURES
 
         if queued:
             status = AnalysisSessionStatus.QUEUED
@@ -1119,12 +1165,13 @@ class BrainService:
             AnalysisSessionStatus.RECOVERABLE,
             AnalysisSessionStatus.INTERRUPTED
         ):
-            worker_status = status
+            worker_status = worker_status or "stale"
 
         analysis_current = session.get("current_filename", "")
 
         if not active_worker and status in (
             AnalysisSessionStatus.RUNNING,
+            AnalysisSessionStatus.STARTING,
             AnalysisSessionStatus.RECOVERABLE,
             AnalysisSessionStatus.INTERRUPTED,
             AnalysisSessionStatus.PAUSED
@@ -1184,19 +1231,19 @@ class BrainService:
         category = getattr(error, "category", "")
 
         if category:
-            return category
+            return self._normalize_provider_failure_category(category)
 
         text = str(error).lower()
         name = type(error).__name__.lower()
 
         if "timeout" in text or "timeout" in name or "timed out" in text:
-            return AnalysisFailureCategory.TIMEOUT
+            return "request_timeout"
 
         if "cuda" in text or "out of memory" in text or "memory" in text:
             return AnalysisFailureCategory.OUT_OF_MEMORY
 
         if "connection" in text or "refused" in text or "unreachable" in text:
-            return AnalysisFailureCategory.PROVIDER_UNAVAILABLE
+            return "provider_unreachable"
 
         if "unsupported" in text or "format" in text:
             return AnalysisFailureCategory.UNSUPPORTED_FORMAT
@@ -1208,6 +1255,24 @@ class BrainService:
             return AnalysisFailureCategory.INVALID_IMAGE
 
         return AnalysisFailureCategory.UNEXPECTED
+
+    ############################################################
+
+    def _normalize_provider_failure_category(self, category):
+
+        category = str(category or "").strip()
+        mapping = {
+            "provider_timeout": "request_timeout",
+            "empty_provider_response": "empty_response",
+            "provider_unavailable": "provider_unreachable",
+            "request_payload_invalid": "image_payload_error",
+            "image_encoding_failed": "image_payload_error",
+            "unsupported_image_mode": "image_payload_error",
+            "image_too_large": "image_payload_error",
+            "provider_http_400": "provider_internal_error",
+            "provider_response_invalid": "parser_rejected"
+        }
+        return mapping.get(category, category or "unknown_provider_error")
 
     ############################################################
 
@@ -1285,9 +1350,43 @@ class BrainService:
 
         self._bulk_cancel.clear()
         self.db.reset_stale_analysis_items(session["session_id"])
+        preflight = self._preflight_resume_session(session)
+
+        if not preflight.get("ok"):
+            reason = preflight.get("reason", "Provider preflight failed")
+            self._db_optional(
+                "mark_analysis_session_recoverable",
+                session["session_id"],
+                reason
+            )
+            future = Future()
+            future.set_result({
+                "resumed": False,
+                "session_id": session["session_id"],
+                "reason": reason,
+                "preflight": preflight
+            })
+            logger.warning(
+                "Analysis resume preflight blocked session_id=%s reason=%s",
+                session["session_id"],
+                reason
+            )
+            return BulkAnalysisHandle(
+                future,
+                session.get("total_items", 0)
+            )
+
         self._db_optional(
             "increment_analysis_session_resume_count",
             session["session_id"]
+        )
+        self.db.update_analysis_session(
+            session["session_id"],
+            status=AnalysisSessionStatus.STARTING,
+            worker_status="starting",
+            worker_stop_reason="Resume requested; worker starting",
+            current_media_id=None,
+            current_filename=""
         )
         future = self._submit_persistent_session(
             session["session_id"],
@@ -1299,6 +1398,49 @@ class BrainService:
             future,
             session.get("total_items", 0)
         )
+
+    ############################################################
+
+    def _preflight_resume_session(self, session):
+
+        session_id = session.get("session_id")
+        result = {
+            "ok": True,
+            "session_id": session_id,
+            "provider": self.vision.provider_key(),
+            "model": self.vision.model_name(),
+            "checks": []
+        }
+
+        try:
+            if hasattr(self.db, "active_analysis_media_type_counts"):
+                counts = self.db.active_analysis_media_type_counts(session_id)
+            else:
+                counts = {}
+            result["media_type_counts"] = counts
+            result["checks"].append("database queue readable")
+            self.db.refresh_analysis_session_counts(session_id)
+            result["checks"].append("database writable")
+        except Exception as error:
+            result["ok"] = False
+            result["reason"] = f"Database preflight failed: {error}"
+            return result
+
+        video_count = int(result.get("media_type_counts", {}).get("video") or 0)
+
+        if video_count:
+            capabilities = self._video_provider_capabilities()
+            result["video_provider_capabilities"] = capabilities
+            if not capabilities.get("supported"):
+                result["ok"] = False
+                result["reason"] = capabilities.get(
+                    "reason",
+                    "Video analysis provider preflight failed"
+                )
+                return result
+            result["checks"].append("video provider supports sampled frames")
+
+        return result
 
     ############################################################
 
@@ -1377,10 +1519,10 @@ class BrainService:
 
             duration = time.perf_counter() - started
             parsed = getattr(error, "analysis", {}) or {}
-            category = getattr(
-                error,
-                "category",
-                "provider_response_invalid"
+            category = self._normalize_provider_failure_category(
+                getattr(error, "category", "") or
+                parsed.get("failure_category") or
+                "unknown_provider_error"
             )
             failure_reason = str(error)
 
@@ -1390,6 +1532,18 @@ class BrainService:
                 parsed["request_metadata"] = error.request_metadata
                 parsed["provider_attempts"] = error.attempts
                 failure_reason = f"{error.category}: {error}"
+
+            diagnostic_reference = self._capture_provider_failure_diagnostic(
+                media_id,
+                category,
+                failure_reason,
+                parsed,
+                duration
+            )
+            request_metadata = parsed.get("request_metadata") or {}
+            if diagnostic_reference:
+                request_metadata = dict(request_metadata)
+                request_metadata["diagnostic_reference"] = diagnostic_reference
 
             self.db.save_ai_failure(
                 media_id,
@@ -1413,7 +1567,7 @@ class BrainService:
                     "structured_field_completeness": parsed.get(
                         "structured_field_completeness"
                     ),
-                    "request_metadata": parsed.get("request_metadata"),
+                    "request_metadata": request_metadata,
                     "preprocessing_metadata": parsed.get(
                         "preprocessing_metadata"
                     ),
@@ -1429,6 +1583,117 @@ class BrainService:
             )
 
             raise
+
+    ############################################################
+
+    def _capture_provider_failure_diagnostic(
+        self,
+        media_id,
+        category,
+        failure_reason,
+        parsed,
+        elapsed
+    ):
+
+        try:
+            diagnostics_dir = Path("logs") / "provider_diagnostics"
+            diagnostics_dir.mkdir(
+                parents=True,
+                exist_ok=True
+            )
+            request_id = uuid.uuid4().hex[:12]
+            raw_response = self._redact_provider_diagnostic_text(
+                parsed.get("raw_response", "")
+            )
+            payload = {
+                "request_id": request_id,
+                "media_id": media_id,
+                "provider": self.vision.provider_key(),
+                "model": self.vision.model_name(),
+                "failure_category": category,
+                "failure_reason": str(failure_reason)[:500],
+                "elapsed_seconds": round(float(elapsed or 0), 3),
+                "request_timestamp": TimeService.utc_now_iso(),
+                "parse_status": parsed.get("parse_status", ""),
+                "parser_classification": parsed.get(
+                    "parser_classification",
+                    ""
+                ),
+                "parse_warnings": parsed.get("parse_warnings", [])[:8],
+                "normalization_evidence": parsed.get(
+                    "normalization_evidence",
+                    []
+                ),
+                "raw_response_excerpt": raw_response[:4000],
+                "raw_response_length": len(str(parsed.get("raw_response", ""))),
+                "truncated": len(str(parsed.get("raw_response", ""))) > 4000,
+                "provider_status_code": parsed.get("provider_status_code"),
+                "provider_response_excerpt": self._redact_provider_diagnostic_text(
+                    parsed.get("provider_response_excerpt", "")
+                )[:1000],
+                "request_metadata": self._safe_diagnostic_metadata(
+                    parsed.get("request_metadata") or {}
+                )
+            }
+            path = diagnostics_dir / (
+                TimeService.utc_now_iso()
+                .replace(":", "")
+                .replace("+", "Z")
+                + f"_{request_id}.json"
+            )
+            path.write_text(
+                json.dumps(payload, indent=2),
+                encoding="utf-8"
+            )
+            self._prune_provider_diagnostics(diagnostics_dir)
+            return str(path)
+        except Exception:
+            logger.warning(
+                "Could not write provider failure diagnostic media_id=%s",
+                media_id,
+                exc_info=True
+            )
+            return ""
+
+    def _redact_provider_diagnostic_text(self, value):
+
+        text = str(value or "")
+        text = re.sub(
+            r"[A-Za-z]:\\\\[^\\s\"']+",
+            "[local-path-redacted]",
+            text
+        )
+        text = re.sub(
+            r"(?i)([A-Za-z0-9+/]{200,}={0,2})",
+            "[base64-redacted]",
+            text
+        )
+        return text
+
+    def _safe_diagnostic_metadata(self, metadata):
+
+        safe = {}
+        for key, value in (metadata or {}).items():
+            if key in ("images", "base64", "path"):
+                safe[key] = "[redacted]"
+            elif isinstance(value, dict):
+                safe[key] = self._safe_diagnostic_metadata(value)
+            else:
+                safe[key] = value
+        return safe
+
+    def _prune_provider_diagnostics(self, diagnostics_dir, keep=25):
+
+        files = sorted(
+            diagnostics_dir.glob("*.json"),
+            key=lambda item: item.stat().st_mtime,
+            reverse=True
+        )
+        for path in files[keep:]:
+            try:
+                path.unlink()
+            except Exception:
+                pass
 
     ############################################################
 
@@ -1888,8 +2153,10 @@ class BrainService:
         attempts = retry_limit + 1
         delay = self.config.get("retry_delay_seconds", 2)
         last_error = None
+        format_retry_used = False
+        attempt = 1
 
-        for attempt in range(1, attempts + 1):
+        while attempt <= attempts:
 
             try:
 
@@ -1911,11 +2178,34 @@ class BrainService:
                         self.vision
                     )
 
+                if analysis.get("parse_status") in (
+                    "empty_response",
+                    "invalid_response"
+                ):
+                    if (
+                        analysis.get("retryable")
+                        and not format_retry_used
+                    ):
+                        format_retry_used = True
+                        attempts += 1
+                        logger.warning(
+                            "Retrying vision request after parser failure media_id=%s category=%s",
+                            media_id,
+                            analysis.get("failure_category")
+                        )
+                        attempt += 1
+                        time.sleep(min(float(delay or 0), 1))
+                        continue
+                    raise VisionParseError(analysis)
+
                 return analysis, attempt - 1
 
             except Exception as error:
 
                 last_error = error
+
+                if isinstance(error, VisionParseError):
+                    raise
 
                 logger.error(
                     "Vision provider failed attempt=%s attempts=%s provider=%s",
@@ -1933,6 +2223,7 @@ class BrainService:
                     raise
 
                 time.sleep(delay)
+                attempt += 1
 
         raise RuntimeError(last_error or "Vision analysis failed")
 

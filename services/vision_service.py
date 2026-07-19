@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 
 import requests
+import json
 
 from config.ai_config import AI_CONFIG
 from services.ai_settings_service import AISettingsService
@@ -19,7 +20,7 @@ class VisionProviderError(RuntimeError):
     def __init__(
         self,
         message,
-        category="provider_unavailable",
+        category="provider_unreachable",
         status_code=None,
         response_excerpt="",
         request_metadata=None,
@@ -150,7 +151,7 @@ class OllamaVisionProvider(VisionProvider):
 
         raise VisionProviderError(
             "Vision provider failed without returning a response",
-            category="provider_unavailable",
+            category="provider_unreachable",
             attempts=attempts
         )
 
@@ -230,13 +231,13 @@ class OllamaVisionProvider(VisionProvider):
         except requests.exceptions.ReadTimeout as ex:
             raise VisionProviderError(
                 "Vision provider timed out",
-                category="provider_timeout",
+                category="request_timeout",
                 request_metadata=request_metadata
             ) from ex
         except requests.exceptions.RequestException as ex:
             raise VisionProviderError(
                 f"Vision provider unavailable: {ex}",
-                category="provider_unavailable",
+                category="provider_unreachable",
                 request_metadata=request_metadata
             ) from ex
 
@@ -254,20 +255,49 @@ class OllamaVisionProvider(VisionProvider):
         except requests.exceptions.RequestException as ex:
             raise VisionProviderError(
                 f"Vision provider HTTP error: {ex}",
-                category="provider_unavailable",
+                category="provider_internal_error",
                 status_code=response.status_code,
                 response_excerpt=self._safe_excerpt(response.text),
                 request_metadata=request_metadata
             ) from ex
 
-        data = response.json()
-        text = data.get("response", "")
+        try:
+            data = response.json()
+        except Exception as ex:
+            raise VisionProviderError(
+                "Vision provider returned a non-JSON API response",
+                category="unsupported_response_shape",
+                status_code=response.status_code,
+                response_excerpt=self._safe_excerpt(response.text),
+                request_metadata=request_metadata
+            ) from ex
+
+        text, wrapper = self._extract_response_text(data)
+
+        if data.get("done") is False:
+            raise VisionProviderError(
+                "Vision provider returned an incomplete response",
+                category="truncated_response",
+                status_code=response.status_code,
+                response_excerpt=self._safe_excerpt(text or data),
+                request_metadata={
+                    **request_metadata,
+                    "response_wrapper": wrapper,
+                    "done": data.get("done")
+                }
+            )
 
         if not str(text).strip():
             raise VisionProviderError(
                 "Vision provider returned an empty response",
-                category="empty_provider_response",
-                request_metadata=request_metadata
+                category="empty_response",
+                status_code=response.status_code,
+                response_excerpt=self._safe_excerpt(data),
+                request_metadata={
+                    **request_metadata,
+                    "response_wrapper": wrapper,
+                    "response_keys": sorted(data.keys())
+                }
             )
 
         metadata = {
@@ -276,10 +306,47 @@ class OllamaVisionProvider(VisionProvider):
             "status_code": response.status_code,
             "response_excerpt": self._safe_excerpt(text),
             "preprocessing": preprocessing,
-            "request": request_metadata
+            "request": {
+                **request_metadata,
+                "response_wrapper": wrapper,
+                "response_keys": sorted(data.keys()),
+                "done": data.get("done")
+            }
         }
 
         return text, metadata
+
+    ############################################################
+
+    def _extract_response_text(self, data):
+
+        if not isinstance(data, dict):
+            raise VisionProviderError(
+                "Vision provider returned an unsupported response shape",
+                category="unsupported_response_shape",
+                response_excerpt=self._safe_excerpt(data)
+            )
+
+        candidates = (
+            ("response", data.get("response")),
+            ("message.content", (data.get("message") or {}).get("content") if isinstance(data.get("message"), dict) else None),
+            ("content", data.get("content")),
+            ("output", data.get("output")),
+            ("text", data.get("text"))
+        )
+
+        for name, value in candidates:
+            if value is None:
+                continue
+            if isinstance(value, (dict, list)):
+                return json.dumps(value), name
+            return str(value), name
+
+        raise VisionProviderError(
+            "Vision provider response did not contain analysis text",
+            category="unsupported_response_shape",
+            response_excerpt=self._safe_excerpt(data)
+        )
 
     ############################################################
 
@@ -505,9 +572,12 @@ class VisionService:
             "model": self.model_name()
         }
 
-    def analyze(self, image_path: str) -> str:
+    def analyze(self, image_path: str, prompt_context: str = "") -> str:
 
-        return self._provider.analyze(image_path)
+        return self._provider.analyze(
+            image_path,
+            prompt_context=prompt_context
+        )
 
     def request_metadata(self):
 

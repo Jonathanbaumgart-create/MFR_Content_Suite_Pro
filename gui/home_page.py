@@ -49,7 +49,7 @@ class HomePage(ctk.CTkFrame):
 
         self.build_page()
         self._refresh_after_id = self.after(
-            100,
+            500,
             self.refresh_brief
         )
 

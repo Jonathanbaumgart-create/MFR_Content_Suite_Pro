@@ -1,5 +1,6 @@
 import customtkinter as ctk
 from tkinter import messagebox
+from pathlib import Path
 
 from services.brain_service import BrainService
 from services.analysis_review_service import AnalysisReviewService
@@ -461,8 +462,31 @@ class AIDashboardPage(ctk.CTkFrame):
         self.diagnostics_text.pack(
             fill="x",
             padx=15,
+            pady=(0, 8)
+        )
+        actions = ctk.CTkFrame(
+            panel,
+            fg_color="transparent"
+        )
+        actions.pack(
+            fill="x",
+            padx=15,
             pady=(0, 15)
         )
+        for label, command in (
+            ("Run Production Schema Test", self.run_provider_diagnostics),
+            ("View Last Failure Summary", self.view_last_provider_failure),
+            ("Clear Provider Diagnostics", self.clear_provider_diagnostics)
+        ):
+            ctk.CTkButton(
+                actions,
+                text=label,
+                width=190,
+                command=command
+            ).pack(
+                side="left",
+                padx=(0, 8)
+            )
         self.set_diagnostics_text(
             "Diagnostics have not been run yet."
         )
@@ -557,6 +581,46 @@ class AIDashboardPage(ctk.CTkFrame):
 
     ##########################################################
 
+    def view_last_provider_failure(self):
+
+        folder = Path("logs") / "provider_diagnostics"
+        files = sorted(
+            folder.glob("*.json"),
+            key=lambda item: item.stat().st_mtime,
+            reverse=True
+        ) if folder.exists() else []
+
+        if not files:
+            self.set_diagnostics_text(
+                "No provider failure diagnostics have been captured yet."
+            )
+            return
+
+        self.set_diagnostics_text(
+            files[0].read_text(
+                encoding="utf-8",
+                errors="replace"
+            )[:6000]
+        )
+
+    def clear_provider_diagnostics(self):
+
+        folder = Path("logs") / "provider_diagnostics"
+        count = 0
+        if folder.exists():
+            for path in folder.glob("*.json"):
+                try:
+                    path.unlink()
+                    count += 1
+                except Exception:
+                    pass
+
+        self.set_diagnostics_text(
+            f"Cleared {count:,} provider diagnostic file(s)."
+        )
+
+    ##########################################################
+
     def show_diagnostics_result(self, result):
 
         self.set_diagnostics_text(
@@ -595,6 +659,16 @@ class AIDashboardPage(ctk.CTkFrame):
                 f"Configured model present: {result.get('configured_model_present')}",
                 f"Simple text call: {result.get('simple_text_call')}",
                 f"Vision model call: {result.get('vision_model_call')}",
+                f"Image request accepted: {result.get('image_request_accepted', False)}",
+                f"Raw response received: {result.get('raw_response_received', False)}",
+                f"Response wrapper: {result.get('response_wrapper', '') or 'None'}",
+                f"Wrapper recognized: {result.get('response_wrapper_recognized', False)}",
+                f"JSON extracted: {result.get('json_extracted', False)}",
+                f"Schema validated: {result.get('schema_validated', False)}",
+                f"Production parser accepted: {result.get('production_parser_accepted', False)}",
+                f"Persistence compatible: {result.get('persistence_compatible', False)}",
+                f"Parser classification: {result.get('parser_classification', '') or 'None'}",
+                f"Failure category: {result.get('failure_category', '') or 'None'}",
                 f"Model loading: {result.get('model_loading', False)}",
                 f"Status: {result.get('provider_status', '')}",
                 f"Last error: {result.get('last_error', '') or 'None'}",
@@ -1165,7 +1239,10 @@ class AIDashboardPage(ctk.CTkFrame):
             self.status.configure(
                 text="Queue paused"
             )
-        elif worker_status in ("Stale", "Recoverable", "Interrupted"):
+        elif (
+            worker_status in ("Stale", "stale", "failed") or
+            session_status in ("Recoverable", "Interrupted")
+        ):
             self.status.configure(
                 text=(
                     "Analysis session needs Resume Previous "

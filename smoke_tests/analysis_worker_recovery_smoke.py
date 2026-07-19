@@ -221,7 +221,7 @@ def main():
             assert recovered, recovered
             summary = db.analysis_session_summary(session_id)
             assert summary["status"] == AnalysisSessionStatus.RECOVERABLE, summary
-            assert summary["worker_status"] == "Recoverable", summary
+            assert summary["worker_status"] == "stale", summary
             counts = queue_state_counts(db, session_id)
             assert counts[AnalysisQueueState.RETRY_PENDING] == 1, counts
             assert latest_media_status(db, 1) == "Interrupted"
@@ -237,6 +237,7 @@ def main():
             assert summary["worker_heartbeat_at"], summary
             assert summary["worker_stopped_at"], summary
             assert summary["resume_count"] >= 1, summary
+            assert summary["worker_status"] == "stopped", summary
             counts = queue_state_counts(db, session_id)
             assert counts[AnalysisQueueState.COMPLETED] == 1, counts
             assert (

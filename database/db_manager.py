@@ -2306,6 +2306,16 @@ class DatabaseManager:
                 "failed_count": 0,
                 "retryable_failed_count": 0,
                 "video_metadata_only_count": 0,
+                "already_queued_count": 0,
+                "queued_in_recoverable_count": 0,
+                "queued_in_running_count": 0,
+                "already_analyzed_count": 0,
+                "protected_real_count": 0,
+                "unsupported_provider_count": 0,
+                "missing_file_count": 0,
+                "failed_requires_retry_count": 0,
+                "force_reanalysis_available_count": 0,
+                "reason_counts": {},
                 "queueable_ids": [],
                 "skipped_ids": [],
                 "force_reanalysis": bool(force),
@@ -2321,17 +2331,37 @@ class DatabaseManager:
             SELECT
                 media.id,
                 media.media_type,
+                media.path,
                 ai_analysis.provider,
                 ai_analysis.model,
                 ai_analysis.failure_reason,
                 ai_analysis.trust_state,
                 ai_analysis.review_status,
-                video_intelligence.media_id AS video_intelligence_id
+                video_intelligence.media_id AS video_intelligence_id,
+                latest_queue.state AS queue_state,
+                latest_queue.session_id AS queue_session_id,
+                latest_queue.session_status AS queue_session_status
             FROM media
             LEFT JOIN ai_analysis
             ON ai_analysis.media_id=media.id
             LEFT JOIN video_intelligence
             ON video_intelligence.media_id=media.id
+            LEFT JOIN (
+                SELECT q1.media_id,
+                       q1.state,
+                       q1.session_id,
+                       s.status AS session_status
+                FROM analysis_queue q1
+                LEFT JOIN analysis_sessions s
+                ON s.session_id=q1.session_id
+                INNER JOIN (
+                    SELECT media_id, MAX(queue_id) AS queue_id
+                    FROM analysis_queue
+                    GROUP BY media_id
+                ) latest
+                ON latest.queue_id=q1.queue_id
+            ) latest_queue
+            ON latest_queue.media_id=media.id
             WHERE media.id IN ({placeholders})
             """,
             tuple(ids)
@@ -2353,6 +2383,16 @@ class DatabaseManager:
             "failed_count": 0,
             "retryable_failed_count": 0,
             "video_metadata_only_count": 0,
+            "already_queued_count": 0,
+            "queued_in_recoverable_count": 0,
+            "queued_in_running_count": 0,
+            "already_analyzed_count": 0,
+            "protected_real_count": 0,
+            "unsupported_provider_count": 0,
+            "missing_file_count": 0,
+            "failed_requires_retry_count": 0,
+            "force_reanalysis_available_count": 0,
+            "reason_counts": {},
             "queueable_ids": [],
             "skipped_ids": [],
             "force_reanalysis": bool(force),
@@ -2378,6 +2418,19 @@ class DatabaseManager:
             failure = row["failure_reason"] or ""
             trust_state = row["trust_state"] or ""
             review_status = row["review_status"] or ""
+            queue_state = row["queue_state"] or ""
+            queue_session_status = row["queue_session_status"] or ""
+            queue_active = (
+                queue_state in ("Waiting", "Queued", "Analyzing", "Retry Pending")
+                and queue_session_status in (
+                    "Queued",
+                    "Starting",
+                    "Running",
+                    "Paused",
+                    "Recoverable",
+                    "Interrupted"
+                )
+            )
             is_mock = (
                 provider == "mock" or
                 str(model).startswith("mock")
@@ -2412,21 +2465,49 @@ class DatabaseManager:
                 counts["genuinely_unanalyzed_count"] += 1
 
             should_queue = False
+            reason = ""
 
-            if force and is_completed_real and not is_protected_real:
+            if queue_active:
+                should_queue = False
+                counts["already_queued_count"] += 1
+                if queue_session_status in ("Recoverable", "Interrupted"):
+                    counts["queued_in_recoverable_count"] += 1
+                    reason = "already queued in a recoverable session"
+                elif queue_session_status in ("Running", "Starting"):
+                    counts["queued_in_running_count"] += 1
+                    reason = "already queued in a running session"
+                else:
+                    reason = "already queued"
+            elif not row["path"]:
+                counts["missing_file_count"] += 1
+                reason = "missing file path"
+            elif force and is_completed_real and not is_protected_real:
                 should_queue = True
+                counts["force_reanalysis_available_count"] += 1
             elif is_failed and retry_failed:
                 should_queue = True
             elif not is_completed_real and not is_failed:
                 should_queue = True
+            elif is_failed:
+                counts["failed_requires_retry_count"] += 1
+                reason = "failed analysis requires Retry Failed"
+            elif is_completed_real:
+                counts["already_analyzed_count"] += 1
+                reason = "already successfully analyzed"
 
             if is_protected_real and not force:
                 should_queue = False
+                counts["protected_real_count"] += 1
+                reason = "approved or corrected real analysis is protected"
 
             if should_queue:
                 counts["queueable_ids"].append(media_id)
             else:
                 counts["skipped_ids"].append(media_id)
+                if reason:
+                    counts["reason_counts"][reason] = (
+                        counts["reason_counts"].get(reason, 0) + 1
+                    )
 
         return counts
 
@@ -10045,6 +10126,12 @@ class DatabaseManager:
     def reset_stale_analysis_items(self, session_id=None):
 
         return self._analysis_queue_repository().reset_stale_analyzing(
+            session_id
+        )
+
+    def active_analysis_media_type_counts(self, session_id):
+
+        return self._analysis_queue_repository().active_media_type_counts(
             session_id
         )
 

@@ -382,7 +382,7 @@ class PhotoCard(ctk.CTkFrame):
     def thumbnail_ready(self, media_path, thumbnail_image):
 
         with self._thumbnail_update_lock:
-            delay = (self._thumbnail_update_counter % 40) * 25
+            delay = 250 + ((self._thumbnail_update_counter % 200) * 150)
             self.__class__._thumbnail_update_counter += 1
 
         try:

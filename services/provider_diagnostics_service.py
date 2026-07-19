@@ -1,9 +1,12 @@
 from urllib.parse import urlparse
+import json
 
 import requests
 
 from services.ai_settings_service import AISettingsService
+from services.ai_service import AIService
 from services.logging_service import LoggingService
+from services.vision_service import OllamaVisionProvider
 
 
 logger = LoggingService.get_logger("ai")
@@ -83,8 +86,8 @@ class ProviderDiagnosticsService:
                 ex,
                 (
                     "Ollama is not reachable. Start Ollama, then retry "
-                    "diagnostics. Keep mock active for testing until Ollama "
-                    "is healthy."
+                    "diagnostics. Mock remains available for testing only "
+                    "until Ollama is healthy."
                 )
             )
 
@@ -95,8 +98,8 @@ class ProviderDiagnosticsService:
             result["provider_status"] = "Configured model missing"
             result["recommended_action"] = (
                 f"Pull or select the configured vision model '{model}'. "
-                "You can keep mock active for testing, try a smaller vision "
-                "model, or update the model name here."
+                "For production, try a smaller vision model or update the "
+                "model name here. Mock remains testing-only."
             )
             return result
 
@@ -124,11 +127,14 @@ class ProviderDiagnosticsService:
             result["last_error"] = str(ex)
 
         try:
+            production_prompt = OllamaVisionProvider(
+                settings
+            )._prompt("Provider diagnostics production schema test.")
             vision_response = self.http.post(
                 generate_url,
                 json={
                     "model": model,
-                    "prompt": "Reply with one short sentence about this image.",
+                    "prompt": production_prompt,
                     "images": [self.SAMPLE_IMAGE_BASE64],
                     "stream": False
                 },
@@ -136,10 +142,51 @@ class ProviderDiagnosticsService:
             )
             vision_response.raise_for_status()
             result["vision_model_call"] = True
-            result["provider_status"] = "Ready"
-            result["recommended_action"] = (
-                "Ollama vision diagnostics passed. Real analysis can be retried."
+            result["image_request_accepted"] = True
+            payload = vision_response.json()
+            result["raw_response_received"] = True
+            text, wrapper = self._extract_response_text(payload)
+            result["response_wrapper"] = wrapper
+            result["response_wrapper_recognized"] = True
+            parsed = AIService().parse_analysis(
+                text,
+                model
             )
+            result["json_extracted"] = parsed.get("parse_status") not in (
+                AIService.STATUS_EMPTY,
+                AIService.STATUS_INVALID
+            )
+            result["schema_validated"] = parsed.get(
+                "parser_classification"
+            ) in ("valid", "normalized_valid", "partial_valid")
+            result["production_parser_accepted"] = result["schema_validated"]
+            result["persistence_compatible"] = bool(
+                parsed.get("description")
+            ) and parsed.get("parse_status") not in (
+                AIService.STATUS_EMPTY,
+                AIService.STATUS_INVALID
+            )
+            result["production_schema_test"] = result["persistence_compatible"]
+            result["parser_classification"] = parsed.get(
+                "parser_classification",
+                ""
+            )
+            result["parse_status"] = parsed.get("parse_status", "")
+            result["parse_warnings"] = parsed.get("parse_warnings", [])
+            result["failure_category"] = parsed.get("failure_category", "")
+
+            if result["production_schema_test"]:
+                result["provider_status"] = "Ready"
+                result["recommended_action"] = (
+                    "Ollama production schema diagnostics passed. Real analysis can be retried."
+                )
+            else:
+                result["provider_status"] = "Production schema failure"
+                result["recommended_action"] = (
+                    "The model responded, but did not return usable production "
+                    "analysis JSON. Retry diagnostics, try a smaller/steadier "
+                    "vision model, or inspect the technical summary."
+                )
 
         except requests.exceptions.ReadTimeout as ex:
             result["last_error"] = str(ex)
@@ -171,11 +218,11 @@ class ProviderDiagnosticsService:
                 result,
                 ex,
                 (
-                    "The vision model failed during a test call. On this "
-                    "Windows machine, try CPU mode, try a smaller vision "
-                    "model, or keep mock active for testing. Do not change "
-                    "system environment variables permanently without approval."
-                )
+                "The vision model failed during a test call. On this "
+                "Windows machine, try CPU mode, try a smaller vision "
+                "model, and use mock only for testing. Do not change "
+                "system environment variables permanently without approval."
+            )
             )
 
         result["gpu_cpu_notes"] = (
@@ -192,6 +239,35 @@ class ProviderDiagnosticsService:
         )
 
         return result
+
+    ############################################################
+
+    def _extract_response_text(self, payload):
+
+        if not isinstance(payload, dict):
+            raise ValueError("Unsupported Ollama response shape")
+
+        candidates = (
+            ("response", payload.get("response")),
+            (
+                "message.content",
+                (payload.get("message") or {}).get("content")
+                if isinstance(payload.get("message"), dict)
+                else None
+            ),
+            ("content", payload.get("content")),
+            ("output", payload.get("output")),
+            ("text", payload.get("text"))
+        )
+
+        for name, value in candidates:
+            if value is None:
+                continue
+            if isinstance(value, (dict, list)):
+                return json.dumps(value), name
+            return str(value), name
+
+        raise ValueError("No recognized analysis text wrapper")
 
     ############################################################
 
@@ -226,6 +302,19 @@ class ProviderDiagnosticsService:
             "configured_model_present": False,
             "simple_text_call": False,
             "vision_model_call": False,
+            "image_request_accepted": False,
+            "raw_response_received": False,
+            "response_wrapper": "",
+            "response_wrapper_recognized": False,
+            "json_extracted": False,
+            "schema_validated": False,
+            "production_parser_accepted": False,
+            "persistence_compatible": False,
+            "production_schema_test": False,
+            "parser_classification": "",
+            "parse_status": "",
+            "parse_warnings": [],
+            "failure_category": "",
             "model_loading": False,
             "gpu_cpu_notes": "",
             "last_error": "",

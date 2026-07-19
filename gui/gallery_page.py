@@ -15,8 +15,8 @@ from services.thumbnail_service import ThumbnailService
 class GalleryPage(ctk.CTkFrame):
 
     PAGE_SIZE = 200
-    CARD_RENDER_CHUNK = 4
-    CARD_RENDER_DELAY_MS = 50
+    CARD_RENDER_CHUNK = 1
+    CARD_RENDER_DELAY_MS = 150
     MAX_SELECTION_IDS = 10000
     ACTIVE_QUEUE_POLL_MS = 1000
     IDLE_QUEUE_POLL_MS = 4000
@@ -48,6 +48,7 @@ class GalleryPage(ctk.CTkFrame):
         self._queue_poll_token = 0
         self.queue_summary = {}
         self.selected_eligible_count = 0
+        self.selection_preview = {}
         self.session_panel_collapsed = self.__class__.session_panel_collapsed
         self.pending_cards = deque()
         self.filter_var = ctk.StringVar(value="All Media")
@@ -224,7 +225,8 @@ class GalleryPage(ctk.CTkFrame):
         self.force_checkbox = ctk.CTkCheckBox(
             actions,
             text="Force reanalysis",
-            variable=self.force_reanalysis_var
+            variable=self.force_reanalysis_var,
+            command=self.analysis_options_changed
         )
         self.force_checkbox.pack(
             side="left",
@@ -234,7 +236,8 @@ class GalleryPage(ctk.CTkFrame):
         self.retry_failed_checkbox = ctk.CTkCheckBox(
             actions,
             text="Retry failed",
-            variable=self.retry_failed_var
+            variable=self.retry_failed_var,
+            command=self.analysis_options_changed
         )
         self.retry_failed_checkbox.pack(
             side="left",
@@ -550,10 +553,11 @@ class GalleryPage(ctk.CTkFrame):
             return
 
         self.queue_summary = summary
+        brain = self.brain_service()
         selected_count = len(self.selected)
         eligible_count = self.selected_eligible_count
-        provider = summary.get("provider") or self.brain_service().vision.provider_key()
-        model = summary.get("model") or self.brain_service().vision.model_name()
+        provider = summary.get("provider") or brain.vision.provider_key()
+        model = summary.get("model") or brain.vision.model_name()
         total = int(summary.get("total") or 0)
         completed = int(summary.get("completed") or 0)
         failed = int(summary.get("failed") or 0)
@@ -562,6 +566,13 @@ class GalleryPage(ctk.CTkFrame):
         running = int(summary.get("running") or 0)
         progress = int(summary.get("progress_percent") or 0)
         current = summary.get("current_filename") or "No active media"
+        status = summary.get("status", "Idle")
+        session_id = summary.get("session_id")
+        active_workers = (
+            1
+            if session_id and brain.session_has_active_worker(session_id)
+            else 0
+        )
 
         if total:
             headline = (
@@ -574,7 +585,11 @@ class GalleryPage(ctk.CTkFrame):
                 "Queue idle"
             )
 
+        if summary.get("recoverable"):
+            headline += " | Previous analysis session found"
+
         self.queue_summary_label.configure(text=headline)
+        selection_reason = self.selection_reason_summary()
         self.queue_detail_label.configure(
             text=(
                 f"Running: {running:,} | Queued: {queued:,} | "
@@ -582,26 +597,26 @@ class GalleryPage(ctk.CTkFrame):
                 f"Current: {current} | Provider: {provider} | Model: {model} | "
                 f"Elapsed: {summary.get('elapsed', '0s')} | "
                 f"{summary.get('eta', 'Estimated time unavailable')}"
+                f"{selection_reason}"
             )
         )
         self.session_detail_label.configure(
             text=(
-                f"Status: {summary.get('status', 'Idle')}\n"
+                f"Status: {status}\n"
                 f"Session: {summary.get('session_id', '') or 'None'} | "
                 f"Created: {summary.get('created_at', '') or 'Unknown'}\n"
                 f"Total: {total:,} | Completed: {completed:,} | "
                 f"Failed: {failed:,} | Remaining: {summary.get('remaining', 0):,}\n"
-                f"Active workers: {running:,} | Worker status: "
+                f"Active workers: {active_workers:,} | Worker status: "
                 f"{summary.get('worker_status', '') or 'Idle'} | "
-                f"Resume count: {summary.get('resume_count', 0)}"
+                f"Resume count: {summary.get('resume_count', 0)}\n"
+                f"{self.session_action_text(summary, active_workers)}"
             )
         )
+        button_text, button_state = self.session_primary_control(summary, active_workers)
         self.pause_resume_button.configure(
-            text=(
-                "Resume Queue"
-                if summary.get("status") == "Paused"
-                else "Pause Queue"
-            )
+            text=button_text,
+            state=button_state
         )
 
     ########################################################
@@ -671,6 +686,7 @@ class GalleryPage(ctk.CTkFrame):
             or self.queue_summary.get("running")
             or self.queue_summary.get("status") in (
                 "Queued",
+                "Starting",
                 "Running",
                 "Recoverable",
                 "Interrupted"
@@ -691,14 +707,21 @@ class GalleryPage(ctk.CTkFrame):
                 force=bool(self.force_reanalysis_var.get()),
                 retry_failed=bool(self.retry_failed_var.get())
             )
+            self.selection_preview = preview
             return len(preview.get("queueable_ids", []))
         except Exception:
+            self.selection_preview = {}
             return 0
 
     def update_selected_eligible_count(self):
 
         self.selected_eligible_count = self.current_eligible_selection_count()
         return self.selected_eligible_count
+
+    def analysis_options_changed(self):
+
+        self.update_selected_eligible_count()
+        self.refresh_queue_summary()
 
     ########################################################
 
@@ -719,17 +742,93 @@ class GalleryPage(ctk.CTkFrame):
 
     ########################################################
 
+    def session_primary_control(self, summary, active_workers):
+
+        status = summary.get("status", "Idle")
+
+        if status in ("Recoverable", "Interrupted"):
+            return "Resume Session", "normal"
+
+        if status == "Paused":
+            return "Resume Queue", "normal"
+
+        if status in ("Running", "Starting", "Queued") or active_workers:
+            return "Pause Queue", "normal"
+
+        return "Pause Queue", "disabled"
+
+    def session_action_text(self, summary, active_workers):
+
+        status = summary.get("status", "Idle")
+        reason = summary.get("worker_stop_reason") or ""
+
+        if status in ("Recoverable", "Interrupted"):
+            lines = [
+                "Processing is stopped. Use Resume Session to validate the provider and restart the worker."
+            ]
+            if reason:
+                lines.append("Last stop reason: " + reason)
+            return "\n".join(lines)
+
+        if status == "Paused":
+            return "Processing is paused. Use Resume Queue to continue."
+
+        if active_workers:
+            return "Worker is active; Gallery will update on the next polling interval."
+
+        return "No live worker is attached to this session."
+
+    ########################################################
+
     def pause_or_resume_queue(self):
 
         summary = self.queue_summary or {}
         brain = self.brain_service()
-        if summary.get("status") == "Paused":
-            brain.resume_queue()
-            self.info.configure(text="Analysis queue resumed")
-        else:
+        status = summary.get("status")
+        session_id = summary.get("session_id")
+        active_worker = (
+            brain.session_has_active_worker(session_id)
+            if session_id
+            else False
+        )
+
+        if status in ("Recoverable", "Interrupted"):
+            handle = brain.resume_previous_analysis(
+                session_id,
+                progress_callback=self.analysis_progress
+            )
+            self.info.configure(text=self.resume_handle_text(handle))
+            self.start_queue_polling()
+        elif status == "Paused":
+            if active_worker:
+                brain.resume_queue()
+                self.info.configure(text="Analysis queue resumed")
+            else:
+                handle = brain.resume_previous_analysis(
+                    session_id,
+                    progress_callback=self.analysis_progress
+                )
+                self.info.configure(text=self.resume_handle_text(handle))
+            self.start_queue_polling()
+        elif status in ("Running", "Starting", "Queued"):
             brain.pause_queue()
             self.info.configure(text="Analysis queue paused")
+        else:
+            self.info.configure(text="No active analysis queue to control")
         self.refresh_queue_summary()
+
+    def resume_handle_text(self, handle):
+
+        future = getattr(handle, "future", None)
+        if future and future.done():
+            try:
+                result = future.result(timeout=0)
+            except Exception as error:
+                return f"Resume failed: {error}"
+            if result.get("resumed") is False:
+                return "Resume blocked: " + result.get("reason", "preflight failed")
+
+        return f"Resume requested for {len(handle):,} queued item(s)"
 
     def cancel_queue(self):
 
@@ -1431,7 +1530,13 @@ class GalleryPage(ctk.CTkFrame):
                 f"Failed: {preview.get('failed_count', 0):,}",
                 f"Retryable failed: {preview.get('retryable_failed_count', 0):,}",
                 f"Video metadata-only: {preview.get('video_metadata_only_count', 0):,}",
+                f"Already queued: {preview.get('already_queued_count', 0):,}",
+                f"Queued in recoverable session: {preview.get('queued_in_recoverable_count', 0):,}",
+                f"Queued in running session: {preview.get('queued_in_running_count', 0):,}",
+                f"Missing file/path: {preview.get('missing_file_count', 0):,}",
+                f"Failed requiring Retry Failed: {preview.get('failed_requires_retry_count', 0):,}",
                 f"Eligible to queue: {len(preview.get('queueable_ids', [])):,}",
+                self.analysis_reason_text(preview),
                 f"Provider: {provider}",
                 f"Model: {model}",
                 f"Force reanalysis: {preview.get('force_reanalysis', False)}",
@@ -1439,6 +1544,37 @@ class GalleryPage(ctk.CTkFrame):
                 "Estimated Qwen time: depends on local model load and media complexity."
             ]
         )
+
+    def analysis_reason_text(self, preview):
+
+        reasons = preview.get("reason_counts") or {}
+
+        if not reasons:
+            return "Skipped reasons: none"
+
+        lines = [
+            "Skipped reasons:"
+        ]
+        for reason, count in sorted(reasons.items()):
+            lines.append(f"- {reason}: {count:,}")
+
+        return "\n".join(lines)
+
+    def selection_reason_summary(self):
+
+        if not self.selected or self.selected_eligible_count:
+            return ""
+
+        reasons = self.selection_preview.get("reason_counts") or {}
+        if not reasons:
+            return " | Selection blocked: no queueable reason available"
+
+        reason, count = sorted(
+            reasons.items(),
+            key=lambda item: item[1],
+            reverse=True
+        )[0]
+        return f" | Selection blocked: {reason} ({count:,})"
 
     ########################################################
 

@@ -103,7 +103,9 @@ class GalleryService:
                 "current_filename": "",
                 "elapsed": "",
                 "eta": "Estimated time unavailable",
-                "worker_status": ""
+                "worker_status": "",
+                "worker_stop_reason": "",
+                "recoverable": False
             }
 
         session_id = session.get("session_id")
@@ -149,7 +151,11 @@ class GalleryService:
             "elapsed": self._format_duration(elapsed),
             "eta": eta,
             "worker_status": session.get("worker_status") or "",
-            "resume_count": session.get("resume_count") or 0
+            "worker_stop_reason": session.get("worker_stop_reason") or "",
+            "resume_count": session.get("resume_count") or 0,
+            "recoverable": (
+                session.get("status") in ("Recoverable", "Interrupted")
+            )
         }
 
     ###########################################################

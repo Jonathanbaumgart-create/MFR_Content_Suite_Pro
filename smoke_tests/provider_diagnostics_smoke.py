@@ -67,6 +67,32 @@ class FakeHTTP:
         if self.post_error:
             return FakeResponse(error=self.post_error)
 
+        if json and json.get("images"):
+            return FakeResponse(
+                {
+                    "response": (
+                        '{"description":"A firefighter training beside a hose.",'
+                        '"people_count":1,'
+                        '"people":["firefighter"],'
+                        '"apparatus":[],'
+                        '"equipment":["hose"],'
+                        '"activities":["training"],'
+                        '"setting":"training ground",'
+                        '"indoor_outdoor":"outdoor",'
+                        '"visible_text":[],'
+                        '"training":true,'
+                        '"incident_scene":false,'
+                        '"public_education":false,'
+                        '"community_event":false,'
+                        '"safety_concerns":[],'
+                        '"public_use_risks":[],'
+                        '"uncertain_observations":[],'
+                        '"confidence":0.82}'
+                    ),
+                    "done": True
+                }
+            )
+
         return FakeResponse(
             {
                 "response": "ok"
@@ -231,6 +257,9 @@ def main():
             assert healthy["configured_model"] == "qwen2.5vl:7b", healthy
             assert healthy["simple_text_call"] is True, healthy
             assert healthy["vision_model_call"] is True, healthy
+            assert healthy["response_wrapper_recognized"] is True, healthy
+            assert healthy["production_parser_accepted"] is True, healthy
+            assert healthy["persistence_compatible"] is True, healthy
 
             loading_http = FakeHTTP(
                 models=["qwen2.5vl:7b", "llama3.1:8b"],

@@ -9,7 +9,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from database.db_manager import DatabaseManager
+from models.analysis_queue import AnalysisQueueState, AnalysisSessionStatus
 from services.brain_service import BrainService, VisionProviderError
+from services.job_manager import JobManager
 from services.video_intelligence_service import VideoIntelligenceService
 from services.video_metadata_service import VideoMetadataService
 from smoke_tests.video_intelligence_smoke import create_video
@@ -30,6 +32,16 @@ class CapabilityVision:
     def provider_settings(self):
         return {
             "timeout": 20
+        }
+
+    def request_metadata(self):
+        return {
+            "request": {
+                "provider": self.provider,
+                "model": self.model_name()
+            },
+            "preprocessing": {},
+            "attempts": []
         }
 
     def provider_capabilities(self):
@@ -79,6 +91,23 @@ def add_video(db, media_id, path):
             "first_seen_at": "2026-07-17T12:00:00+00:00"
         }
     )
+
+
+def queue_counts(db, session_id):
+    conn = db.connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT state, COUNT(*)
+        FROM analysis_queue
+        WHERE session_id=?
+        GROUP BY state
+        """,
+        (session_id,)
+    )
+    counts = dict(cur.fetchall())
+    conn.close()
+    return counts
 
 
 def main():
@@ -178,6 +207,99 @@ def main():
             assert canceled == 1, canceled
             recovered = db.reset_stale_analysis_items(session_id)
             assert recovered == 0, recovered
+
+            blocked_session = db.create_analysis_session(
+                "video-preflight-blocked",
+                "mock",
+                "test-vision-model",
+                total_items=1
+            )
+            db.enqueue_analysis_items(
+                blocked_session,
+                db.get_media_by_ids([1]),
+                "mock",
+                "test-vision-model",
+                force=True
+            )
+            blocked_brain = BrainService(
+                database=db,
+                job_manager=JobManager(),
+                ai_service=LocalFrameAI(),
+                vision_service=CapabilityVision(
+                    supports_video_frames=True,
+                    provider="mock"
+                ),
+                config={
+                    "batch_size": 1,
+                    "video_max_frames": 3,
+                    "video_max_analyzed_frames": 2,
+                    "video_sample_interval_seconds": 4
+                }
+            )
+            blocked = blocked_brain.resume_previous_analysis(blocked_session)
+            blocked_result = blocked.future.result(timeout=5)
+            assert blocked_result["resumed"] is False, blocked_result
+            blocked_summary = db.analysis_session_summary(blocked_session)
+            assert blocked_summary["status"] == AnalysisSessionStatus.RECOVERABLE, blocked_summary
+            assert blocked_summary["worker_status"] == "stale", blocked_summary
+            blocked_brain.jobs.shutdown()
+
+            recoverable_session = db.create_analysis_session(
+                "video-recoverable-resume",
+                "ollama",
+                "test-vision-model",
+                total_items=1
+            )
+            db.enqueue_analysis_items(
+                recoverable_session,
+                db.get_media_by_ids([1]),
+                "ollama",
+                "test-vision-model",
+                force=True
+            )
+            db.mark_analysis_session_recoverable(
+                recoverable_session,
+                "Smoke test orphaned video worker"
+            )
+            preview_after_queue = db.analysis_selection_preview([1])
+            assert preview_after_queue["already_queued_count"] >= 1, preview_after_queue
+            assert (
+                preview_after_queue["queued_in_recoverable_count"] >= 1
+            ), preview_after_queue
+            assert not preview_after_queue["queueable_ids"], preview_after_queue
+
+            jobs = JobManager()
+            recovery_brain = BrainService(
+                database=db,
+                job_manager=jobs,
+                ai_service=LocalFrameAI(),
+                vision_service=CapabilityVision(
+                    supports_video_frames=True,
+                    provider="ollama"
+                ),
+                config={
+                    "batch_size": 1,
+                    "pause_between_batches": 0,
+                    "video_max_frames": 3,
+                    "video_max_analyzed_frames": 2,
+                    "video_sample_interval_seconds": 4
+                }
+            )
+            handle = recovery_brain.resume_previous_analysis(
+                recoverable_session,
+                max_items=1
+            )
+            assert len(handle) == 1, len(handle)
+            result = handle.future.result(timeout=20)
+            assert result["session_id"] == recoverable_session, result
+            summary = db.analysis_session_summary(recoverable_session)
+            assert summary["resume_count"] == 1, summary
+            assert summary["status"] == AnalysisSessionStatus.PAUSED, summary
+            assert summary["worker_status"] == "stopped", summary
+            counts = queue_counts(db, recoverable_session)
+            assert counts[AnalysisQueueState.COMPLETED] == 1, counts
+            assert db.active_analysis_media_type_counts(recoverable_session) == {}, summary
+            jobs.shutdown()
 
         finally:
             os.chdir(original)

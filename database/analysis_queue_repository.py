@@ -346,6 +346,34 @@ class AnalysisQueueRepository:
 
     ############################################################
 
+    def active_media_type_counts(self, session_id):
+
+        conn = self.database.connection()
+        cur = conn.cursor()
+        cur.execute("""
+        SELECT media_type, COUNT(*)
+        FROM analysis_queue
+        WHERE session_id=?
+        AND state IN (?, ?, ?, ?)
+        GROUP BY media_type
+        """,
+        (
+            int(session_id),
+            AnalysisQueueState.WAITING,
+            AnalysisQueueState.QUEUED,
+            AnalysisQueueState.ANALYZING,
+            AnalysisQueueState.RETRY_PENDING
+        ))
+        counts = {
+            row[0] or "": row[1]
+            for row in cur.fetchall()
+        }
+        conn.close()
+
+        return counts
+
+    ############################################################
+
     def mark_worker_started(
         self,
         session_id,
@@ -409,7 +437,7 @@ class AnalysisQueueRepository:
         self.update_session(
             session_id,
             status=AnalysisSessionStatus.RECOVERABLE,
-            worker_status="Recoverable",
+            worker_status="stale",
             worker_stopped_at=now,
             worker_stop_reason=reason,
             last_progress_at=now,
@@ -578,11 +606,12 @@ class AnalysisQueueRepository:
         cur.execute("""
         SELECT *
         FROM analysis_sessions
-        WHERE status IN (?, ?, ?, ?, ?)
+        WHERE status IN (?, ?, ?, ?, ?, ?)
         ORDER BY session_id DESC
         """,
         (
             AnalysisSessionStatus.QUEUED,
+            AnalysisSessionStatus.STARTING,
             AnalysisSessionStatus.RUNNING,
             AnalysisSessionStatus.PAUSED,
             AnalysisSessionStatus.RECOVERABLE,
