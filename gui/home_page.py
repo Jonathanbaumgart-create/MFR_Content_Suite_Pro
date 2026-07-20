@@ -714,6 +714,40 @@ class HomePage(ctk.CTkFrame):
                 pady=(0, 8)
             )
 
+            media_package = package.get("media_package", {}) or {}
+            if package.get("primary_media"):
+                media_panel = PackageMediaPanel(
+                    card,
+                    media_package,
+                    self.thumbnail_service,
+                    open_callback=self.open_media_asset,
+                    preview_callback=self.show_asset_preview,
+                    compact=True
+                )
+                media_panel.pack(
+                    anchor="w",
+                    padx=12,
+                    pady=(0, 8)
+                )
+            else:
+                graphic = package.get("graphic_brief") or {}
+                ctk.CTkLabel(
+                    card,
+                    text=(
+                        "Text/graphic-first recommendation\n"
+                        f"Graphic brief: {graphic.get('visual_direction', '')}"
+                    ),
+                    text_color="#d8e6ff",
+                    fg_color="#1f2630",
+                    corner_radius=6,
+                    wraplength=900,
+                    justify="left"
+                ).pack(
+                    fill="x",
+                    padx=12,
+                    pady=(0, 8)
+                )
+
             captions = ctk.CTkTextbox(
                 card,
                 height=150,

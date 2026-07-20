@@ -1,4 +1,5 @@
 import customtkinter as ctk
+import os
 
 from core.app_context import context
 from services.helmet_camera_service import HelmetCameraService
@@ -16,6 +17,8 @@ class HelmetCamPage(ctk.CTkFrame):
         self.videos = []
         self.selected_video = None
         self.preview_image = None
+        self.preview_clip_future = None
+        self.temp_preview_paths = []
         self.build_page()
         self.refresh_status()
 
@@ -237,9 +240,16 @@ class HelmetCamPage(ctk.CTkFrame):
                     f"{self.duration_text(segment.get('start_seconds', 0))} - "
                     f"{self.duration_text(segment.get('end_seconds', 0))}"
                 ),
-                f"Reel Candidate Score: {segment.get('reel_score', 0)}",
+                (
+                    "Overall Reel Potential: " +
+                    str(segment.get("overall_reel_potential") or segment.get("reel_score", 0))
+                ),
+                f"Classification: {segment.get('classification', 'Needs semantic screen')}",
+                f"Visible activity: {segment.get('visible_activity_summary') or segment.get('visual_summary', '')}",
+                f"Recommended tone: {segment.get('recommended_tone', '')}",
+                f"Suggested hook: {segment.get('suggested_hook', '')}",
                 f"Risk: {segment.get('risk_level', '')}",
-                f"Reason: {segment.get('reason_selected', '')}",
+                f"Strongest reason: {segment.get('strongest_reason') or segment.get('reason_selected', '')}",
                 f"Flags: {', '.join(segment.get('risk_flags') or []) or 'none'}"
             ])
             frame = ctk.CTkFrame(self.segment_panel)
@@ -260,15 +270,90 @@ class HelmetCamPage(ctk.CTkFrame):
             )
             ctk.CTkButton(
                 frame,
-                text="Preview Segment",
+                text="Preview Clip",
+                command=lambda item=segment: self.preview_clip(item)
+            ).pack(
+                side="left",
+                padx=(10, 6),
+                pady=(0, 10)
+            )
+            ctk.CTkButton(
+                frame,
+                text="Contact Sheet",
                 command=lambda item=segment: self.preview_segment(item)
             ).pack(
-                anchor="w",
-                padx=10,
+                side="left",
+                padx=(0, 6),
+                pady=(0, 10)
+            )
+            ctk.CTkButton(
+                frame,
+                text="Run Semantic Screen",
+                command=self.semantic_screen_selected
+            ).pack(
+                side="left",
+                padx=(0, 6),
+                pady=(0, 10)
+            )
+            ctk.CTkButton(
+                frame,
+                text="Create Reel Package",
+                command=lambda item=segment: self.show_reel_package(item)
+            ).pack(
+                side="left",
+                padx=(0, 6),
                 pady=(0, 10)
             )
 
     ############################################################
+
+    def semantic_screen_selected(self):
+
+        if not self.selected_video:
+            self.status.configure(text="Select a Helmet Camera video first.")
+            return
+
+        media_id = self.selected_video.get("id") or self.selected_video.get("media_id")
+        segments = self.service.semantic_screen_segments(media_id, limit=5)
+        self.status.configure(text="Semantic screen complete for top candidates.")
+        self.render_segments(segments)
+
+    def preview_clip(self, segment):
+
+        if not self.selected_video:
+            self.status.configure(text="Select a Helmet Camera video first.")
+            return
+
+        path = self.selected_video.get("path", "")
+        self.status.configure(text="Preparing playable preview clip...")
+        self.preview_clip_future = context.job_manager.submit(
+            self.service.create_preview_clip,
+            path,
+            segment
+        )
+        self.after(200, self.check_preview_clip_future)
+
+    def check_preview_clip_future(self):
+
+        if not self.preview_clip_future.done():
+            self.after(200, self.check_preview_clip_future)
+            return
+
+        result = self.preview_clip_future.result()
+        if not result.get("success"):
+            self.status.configure(
+                text="Playable preview unavailable: " + result.get("stderr", "")
+            )
+            return
+
+        path = result.get("preview_path", "")
+        if path:
+            self.temp_preview_paths.append(path)
+            try:
+                os.startfile(path)
+                self.status.configure(text="Playable preview opened.")
+            except Exception as ex:
+                self.status.configure(text=f"Could not open preview clip: {ex}")
 
     def preview_segment(self, segment):
 
@@ -334,9 +419,59 @@ class HelmetCamPage(ctk.CTkFrame):
             command=window.destroy
         ).pack(anchor="e", padx=18, pady=(8, 18))
 
+    def show_reel_package(self, segment):
+
+        if not self.selected_video:
+            self.status.configure(text="Select a Helmet Camera video first.")
+            return
+
+        media_id = self.selected_video.get("id") or self.selected_video.get("media_id")
+        package = self.service.reel_package(media_id, segment)
+        window = ctk.CTkToplevel(self)
+        window.title("Helmet Camera Reel Package")
+        window.geometry("760x560")
+        window.transient(self.winfo_toplevel())
+
+        text = ctk.CTkTextbox(window, wrap="word")
+        text.pack(fill="both", expand=True, padx=16, pady=16)
+        text.insert(
+            "1.0",
+            "\n".join([
+                "Instagram Reel Caption:",
+                package.get("instagram_reel_caption", ""),
+                "",
+                "Facebook Video Caption:",
+                package.get("facebook_reel_caption", ""),
+                "",
+                "Hook: " + package.get("hook_text", ""),
+                "Content family: " + package.get("content_family", ""),
+                "Target audience: " + package.get("target_audience", ""),
+                "Posting angle: " + package.get("posting_angle", ""),
+                "Orientation correction: " + str(package.get("orientation_correction", 0)),
+                "Warnings: " + ", ".join(package.get("risk_warnings") or [])
+            ])
+        )
+        text.configure(state="disabled")
+
+        ctk.CTkButton(
+            window,
+            text="Close",
+            command=window.destroy
+        ).pack(anchor="e", padx=16, pady=(0, 16))
+
     def duration_text(self, seconds):
 
         seconds = int(float(seconds or 0))
         minutes = seconds // 60
         remainder = seconds % 60
         return f"{minutes}:{remainder:02d}"
+
+    def destroy(self):
+
+        for path in self.temp_preview_paths:
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+
+        super().destroy()

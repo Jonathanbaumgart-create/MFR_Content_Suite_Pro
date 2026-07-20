@@ -16,6 +16,18 @@ logger = LoggingService.get_logger("content")
 class DailyCommunicationsOfficerService:
 
     PACKAGE_COUNT = 3
+    BANNED_PUBLIC_PHRASES = (
+        "Review media before publishing",
+        "Review the selected media before publishing",
+        "selected media",
+        "media trust",
+        "confidence",
+        "provider",
+        "model",
+        "review status",
+        "technical warnings",
+        "#MordenFireRescue"
+    )
 
     def __init__(
         self,
@@ -155,14 +167,21 @@ class DailyCommunicationsOfficerService:
         ]
         if recent_ids:
             options.append({
-                "title": "Recent MFR Activity",
-                "strategy": "Recent Activity",
+                "title": "Behind the Scenes: Recent MFR Activity",
+                "strategy": "Behind-the-scenes",
                 "opportunity_type": "recent_activity",
                 "why_today_matters": (
-                    "Recently added or recently captured media is available "
-                    "for a timely MFR update."
+                    "Fresh local media gives MFR a chance to show the community "
+                    "the everyday preparation, teamwork, and service behind the department."
                 ),
                 "topic": "recent MFR activity",
+                "content_family": "human_team_personality",
+                "intended_audience": "Morden residents and followers who enjoy seeing the people behind the work",
+                "tone_options": [
+                    "Behind-the-scenes",
+                    "Community-focused",
+                    "Human-interest"
+                ],
                 "best_asset_ids": recent_ids[:3],
                 "supporting_asset_ids": recent_ids[3:8],
                 "recommended_platforms": ["Facebook", "Instagram"],
@@ -173,13 +192,20 @@ class DailyCommunicationsOfficerService:
         if active_themes:
             options.append({
                 "title": self._title(active_themes[0]),
-                "strategy": "Seasonal Safety",
+                "strategy": "Community-focused",
                 "opportunity_type": self._opportunity_type(active_themes[0]),
                 "why_today_matters": (
-                    f"{self._title(active_themes[0])} is active in "
-                    f"{context_snapshot.get('season', 'today')} context."
+                    f"{self._title(active_themes[0])} is timely right now, "
+                    "and a clear local reminder can help people make safer choices today."
                 ),
                 "topic": active_themes[0],
+                "content_family": "community_public_service",
+                "intended_audience": "Residents looking for practical seasonal safety reminders",
+                "tone_options": [
+                    "Community-focused",
+                    "Educational",
+                    "Direct"
+                ],
                 "recommended_platforms": ["Facebook", "Instagram"],
                 "confidence": 74
             })
@@ -189,10 +215,17 @@ class DailyCommunicationsOfficerService:
             "strategy": "Recruitment",
             "opportunity_type": "recruitment",
             "why_today_matters": (
-                "Recruitment and readiness messaging remains useful when "
-                "recent activity is limited or deep analysis is slow."
+                "Recruitment works best when people can see the skills, teamwork, "
+                "and commitment that go into serving Morden."
             ),
             "topic": "recruitment training volunteer",
+            "content_family": "recruitment",
+            "intended_audience": "Potential volunteers and community members curious about joining",
+            "tone_options": [
+                "Recruitment",
+                "Professional",
+                "Action-focused"
+            ],
             "recommended_platforms": ["Facebook", "Instagram"],
             "confidence": 68
         })
@@ -263,10 +296,18 @@ class DailyCommunicationsOfficerService:
             if self._has_candidate_media(option)
             else self._text_first_media_package(option)
         )
-        facebook = self._facebook_caption(option, context_snapshot, memory)
+        media_facts = self._media_facts(media_package)
+        option["media_facts"] = media_facts
+        facebook = self._facebook_caption(
+            option,
+            context_snapshot,
+            memory,
+            media_facts
+        )
         instagram_tags = self._hashtags(option, context_snapshot, platform="instagram")
-        instagram = self._instagram_caption(option, instagram_tags)
+        instagram = self._instagram_caption(option, instagram_tags, media_facts)
         warnings = self._warnings(media_package, option)
+        graphic_brief = self._graphic_brief(option, context_snapshot)
 
         package = {
             **option,
@@ -297,6 +338,13 @@ class DailyCommunicationsOfficerService:
             "media_package": media_package,
             "media_trust_state": self._media_trust(media_package),
             "recommended_format": self._recommended_format(media_package),
+            "content_angle": self._content_angle(option, media_facts),
+            "content_family": option.get("content_family", "community_public_service"),
+            "intended_audience": option.get("intended_audience", "Morden residents"),
+            "tone_options": option.get("tone_options") or ["Community-focused"],
+            "best_fit_today": index == 1,
+            "graphic_brief": graphic_brief,
+            "text_graphic_first": not self._has_media(media_package),
             "facebook_caption": facebook,
             "instagram_caption": instagram,
             "instagram_hashtags": instagram_tags,
@@ -326,71 +374,141 @@ class DailyCommunicationsOfficerService:
 
     ############################################################
 
-    def _facebook_caption(self, option, context_snapshot, memory):
+    def _facebook_caption(self, option, context_snapshot, memory, media_facts):
 
-        title = option.get("title", "Community update")
-        why = option.get("why_today_matters", "")
+        family = option.get("content_family", "")
+        topic = self._plain_topic(option)
+        media_line = self._media_public_line(media_facts)
         historical = memory.get("summary", "")
+        cta = self._call_to_action(option)
 
-        lines = [
-            f"{self._emoji(option)} {title}",
-            "",
-            why or (
-                "This is a timely opportunity to share a useful Morden Fire "
-                "and Rescue update with the community."
-            )
-        ]
+        if family == "recruitment":
+            lines = [
+                "Ever thought about serving your community in a hands-on way?",
+                "",
+                (
+                    "Volunteer firefighting is built on training, teamwork, and "
+                    "people willing to step forward when their neighbours need help."
+                ),
+                media_line or (
+                    "This is a good time to show what preparation and readiness look like at MFR."
+                ),
+                "",
+                "If you have questions about volunteering, reach out and learn what it takes to be part of the team."
+            ]
+        elif "heat" in topic or "summer" in topic:
+            lines = [
+                "Heat can become dangerous quickly.",
+                "",
+                (
+                    "Drink water often, take breaks in the shade or a cool space, "
+                    "check on neighbours and family members, and never leave people "
+                    "or pets in a parked vehicle."
+                ),
+                "",
+                "Small choices can prevent a medical emergency.",
+                "Stay cool and look out for each other, Morden."
+            ]
+        elif family == "human_team_personality":
+            lines = [
+                "A lot of fire-service work happens before the public ever sees it.",
+                "",
+                media_line or (
+                    "Training, checking equipment, preparing the trucks, and working as a team "
+                    "are all part of staying ready for the next call."
+                ),
+                "",
+                "It is the steady, behind-the-scenes work that keeps the department ready for Morden."
+            ]
+        elif family == "visual_action":
+            lines = [
+                "Some moments show the work better than words can.",
+                "",
+                media_line or (
+                    "Action, coordination, and repetition are all part of building reliable fire-service skills."
+                ),
+                "",
+                "This is the kind of practical readiness that happens one drill, one task, and one team effort at a time."
+            ]
+        else:
+            lines = [
+                f"{self._emoji(option)} A timely reminder for Morden.",
+                "",
+                option.get("why_today_matters", "") or (
+                    "A clear local message can help people make safer choices."
+                ),
+                "",
+                cta
+            ]
 
         if historical:
             lines.extend([
                 "",
-                "This timing is informed by previous MFR communications around this season."
+                "MFR has shared similar seasonal reminders around this time in past years, so this keeps the message familiar without repeating old details."
             ])
 
-        lines.extend([
-            "",
-            "Review the selected media before publishing, then keep the message clear, local, and useful.",
-            "",
-            "Stay safe and look out for each other, Morden."
-        ])
-        return "\n".join(lines)
+        return self._clean_public_copy("\n".join(line for line in lines if line is not None))
 
-    def _instagram_caption(self, option, hashtags):
+    def _instagram_caption(self, option, hashtags, media_facts):
 
-        return (
-            f"{self._emoji(option)} {option.get('title', 'MFR update')}\n\n"
-            f"{option.get('why_today_matters', 'A timely community update from Morden Fire & Rescue.')}\n\n"
-            "Review media before publishing.\n\n" +
+        family = option.get("content_family", "")
+        topic = self._plain_topic(option)
+        hook = self._instagram_hook(option, media_facts)
+
+        if family == "recruitment":
+            body = (
+                "Training, teamwork, and service all start with people willing "
+                "to step forward."
+            )
+        elif "heat" in topic or "summer" in topic:
+            body = (
+                "Hydrate, check on each other, avoid the hottest part of the day, "
+                "and never leave anyone in a parked vehicle."
+            )
+        elif family == "human_team_personality":
+            body = (
+                "A look at the preparation and teamwork that keeps the department ready."
+            )
+        elif family == "visual_action":
+            body = (
+                "The work is built one repetition, one task, and one team effort at a time."
+            )
+        else:
+            body = option.get("why_today_matters", "A timely community update for Morden.")
+
+        caption = "\n\n".join([
+            f"{self._emoji(option)} {hook}",
+            body,
             " ".join(hashtags[:5])
-        )
+        ])
+        return self._clean_public_copy(caption)
 
     def _hashtags(self, option, context_snapshot, platform="instagram"):
 
-        values = [
-            "#MordenFireRescue",
-            "#Morden",
-            "#CommunitySafety"
-        ]
+        values = ["#Morden"]
         text = " ".join(
             str(value or "")
             for value in (
                 option.get("title"),
                 option.get("topic"),
-                option.get("opportunity_type"),
-                context_snapshot.get("season")
+                option.get("opportunity_type")
             )
         ).lower()
 
         if "recruit" in text:
-            values.append("#Recruitment")
+            values.extend(["#VolunteerFirefighter", "#FirefighterTraining"])
         if "training" in text:
-            values.append("#Training")
+            values.append("#FirefighterTraining")
         if "heat" in text or "summer" in text:
             values.append("#HeatSafety")
         if "fire prevention" in text or "smoke" in text:
-            values.append("#FirePrevention")
+            values.extend(["#FireSafety", "#PublicEducation"])
         if "water" in text:
             values.append("#WaterSafety")
+        if "technical" in text or "rescue" in text:
+            values.append("#TechnicalRescue")
+
+        values.append("#CommunitySafety")
 
         return self._unique(values)[:5]
 
@@ -399,8 +517,8 @@ class DailyCommunicationsOfficerService:
     def _fallback_option(self, index, context_snapshot):
 
         fallbacks = [
-            ("Current Safety Reminder", "Safety Campaign", "community safety"),
-            ("Community Trust Update", "Community Trust", "community engagement"),
+            ("Current Safety Reminder", "Community-focused", "community safety"),
+            ("Behind the Scenes at MFR", "Behind-the-scenes", "behind the scenes"),
             ("Volunteer Recruitment", "Recruitment", "recruitment")
         ]
         title, strategy, topic = fallbacks[index % len(fallbacks)]
@@ -410,9 +528,17 @@ class DailyCommunicationsOfficerService:
             "opportunity_type": topic.replace(" ", "_"),
             "topic": topic,
             "why_today_matters": (
-                f"{title} is a useful fallback for "
-                f"{context_snapshot.get('season', 'current')} communications."
+                f"{title} can stand on its own as a timely "
+                f"{context_snapshot.get('season', 'current')} post when no specific media fits."
             ),
+            "content_family": (
+                "human_team_personality"
+                if "behind" in topic
+                else "recruitment" if "recruit" in topic
+                else "community_public_service"
+            ),
+            "intended_audience": "Morden residents",
+            "tone_options": [strategy, "Community-focused"],
             "confidence": 58,
             "recommended_platforms": ["Facebook", "Instagram"]
         }
@@ -436,6 +562,11 @@ class DailyCommunicationsOfficerService:
             "primary_video": {},
             "gallery_videos": [],
             "media_count": 0,
+            "text_graphic_first": True,
+            "graphic_brief": (
+                "Create a simple MFR-branded graphic using the topic as the headline, "
+                "one practical takeaway, and a clear local call to action."
+            ),
             "story_strength": int(option.get("confidence", 0) or 0),
             "communications_score": int(option.get("confidence", 0) or 0),
             "editorial_angle": option.get("strategy", ""),
@@ -509,6 +640,144 @@ class DailyCommunicationsOfficerService:
             media_package.get("primary_photo") or
             media_package.get("primary_video")
         )
+
+    def _media_facts(self, media_package):
+
+        primary = (
+            media_package.get("primary_photo") or
+            media_package.get("primary_video") or {}
+        )
+        alternatives = (
+            (media_package.get("gallery_photos") or []) +
+            (media_package.get("gallery_videos") or [])
+        )[:6]
+        if not primary:
+            return {
+                "has_media": False,
+                "public_description": "",
+                "primary": {},
+                "alternatives": alternatives
+            }
+
+        tags = []
+        for key in (
+            "primary_activity",
+            "incident_type",
+            "normalized_scene"
+        ):
+            if primary.get(key):
+                tags.append(primary.get(key))
+        for key in ("content_tags", "content_themes", "recommended_uses"):
+            tags.extend(primary.get(key) or [])
+
+        description = self._public_media_description(tags, primary)
+        return {
+            "has_media": True,
+            "public_description": description,
+            "primary": primary,
+            "alternatives": alternatives
+        }
+
+    def _public_media_description(self, tags, primary):
+
+        text = " ".join(str(value or "") for value in tags).lower()
+
+        if "training" in text:
+            return "The attached media can support a story about training, preparation, and practical skill-building."
+        if "recruit" in text:
+            return "The attached media can help show the teamwork and commitment behind volunteer service."
+        if "community" in text or "education" in text:
+            return "The attached media can support a community-facing post with a clear local connection."
+        if "apparatus" in text or "equipment" in text:
+            return "The attached media can show equipment, apparatus, and the work that keeps the department ready."
+        if primary.get("media_type") == "video":
+            return "The attached video can support a more visual, action-first post."
+
+        return "The attached media gives this post a real local visual anchor."
+
+    def _media_public_line(self, media_facts):
+
+        if not media_facts.get("has_media"):
+            return ""
+
+        return media_facts.get("public_description", "")
+
+    def _graphic_brief(self, option, context_snapshot):
+
+        return {
+            "headline": option.get("title", "MFR Update"),
+            "visual_direction": (
+                "Use a simple MFR-branded graphic with one clear message, "
+                "high contrast text, and no unrelated photo."
+            ),
+            "key_message": option.get("why_today_matters", ""),
+            "season": context_snapshot.get("season", "")
+        }
+
+    def _content_angle(self, option, media_facts):
+
+        if media_facts.get("has_media"):
+            return media_facts.get("public_description", "")
+
+        return (
+            "Text/graphic-first recommendation with no unrelated media attached."
+        )
+
+    def _plain_topic(self, option):
+
+        return " ".join(
+            str(value or "")
+            for value in (
+                option.get("title"),
+                option.get("topic"),
+                option.get("opportunity_type")
+            )
+        ).lower()
+
+    def _call_to_action(self, option):
+
+        text = self._plain_topic(option)
+
+        if "recruit" in text:
+            return "Reach out if you have ever wondered what it takes to volunteer."
+        if "heat" in text:
+            return "Check on someone who may need a cool place or a reminder to drink water."
+        if "water" in text:
+            return "Wear the life jacket, watch the weather, and stay close to your group."
+
+        return "Share the reminder with someone who may find it useful today."
+
+    def _instagram_hook(self, option, media_facts):
+
+        text = self._plain_topic(option)
+
+        if media_facts.get("has_media"):
+            if "recruit" in text:
+                return "Teamwork starts before the call."
+            if "training" in text:
+                return "A quick look at readiness in motion."
+            if "heat" in text:
+                return "Stay cool, Morden."
+            return "A local look behind the scenes."
+
+        if "heat" in text:
+            return "Heat safety matters."
+        if "recruit" in text:
+            return "Ready to serve?"
+
+        return "A timely reminder for Morden."
+
+    def _clean_public_copy(self, text):
+
+        cleaned = str(text or "")
+
+        for phrase in self.BANNED_PUBLIC_PHRASES:
+            cleaned = cleaned.replace(phrase, "")
+
+        while "\n\n\n" in cleaned:
+            cleaned = cleaned.replace("\n\n\n", "\n\n")
+
+        return cleaned.strip()
 
     def _distinct_options(self, options):
 
