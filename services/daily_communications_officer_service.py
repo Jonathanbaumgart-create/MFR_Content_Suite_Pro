@@ -8,6 +8,10 @@ from services.media_package_service import MediaPackageService
 from services.media_priority_service import MediaPriorityService
 from services.seasonal_communications_service import SeasonalCommunicationsService
 from services.time_service import TimeService
+from services.event_collection_service import EventCollectionService
+from services.media_review_policy_service import MediaReviewPolicyService
+from services.automated_editorial_trust_service import AutomatedEditorialTrustService
+from services.editorial_fact_sheet_service import EditorialFactSheetService
 
 
 logger = LoggingService.get_logger("content")
@@ -26,7 +30,20 @@ class DailyCommunicationsOfficerService:
         "model",
         "review status",
         "technical warnings",
-        "#MordenFireRescue"
+        "local evidence signals",
+        "approved first",
+        "#MordenFireRescue",
+        "attached media",
+        "visual anchor",
+        "historical evidence",
+        "similar seasonal reminders",
+        "keeps the message familiar",
+        "practical readiness",
+        "timely update",
+        "meaningful moment",
+        "one task at a time",
+        "highlights our commitment",
+        "demonstrates dedication"
     )
 
     def __init__(
@@ -53,6 +70,18 @@ class DailyCommunicationsOfficerService:
         self.priority = priority_service or MediaPriorityService(
             database=self.db
         )
+        self.trust_service = AutomatedEditorialTrustService(database=self.db)
+        self.review_policy = MediaReviewPolicyService(
+            database=self.db,
+            trust_service=self.trust_service
+        )
+        self.events = EventCollectionService(
+            database=self.db,
+            trust_service=self.trust_service
+        )
+        self.editorial_copy = EditorialFactSheetService(
+            memory_service=self.memory
+        )
         self.last_metrics = {}
 
     ############################################################
@@ -75,10 +104,15 @@ class DailyCommunicationsOfficerService:
             include_failed=False,
             force=True
         )
+        event_collections = self.events.top_collections(
+            limit=20,
+            source_limit=500
+        )
         options = self._option_candidates(
             priority_media,
             context_snapshot,
-            local_now
+            local_now,
+            event_collections
         )
         packages = []
 
@@ -129,6 +163,10 @@ class DailyCommunicationsOfficerService:
             },
             "videos_awaiting_review": metrics.get("videos_awaiting_review", 0),
             "communications_gaps": [],
+            "event_collections": [
+                self.events.event_summary(event)
+                for event in event_collections[:5]
+            ],
             "risks_and_limitations": [
                 "Daily packages are generated from stored local intelligence before deep vision analysis.",
                 "Review required before publishing."
@@ -156,16 +194,22 @@ class DailyCommunicationsOfficerService:
 
     ############################################################
 
-    def _option_candidates(self, priority_media, context_snapshot, local_now):
+    def _option_candidates(self, priority_media, context_snapshot, local_now, event_collections=None):
 
         options = []
+        event_collections = event_collections or []
+
+        for event in event_collections[:3]:
+            option = self._event_option(event)
+            if option:
+                options.append(option)
 
         recent_ids = [
             item.get("id") or item.get("media_id")
             for item in (priority_media or [])[:8]
             if item.get("id") or item.get("media_id")
         ]
-        if recent_ids:
+        if recent_ids and not options:
             options.append({
                 "title": "Behind the Scenes: Recent MFR Activity",
                 "strategy": "Behind-the-scenes",
@@ -185,7 +229,8 @@ class DailyCommunicationsOfficerService:
                 "best_asset_ids": recent_ids[:3],
                 "supporting_asset_ids": recent_ids[3:8],
                 "recommended_platforms": ["Facebook", "Instagram"],
-                "confidence": 76
+                "confidence": 76,
+                "strict_asset_ids": False
             })
 
         active_themes = context_snapshot.get("active_themes") or []
@@ -207,7 +252,8 @@ class DailyCommunicationsOfficerService:
                     "Direct"
                 ],
                 "recommended_platforms": ["Facebook", "Instagram"],
-                "confidence": 74
+                "confidence": 74,
+                "graphic_first_reason": "No coherent event media was required for this seasonal safety option."
             })
 
         options.append({
@@ -227,9 +273,55 @@ class DailyCommunicationsOfficerService:
                 "Action-focused"
             ],
             "recommended_platforms": ["Facebook", "Instagram"],
-            "confidence": 68
+            "confidence": 68,
+            "graphic_first_reason": "No coherent recruitment event media was found before the graphic-first fallback."
         })
         return self._distinct_options(options)
+
+    def _event_option(self, event):
+
+        integrity = event.get("event_integrity") or {}
+        title = event.get("title", "")
+
+        if (
+            integrity.get("event_usability_state") not in ("coherent", "coherent_with_review")
+            or self._bad_package_title(title)
+        ):
+            return {}
+
+        media = event.get("carousel_candidates") or event.get("representative_media") or []
+        media_ids = [
+            item.get("media_id") or item.get("id")
+            for item in media[:8]
+            if item.get("media_id") or item.get("id")
+        ]
+
+        if not media_ids:
+            return {}
+
+        story_family = event.get("activity_type") or "this_is_what_we_do"
+        return {
+            "title": title,
+            "strategy": self._strategy_from_family(story_family),
+            "opportunity_type": story_family,
+            "why_today_matters": (
+                f"{title} has coherent local media evidence and can become "
+                "a package-level reviewed post without requiring every related file to be corrected first."
+            ),
+            "topic": " ".join(event.get("visible_activities") or [title]),
+            "content_family": story_family,
+            "intended_audience": "Morden residents and MFR followers",
+            "tone_options": self._tone_options(story_family),
+            "best_asset_ids": media_ids[:3],
+            "supporting_asset_ids": media_ids[3:8],
+            "allowed_media_ids": media_ids,
+            "recommended_platforms": ["Facebook", "Instagram"],
+            "confidence": event.get("confidence", 72),
+            "event_collection": self.events.event_summary(event),
+            "event_diagnostics": self.events.event_diagnostics(event),
+            "event_id": event.get("event_id", ""),
+            "strict_asset_ids": True
+        }
 
     ############################################################
 
@@ -298,14 +390,19 @@ class DailyCommunicationsOfficerService:
         )
         media_facts = self._media_facts(media_package)
         option["media_facts"] = media_facts
-        facebook = self._facebook_caption(
+        fact_sheet = self.editorial_copy.build_fact_sheet(
             option,
-            context_snapshot,
-            memory,
-            media_facts
+            media_package=media_package,
+            context_snapshot=context_snapshot
         )
-        instagram_tags = self._hashtags(option, context_snapshot, platform="instagram")
-        instagram = self._instagram_caption(option, instagram_tags, media_facts)
+        copy = self.editorial_copy.generate_captions(
+            fact_sheet,
+            option=option,
+            memory=memory
+        )
+        facebook = copy["facebook"]
+        instagram = copy["instagram"]
+        instagram_tags = copy["hashtags"]
         warnings = self._warnings(media_package, option)
         graphic_brief = self._graphic_brief(option, context_snapshot)
 
@@ -348,6 +445,9 @@ class DailyCommunicationsOfficerService:
             "facebook_caption": facebook,
             "instagram_caption": instagram,
             "instagram_hashtags": instagram_tags,
+            "event_fact_sheet": fact_sheet,
+            "mfr_voice_profile": self.editorial_copy.voice_profile(memory),
+            "caption_quality": copy.get("quality", {}),
             "warnings": warnings,
             "copy_facebook": facebook,
             "copy_instagram": instagram,
@@ -370,6 +470,8 @@ class DailyCommunicationsOfficerService:
             "negative_factors": warnings,
             "confidence_limitations": self._confidence_limitations(media_package)
         }
+        package["package_review"] = self._package_review(package)
+        package["quality_gate"] = self._quality_gate(package)
         return package
 
     ############################################################
@@ -420,9 +522,13 @@ class DailyCommunicationsOfficerService:
                 "",
                 "It is the steady, behind-the-scenes work that keeps the department ready for Morden."
             ]
-        elif family == "visual_action":
+        elif family in ("visual_action", "action_first_visual", "training_readiness", "technical_rescue"):
             lines = [
-                "Some moments show the work better than words can.",
+                (
+                    f"{option.get('title')} gives Morden a look at practical fire-service readiness."
+                    if not self._bad_package_title(option.get("title", ""))
+                    else "Some moments show the work better than words can."
+                ),
                 "",
                 media_line or (
                     "Action, coordination, and repetition are all part of building reliable fire-service skills."
@@ -469,9 +575,11 @@ class DailyCommunicationsOfficerService:
             body = (
                 "A look at the preparation and teamwork that keeps the department ready."
             )
-        elif family == "visual_action":
+        elif family in ("visual_action", "action_first_visual", "training_readiness", "technical_rescue"):
             body = (
-                "The work is built one repetition, one task, and one team effort at a time."
+                f"{option.get('title')} shows the work being built one repetition, one task, and one team effort at a time."
+                if not self._bad_package_title(option.get("title", ""))
+                else "The work is built one repetition, one task, and one team effort at a time."
             )
         else:
             body = option.get("why_today_matters", "A timely community update for Morden.")
@@ -518,8 +626,8 @@ class DailyCommunicationsOfficerService:
 
         fallbacks = [
             ("Current Safety Reminder", "Community-focused", "community safety"),
-            ("Behind the Scenes at MFR", "Behind-the-scenes", "behind the scenes"),
-            ("Volunteer Recruitment", "Recruitment", "recruitment")
+            ("Volunteer Recruitment", "Recruitment", "recruitment"),
+            ("Behind the Scenes at MFR", "Behind-the-scenes", "behind the scenes")
         ]
         title, strategy, topic = fallbacks[index % len(fallbacks)]
         return {
@@ -584,8 +692,14 @@ class DailyCommunicationsOfficerService:
 
         if not self._has_media(media_package):
             warnings.append(
-                "No strongly matched media found; use as text/graphic-first post."
+                option.get("graphic_first_reason")
+                or "No strongly matched media found; use as text/graphic-first post."
             )
+
+        event = option.get("event_collection") or {}
+        integrity = event.get("event_integrity") or {}
+        if event and integrity.get("event_usability_state") not in ("coherent", "coherent_with_review"):
+            warnings.append("Event identity requires clarification before use.")
 
         if option.get("repetition_risk") == "covered_this_year":
             warnings.append("Related topic appears to have been covered this year.")
@@ -618,6 +732,94 @@ class DailyCommunicationsOfficerService:
 
         return limitations
 
+    def _package_review(self, package):
+
+        primary = package.get("primary_media") or {}
+        policy = (
+            self.review_policy.policy_for_media(primary)
+            if primary
+            else {}
+        )
+        return {
+            "required": True,
+            "scope": [
+                "selected media",
+                "caption accuracy",
+                "sensitivity/privacy",
+                "event/program identity",
+                "platform copy"
+            ],
+            "actions": [
+                "Approve Package",
+                "Edit Caption",
+                "Correct Event Summary",
+                "Change Tone",
+                "Shorten Caption",
+                "Make More Community-Focused",
+                "Make More Light-Hearted",
+                "Change Media",
+                "Reject Media",
+                "Correct Event",
+                "Use Another Option",
+                "Create Publication Draft"
+            ],
+            "media_policy": policy
+        }
+
+    def _quality_gate(self, package):
+
+        facebook = package.get("facebook_caption", "")
+        instagram = package.get("instagram_caption", "")
+        media_ok = bool(package.get("primary_media")) or bool(package.get("text_graphic_first"))
+        title_ok = not self._bad_package_title(package.get("title", ""))
+        event = package.get("event_collection") or {}
+        integrity = event.get("event_integrity") or {}
+        event_ok = (
+            not event
+            or integrity.get("event_usability_state") in ("coherent", "coherent_with_review")
+        )
+        banned = [
+            phrase
+            for phrase in self.BANNED_PUBLIC_PHRASES
+            if phrase.lower() in (facebook + "\n" + instagram).lower()
+        ]
+        warnings = list(package.get("warnings") or [])
+        caption_quality = package.get("caption_quality") or {}
+        caption_ok = caption_quality.get("passed", True)
+        passed = bool(
+            facebook
+            and instagram
+            and media_ok
+            and title_ok
+            and event_ok
+            and caption_ok
+            and not banned
+        )
+        return {
+            "passed": passed,
+            "checks": {
+                "facebook_caption": bool(facebook),
+                "instagram_caption": bool(instagram),
+                "media_or_graphic_first": media_ok,
+                "usable_title": title_ok,
+                "media_event_coherence": event_ok,
+                "public_copy_clean": not banned,
+                "hashtag_policy": "#MordenFireRescue" not in " ".join(package.get("instagram_hashtags") or []),
+                "package_review_shown": bool(package.get("review_required_before_publishing")),
+                "evidence_available": bool(package.get("positive_factors") or package.get("source_signals")),
+                "sensitivity_gate": not any("sensitivity" in item.lower() for item in warnings),
+                "caption_specificity": caption_quality.get("specificity_score", 0),
+                "caption_quality": caption_ok
+            },
+            "blocking_issues": (
+                banned
+                + caption_quality.get("blocking_issues", [])
+                + ([] if title_ok else ["unusable package title"])
+                + ([] if event_ok else ["event coherence failed"])
+            ),
+            "regenerate_if_failed": not passed
+        }
+
     def _media_trust(self, media_package):
 
         media = (
@@ -633,6 +835,27 @@ class DailyCommunicationsOfficerService:
         if media_package.get("primary_photo"):
             return "Photo post or carousel"
         return "Text/graphic-first post"
+
+    def _strategy_from_family(self, family):
+
+        text = str(family or "").lower()
+        if "recruit" in text:
+            return "Recruitment"
+        if "action" in text or "training" in text or "technical" in text:
+            return "Action-focused"
+        if "behind" in text or "team" in text or "what_we_do" in text:
+            return "Behind-the-scenes"
+        if "light" in text:
+            return "Light-hearted"
+        return "Community-focused"
+
+    def _tone_options(self, family):
+
+        strategy = self._strategy_from_family(family)
+        values = [strategy, "Community-focused", "Professional"]
+        if strategy != "Light-hearted":
+            values.append("Human-interest")
+        return self._unique(values)
 
     def _has_media(self, media_package):
 
@@ -800,6 +1023,19 @@ class DailyCommunicationsOfficerService:
     def _opportunity_type(self, value):
 
         return str(value or "general_engagement").lower().replace(" ", "_")
+
+    def _bad_package_title(self, value):
+
+        text = str(value or "").strip().replace("_", " ").lower()
+        return text in (
+            "",
+            "unknown",
+            "unnamed event",
+            "posing for a photo",
+            "type posing for a photo",
+            "activity",
+            "training activity"
+        ) or text.startswith("type ")
 
     def _emoji(self, option):
 

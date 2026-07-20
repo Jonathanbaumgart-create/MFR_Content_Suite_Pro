@@ -161,7 +161,9 @@ def main():
             assert 0 <= segment["reel_score"] <= 100, segment
             reel = helmet.reel_package(video_id, segment)
             assert reel["review_required"] is True, reel
-            assert reel["instagram_reel_caption"], reel
+            assert reel["instagram_reel_caption"] == "", reel
+            assert reel["semantic_status"] == "technical_candidate_semantic_pending", reel
+            assert "semantic screen not completed" in reel["technical_candidate_status"].lower(), reel
 
         finally:
             os.chdir(original)

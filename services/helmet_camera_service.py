@@ -1,5 +1,6 @@
 from pathlib import Path
 import hashlib
+import json
 import os
 import subprocess
 import tempfile
@@ -27,10 +28,11 @@ class HelmetCameraService:
         str(Path(DEFAULT_ROOT)).lower(): 180
     }
 
-    def __init__(self, database=None, metadata_service=None):
+    def __init__(self, database=None, metadata_service=None, semantic_provider=None):
 
         self.db = database or context.database
         self.video = metadata_service or VideoMetadataService()
+        self.semantic_provider = semantic_provider
 
     ############################################################
 
@@ -285,14 +287,21 @@ class HelmetCameraService:
 
     ############################################################
 
-    def semantic_screen_segments(self, media_id, segments=None, limit=5):
+    def semantic_screen_segments(self, media_id, segments=None, limit=5, semantic_provider=None):
 
         selected = list(segments or self.db.helmet_camera_segments(media_id, limit=limit))[:limit]
         screened = []
+        provider = semantic_provider or self.semantic_provider
 
         for segment in selected:
             enriched = dict(segment)
-            enriched.update(self._semantic_profile(enriched))
+            enriched.update(
+                self._semantic_screen_segment(
+                    media_id,
+                    enriched,
+                    provider=provider
+                )
+            )
             screened.append(enriched)
 
         return screened
@@ -374,12 +383,25 @@ class HelmetCameraService:
 
         media = self.db.get_media_details(media_id) or {}
         risks = segment.get("risk_flags") or []
-        profile = self._semantic_profile(segment)
-        activity = profile.get("visible_activity_summary", "a short operational moment")
-        caption = (
-            f"A firefighter's-eye view of {activity.lower()}. "
-            "Training and readiness are built one practical task at a time."
+        profile = (
+            segment
+            if segment.get("semantic_status") == "completed_provider"
+            else self._technical_only_profile(segment)
         )
+        semantic_complete = profile.get("semantic_status") == "completed_provider"
+        manual_description = str(segment.get("manual_clip_description") or "").strip()
+        activity = (
+            manual_description
+            or profile.get("visible_activity_summary", "")
+        )
+        public_activity = self._public_activity_text(activity)
+        caption = ""
+
+        if semantic_complete or manual_description:
+            caption = (
+                f"A firefighter's-eye view of {public_activity}. "
+                "Training and readiness are built one practical task at a time."
+            )
 
         return {
             "media_id": media_id,
@@ -405,11 +427,254 @@ class HelmetCameraService:
             "content_family": profile.get("classification", ""),
             "orientation_correction": self.effective_rotation(media.get("path", "")),
             "review_required": True,
+            "semantic_status": profile.get("semantic_status", "technical_candidate_semantic_pending"),
+            "semantic_confidence": profile.get("confidence", 0),
+            "technical_candidate_status": (
+                "Technical candidate - semantic screen not completed"
+                if not semantic_complete and not manual_description
+                else "Semantic screen complete"
+            ),
             "publication_draft": {
                 "status": "draft",
                 "automatic_publish": False
             }
         }
+
+    ############################################################
+
+    def _semantic_screen_segment(self, media_id, segment, provider=None):
+
+        if provider is None:
+            return self._technical_only_profile(segment)
+
+        provider_name = getattr(provider, "provider_key", lambda: provider.__class__.__name__)()
+        model_name = getattr(provider, "model_name", lambda: "unknown")()
+        cached = {}
+
+        try:
+            cached = self.db.helmet_camera_semantic_result(
+                media_id,
+                segment.get("start_seconds"),
+                segment.get("end_seconds"),
+                provider_name,
+                model_name
+            )
+        except Exception:
+            cached = {}
+
+        if cached and cached.get("status") == "completed_provider":
+            result = dict(cached.get("result") or {})
+            result["semantic_status"] = "completed_provider"
+            result["semantic_cached"] = True
+            result["provider_calls"] = 0
+            return result
+
+        started = time.perf_counter()
+        sheet_path = ""
+
+        try:
+            sheet = self.create_contact_sheet(
+                segment.get("source_path", ""),
+                segment,
+                max_frames=4,
+                size=(480, 270)
+            )
+            if sheet is None:
+                raise ValueError("Unable to create semantic contact sheet.")
+
+            with tempfile.NamedTemporaryFile(
+                suffix=".jpg",
+                delete=False
+            ) as handle:
+                sheet_path = handle.name
+            sheet.save(sheet_path, quality=85, optimize=True)
+            prompt = self._semantic_prompt(segment)
+            raw = provider.analyze(sheet_path, prompt)
+            parsed = self._parse_semantic_response(raw)
+            parsed.update({
+                "semantic_status": "completed_provider",
+                "semantic_cached": False,
+                "provider_calls": 1,
+                "provider": provider_name,
+                "model": model_name,
+                "elapsed_seconds": round(time.perf_counter() - started, 3)
+            })
+            self.db.save_helmet_camera_semantic_result({
+                "media_id": media_id,
+                "start_seconds": segment.get("start_seconds"),
+                "end_seconds": segment.get("end_seconds"),
+                "provider": provider_name,
+                "model": model_name,
+                "status": "completed_provider",
+                "result": parsed,
+                "elapsed_seconds": parsed["elapsed_seconds"]
+            })
+            return parsed
+        except Exception as ex:
+            result = self._technical_only_profile(segment)
+            result.update({
+                "semantic_status": "provider_failed",
+                "semantic_error": str(ex),
+                "provider_calls": 1 if provider is not None else 0,
+                "elapsed_seconds": round(time.perf_counter() - started, 3)
+            })
+            try:
+                self.db.save_helmet_camera_semantic_result({
+                    "media_id": media_id,
+                    "start_seconds": segment.get("start_seconds"),
+                    "end_seconds": segment.get("end_seconds"),
+                    "provider": provider_name,
+                    "model": model_name,
+                    "status": "provider_failed",
+                    "result": result,
+                    "error": str(ex),
+                    "elapsed_seconds": result["elapsed_seconds"]
+                })
+            except Exception:
+                pass
+            return result
+        finally:
+            if sheet_path:
+                try:
+                    Path(sheet_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
+
+    def _technical_only_profile(self, segment):
+
+        return {
+            "semantic_status": "technical_candidate_semantic_pending",
+            "classification": "Technical Candidate",
+            "visible_activity_summary": "Technical candidate - semantic screen not completed",
+            "likely_context": "Unknown until semantic screen or manual description is supplied.",
+            "action_sequence": "",
+            "suggested_hook": "Semantic screen needed before public Reel copy.",
+            "recommended_tone": "Review first",
+            "operational_interest": int(segment.get("technical_score") or 0),
+            "public_interest": 0,
+            "fire_service_interest": int(segment.get("technical_score") or 0),
+            "behind_the_scenes": 0,
+            "light_hearted_personality": 0,
+            "educational_value": 0,
+            "confidence": 0,
+            "recommended_caption_angle": "Do not write final captions until semantic screen succeeds.",
+            "best_audience": "",
+            "music_mood": "",
+            "suggested_adjustment": segment.get("reason_selected", ""),
+            "why_this_clip_works": "Technical candidate only; actual visible activity has not been verified.",
+            "why_it_may_not_work": "Semantic screen is required before public use."
+        }
+
+    def _semantic_prompt(self, segment):
+
+        return (
+            "Return compact JSON for this helmet-camera contact sheet with keys: "
+            "visible_activity, likely_context, action_sequence, opening_hook, "
+            "payoff, operational_interest, public_interest, firefighter_interest, "
+            "behind_the_scenes_value, light_hearted_value, educational_value, "
+            "risks, confidence, recommended_tone. Do not invent identities, "
+            "patients, locations, or incident facts."
+        )
+
+    def _parse_semantic_response(self, raw):
+
+        text = str(raw or "").strip()
+        start = text.find("{")
+        end = text.rfind("}")
+
+        if start >= 0 and end > start:
+            text = text[start:end + 1]
+
+        parsed = json.loads(text)
+        visible = (
+            parsed.get("visible_activity")
+            or parsed.get("visible_activity_summary")
+            or parsed.get("actual_visible_activity")
+            or parsed.get("activity")
+            or parsed.get("description")
+            or parsed.get("summary")
+        )
+        if isinstance(visible, list):
+            visible = ", ".join(str(item) for item in visible if item)
+        elif isinstance(visible, dict):
+            visible = ", ".join(
+                str(value)
+                for value in visible.values()
+                if value
+            )
+
+        visible_text = str(visible or "").strip()
+        if not visible_text or visible_text.lower() in (
+            "helmet-camera finalist activity",
+            "helmet camera finalist activity",
+            "activity",
+            "unknown"
+        ):
+            raise ValueError("Provider semantic result did not include specific visible activity.")
+
+        confidence = self._bounded_int(
+            parsed.get("confidence") or parsed.get("confidence_score"),
+            default=60
+        )
+        risks = parsed.get("risks") or []
+
+        if isinstance(risks, str):
+            risks = [risks]
+
+        return {
+            "classification": parsed.get("content_family") or "Semantic Reel Candidate",
+            "visible_activity_summary": visible_text,
+            "likely_context": parsed.get("likely_context", ""),
+            "action_sequence": parsed.get("action_sequence", ""),
+            "opening_hook": parsed.get("opening_hook", ""),
+            "payoff": parsed.get("payoff", ""),
+            "suggested_hook": parsed.get("opening_hook") or "A firefighter's-eye view.",
+            "recommended_tone": parsed.get("recommended_tone") or "Behind-the-scenes",
+            "operational_interest": self._bounded_int(parsed.get("operational_interest"), 50),
+            "public_interest": self._bounded_int(parsed.get("public_interest"), 50),
+            "fire_service_interest": self._bounded_int(parsed.get("firefighter_interest"), 50),
+            "behind_the_scenes": self._bounded_int(parsed.get("behind_the_scenes_value"), 50),
+            "light_hearted_personality": self._bounded_int(parsed.get("light_hearted_value"), 20),
+            "educational_value": self._bounded_int(parsed.get("educational_value"), 40),
+            "risk_flags": risks,
+            "confidence": confidence,
+            "recommended_caption_angle": (
+                parsed.get("recommended_caption_angle")
+                or f"{parsed.get('recommended_tone', 'Behind-the-scenes')} look at {visible_text.lower()}."
+            ),
+            "best_audience": parsed.get("audience") or "Morden residents and MFR followers",
+            "music_mood": parsed.get("music_mood") or "steady, upbeat, non-lyrical",
+            "suggested_adjustment": parsed.get("suggested_adjustment", ""),
+            "why_this_clip_works": parsed.get("public_interest_reason") or parsed.get("reason", ""),
+            "why_it_may_not_work": "; ".join(risks) if risks else "Review for context before publishing."
+        }
+
+    def _public_activity_text(self, value):
+
+        text = str(value or "").strip()
+        replacements = (
+            "The image sequence shows ",
+            "The image shows ",
+            "This image shows ",
+            "The contact sheet shows ",
+            "The sequence shows "
+        )
+
+        for prefix in replacements:
+            if text.lower().startswith(prefix.lower()):
+                text = text[len(prefix):].strip()
+                break
+
+        text = text.replace(".,", ",")
+        text = text.rstrip(". ")
+        return text[:1].lower() + text[1:] if text else "a helmet-camera training moment"
+
+    def _bounded_int(self, value, default=0):
+
+        try:
+            return max(0, min(100, int(float(value))))
+        except Exception:
+            return default
 
     ############################################################
 

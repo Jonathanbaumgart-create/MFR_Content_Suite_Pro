@@ -7,6 +7,8 @@ from services.cache_invalidation_service import CacheInvalidationService
 from services.communications_memory_service import CommunicationsMemoryService
 from services.human_feedback_service import HumanFeedbackService
 from services.logging_service import LoggingService
+from services.automated_editorial_trust_service import AutomatedEditorialTrustService
+from services.media_review_policy_service import MediaReviewPolicyService
 from services.time_service import TimeService
 
 
@@ -20,6 +22,7 @@ class MediaPackageService:
     ALTERNATIVE_LIMIT = 25
     SUPPORTING_PHOTO_LIMIT = 5
     SUPPORTING_VIDEO_LIMIT = 3
+    REVIEWED_ASSET_FLOOR = 3
 
     PLATFORM_KEYS = (
         "Facebook",
@@ -43,6 +46,11 @@ class MediaPackageService:
         )
         self.feedback = feedback_service or HumanFeedbackService(
             database=self.db
+        )
+        self.trust_service = AutomatedEditorialTrustService(database=self.db)
+        self.review_policy = MediaReviewPolicyService(
+            database=self.db,
+            trust_service=self.trust_service
         )
         self.last_metrics = {}
 
@@ -76,6 +84,7 @@ class MediaPackageService:
             platforms,
             started
         )
+        package["review_requirements"] = self._review_requirements(package)
         package = self._apply_saved_actions(package)
 
         if persist and self._has_media(package):
@@ -370,7 +379,7 @@ class MediaPackageService:
                     )
                 )
 
-        if len(assets) < 6:
+        if len(assets) < 6 and not recommendation.get("strict_asset_ids"):
             assets.extend(
                 self.db.content_director_candidates(
                     limit=min(max(candidate_limit, 24), 500)
@@ -379,11 +388,19 @@ class MediaPackageService:
 
         effective = []
         seen = set()
+        allowed_ids = {
+            self._to_int(media_id)
+            for media_id in (recommendation.get("allowed_media_ids") or [])
+            if self._to_int(media_id)
+        }
 
         for asset in assets:
             media_id = self._to_int(asset.get("media_id"))
 
             if not media_id or media_id in seen:
+                continue
+
+            if allowed_ids and media_id not in allowed_ids:
                 continue
 
             seen.add(media_id)
@@ -401,8 +418,21 @@ class MediaPackageService:
             for asset in effective
             if self._reviewed(asset)
         ]
+        if len(reviewed) >= self.REVIEWED_ASSET_FLOOR:
+            return reviewed
 
-        return reviewed or effective
+        policy_supported = [
+            self._apply_policy(asset)
+            for asset in effective
+            if self._policy_supported(asset)
+        ]
+
+        return reviewed + [
+            asset for asset in policy_supported
+            if asset.get("media_id") not in {
+                item.get("media_id") for item in reviewed
+            }
+        ] or policy_supported or effective
 
     ############################################################
 
@@ -631,6 +661,11 @@ class MediaPackageService:
             "selection_factors": factors,
             "confidence_limitations": limitations
         })
+        policy = self.review_policy.policy_for_media(asset)
+        asset["automated_editorial_trust"] = policy.get("trust", {})
+        asset["review_policy"] = policy
+        if policy.get("may_attach_to_draft"):
+            asset["media_score"] = min(100, asset["media_score"] + 6)
         return asset
 
     ############################################################
@@ -885,6 +920,24 @@ class MediaPackageService:
             asset.get("trust_state") in ("approved_real", "corrected_real")
             or asset.get("review_status") in ("approved", "corrected")
         )
+
+    def _policy_supported(self, asset):
+
+        try:
+            return self.review_policy.policy_for_media(asset)["may_attach_to_draft"]
+        except Exception:
+            return False
+
+    def _apply_policy(self, asset):
+
+        asset = dict(asset or {})
+        try:
+            policy = self.review_policy.policy_for_media(asset)
+        except Exception:
+            policy = {}
+        asset["review_policy"] = policy
+        asset["automated_editorial_trust"] = policy.get("trust", {})
+        return asset
 
     ############################################################
 
@@ -1332,6 +1385,36 @@ class MediaPackageService:
             or package.get("gallery_photos")
             or package.get("gallery_videos")
         )
+
+    def _review_requirements(self, package):
+
+        selected = []
+        for key in ("primary_photo", "primary_video"):
+            if package.get(key):
+                selected.append(package[key])
+        for key in ("gallery_photos", "gallery_videos", "supporting_photos", "supporting_videos"):
+            selected.extend(package.get(key) or [])
+
+        unreviewed = [
+            item.get("media_id")
+            for item in selected
+            if item.get("trust_state") not in ("approved_real", "corrected_real")
+            and item.get("analysis_state") not in ("approved", "corrected")
+        ]
+
+        return {
+            "package_review_required": True,
+            "individual_unused_media_review_required": False,
+            "selected_unreviewed_media_ids": unreviewed,
+            "publishing_confirmation_required": True,
+            "scope": [
+                "selected media",
+                "caption accuracy",
+                "sensitivity/privacy",
+                "event/program identity",
+                "platform copy"
+            ]
+        }
 
     ############################################################
 

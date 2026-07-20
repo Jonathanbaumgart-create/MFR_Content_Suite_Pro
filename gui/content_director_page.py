@@ -16,6 +16,7 @@ from services.communication_package_service import CommunicationPackageService
 from services.content_director_retrieval_service import ContentDirectorRetrievalService
 from services.content_generation_service import ContentGenerationService
 from services.decision_explainability_service import DecisionExplainabilityService
+from services.daily_communications_officer_service import DailyCommunicationsOfficerService
 from services.editorial_comparison_service import EditorialComparisonService
 from services.logging_service import LoggingService
 from services.thumbnail_service import ThumbnailService
@@ -38,6 +39,7 @@ class ContentDirectorPage(ctk.CTkFrame):
             director=self.director
         )
         self.officer_service = CommunicationsOfficerService()
+        self.daily_officer_service = DailyCommunicationsOfficerService()
         self.communication_package_service = CommunicationPackageService()
         self.retrieval_service = ContentDirectorRetrievalService()
         self.content_generation_service = ContentGenerationService()
@@ -330,8 +332,8 @@ class ContentDirectorPage(ctk.CTkFrame):
             "Preparing today's recommendations..."
         )
         self.brief_future = self.executor.submit(
-            self.officer_service.generate_fast,
-            force=True
+            self.load_proactive_brief,
+            True
         )
         self.brief_future.add_done_callback(
             lambda item: self.enqueue_ui(
@@ -390,6 +392,78 @@ class ContentDirectorPage(ctk.CTkFrame):
             self.loading_state = "empty"
         self.render_results()
         self.render_daily_opportunities()
+
+    def load_proactive_brief(self, force=True):
+
+        brief = self.daily_officer_service.generate(force=force)
+        packages = brief.get("daily_post_packages") or []
+        recommendations = [
+            self.daily_package_to_opportunity(package)
+            for package in packages
+        ]
+        recommendations = [
+            item for item in recommendations
+            if item
+        ]
+        brief["recommendations"] = recommendations
+        brief["content_director_source"] = "daily_communications_officer"
+        brief["opportunity_rejection_diagnostics"] = {
+            "examined": len(packages),
+            "rejected_for_unknown_event": sum(
+                1 for package in packages
+                if not package.get("event_fact_sheet", {}).get("has_enough_facts")
+                and not package.get("text_graphic_first")
+            ),
+            "rejected_for_weak_coherence": sum(
+                1 for package in packages
+                if not package.get("quality_gate", {}).get("checks", {}).get("media_event_coherence", True)
+            ),
+            "rejected_for_no_suitable_media": sum(
+                1 for package in packages
+                if package.get("text_graphic_first")
+            ),
+            "rejected_for_low_trust": 0,
+            "rejected_for_sensitive_content": 0,
+            "rejected_for_duplicate_story": 0,
+            "rejected_for_missing_facts": sum(
+                1 for package in packages
+                if not package.get("event_fact_sheet", {}).get("has_enough_facts", True)
+            ),
+            "accepted": len(recommendations)
+        }
+        return brief
+
+    def daily_package_to_opportunity(self, package):
+
+        media_package = package.get("media_package") or {}
+        media = []
+        for key in ("primary_photo", "primary_video"):
+            if media_package.get(key):
+                media.append(media_package[key])
+        for key in ("gallery_photos", "gallery_videos"):
+            media.extend(media_package.get(key) or [])
+
+        return {
+            "title": package.get("title", ""),
+            "description": package.get("why_today", ""),
+            "reasoning": package.get("positive_factors", []),
+            "priority": "High" if package.get("option_number") == 1 else "Medium",
+            "confidence": package.get("confidence", 0),
+            "recommended_media": media,
+            "recommended_platforms": package.get("recommended_platforms", ["Facebook", "Instagram"]),
+            "best_posting_time": package.get("suggested_posting_time", "Today"),
+            "caption_theme": package.get("content_angle", ""),
+            "hashtags": package.get("instagram_hashtags", []),
+            "call_to_action": "",
+            "estimated_engagement": "Moderate",
+            "opportunity_type": package.get("opportunity_type", ""),
+            "content_family": package.get("content_family", ""),
+            "facebook_caption": package.get("facebook_caption", ""),
+            "instagram_caption": package.get("instagram_caption", ""),
+            "daily_package": package,
+            "event_diagnostics": package.get("event_diagnostics", {}),
+            "package_review": package.get("package_review", {})
+        }
 
     ##########################################################
 
@@ -1658,12 +1732,38 @@ class ContentDirectorPage(ctk.CTkFrame):
             " | ".join(opportunity["reasoning"])
         )
 
+        next_row = 3
+        if opportunity.get("facebook_caption") or opportunity.get("instagram_caption"):
+            caption_box = ctk.CTkTextbox(
+                frame,
+                height=145,
+                wrap="word"
+            )
+            caption_box.grid(
+                row=3,
+                column=1,
+                sticky="ew",
+                padx=(0, 12),
+                pady=6
+            )
+            caption_box.insert(
+                "1.0",
+                (
+                    "Facebook\n"
+                    f"{opportunity.get('facebook_caption', '')}\n\n"
+                    "Instagram\n"
+                    f"{opportunity.get('instagram_caption', '')}"
+                )
+            )
+            caption_box.configure(state="disabled")
+            next_row = 4
+
         strategy_frame = ctk.CTkFrame(
             frame,
             fg_color="transparent"
         )
         strategy_frame.grid(
-            row=3,
+            row=next_row,
             column=1,
             sticky="ew",
             padx=(0, 12),
@@ -1675,7 +1775,7 @@ class ContentDirectorPage(ctk.CTkFrame):
             strategy_frame,
             opportunity
         )
-        next_row = 4
+        next_row += 1
 
         footer = ctk.CTkFrame(
             frame,

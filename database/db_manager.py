@@ -677,6 +677,58 @@ class DatabaseManager:
 
         """)
 
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS package_review_decisions(
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            package_id TEXT,
+
+            decision_type TEXT,
+
+            media_id INTEGER,
+
+            story_family TEXT,
+
+            tone TEXT,
+
+            notes TEXT,
+
+            metadata_json TEXT,
+
+            source TEXT,
+
+            created_at TEXT
+
+        )
+
+        """)
+
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS editorial_preference_signals(
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            signal_type TEXT,
+
+            signal_key TEXT,
+
+            direction TEXT,
+
+            weight REAL DEFAULT 1,
+
+            evidence_count INTEGER DEFAULT 1,
+
+            last_updated TEXT,
+
+            metadata_json TEXT
+
+        )
+
+        """)
+
         ########################################################
         # Home / Morning Brief Sessions
         ########################################################
@@ -806,6 +858,38 @@ class DatabaseManager:
             generated_at TEXT,
 
             UNIQUE(media_id, start_seconds, end_seconds)
+
+        )
+
+        """)
+
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS helmet_camera_semantic_results(
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            media_id INTEGER,
+
+            start_seconds REAL,
+
+            end_seconds REAL,
+
+            provider TEXT,
+
+            model TEXT,
+
+            status TEXT,
+
+            result_json TEXT,
+
+            error TEXT,
+
+            elapsed_seconds REAL DEFAULT 0,
+
+            generated_at TEXT,
+
+            UNIQUE(media_id, start_seconds, end_seconds, provider, model)
 
         )
 
@@ -6847,6 +6931,130 @@ class DatabaseManager:
 
     ############################################################
 
+    def save_package_review_decision(self, decision):
+
+        decision = decision or {}
+        conn = self.connection()
+        cur = conn.cursor()
+        cur.execute("""
+        INSERT INTO package_review_decisions(
+            package_id,
+            decision_type,
+            media_id,
+            story_family,
+            tone,
+            notes,
+            metadata_json,
+            source,
+            created_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,?)
+        """, (
+            decision.get("package_id", ""),
+            decision.get("decision_type", ""),
+            self._to_int(decision.get("media_id")),
+            decision.get("story_family", ""),
+            decision.get("tone", ""),
+            decision.get("notes", ""),
+            self._to_json(decision.get("metadata") or {}),
+            decision.get("source", "Jonathan"),
+            decision.get("created_at") or TimeService.utc_now_iso()
+        ))
+        row_id = cur.lastrowid
+        conn.commit()
+        conn.close()
+        return row_id
+
+    def package_review_decisions(self, limit=500):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute("""
+        SELECT *
+        FROM package_review_decisions
+        ORDER BY id DESC
+        LIMIT ?
+        """, (self._to_int(limit) or 500,))
+        rows = cur.fetchall()
+        conn.close()
+
+        return [
+            {
+                "id": row["id"],
+                "package_id": row["package_id"] or "",
+                "decision_type": row["decision_type"] or "",
+                "media_id": row["media_id"] or 0,
+                "story_family": row["story_family"] or "",
+                "tone": row["tone"] or "",
+                "notes": row["notes"] or "",
+                "metadata": self._from_json(row["metadata_json"]),
+                "source": row["source"] or "",
+                "created_at": row["created_at"] or ""
+            }
+            for row in rows
+        ]
+
+    def save_editorial_preference_signal(self, signal):
+
+        signal = signal or {}
+        conn = self.connection()
+        cur = conn.cursor()
+        cur.execute("""
+        INSERT INTO editorial_preference_signals(
+            signal_type,
+            signal_key,
+            direction,
+            weight,
+            evidence_count,
+            last_updated,
+            metadata_json
+        )
+        VALUES(?,?,?,?,?,?,?)
+        """, (
+            signal.get("signal_type", ""),
+            signal.get("signal_key", ""),
+            signal.get("direction", ""),
+            self._to_float(signal.get("weight")) or 1,
+            self._to_int(signal.get("evidence_count")) or 1,
+            signal.get("last_updated") or TimeService.utc_now_iso(),
+            self._to_json(signal.get("metadata") or {})
+        ))
+        row_id = cur.lastrowid
+        conn.commit()
+        conn.close()
+        return row_id
+
+    def editorial_preference_signals(self, limit=1000):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute("""
+        SELECT *
+        FROM editorial_preference_signals
+        ORDER BY id DESC
+        LIMIT ?
+        """, (self._to_int(limit) or 1000,))
+        rows = cur.fetchall()
+        conn.close()
+
+        return [
+            {
+                "id": row["id"],
+                "signal_type": row["signal_type"] or "",
+                "signal_key": row["signal_key"] or "",
+                "direction": row["direction"] or "",
+                "weight": row["weight"] or 0,
+                "evidence_count": row["evidence_count"] or 0,
+                "last_updated": row["last_updated"] or "",
+                "metadata": self._from_json(row["metadata_json"])
+            }
+            for row in rows
+        ]
+
+    ############################################################
+
     def save_recommendation_history(self, recommendation):
 
         conn = self.connection()
@@ -11476,6 +11684,81 @@ class DatabaseManager:
         conn.close()
         return rows
 
+    def save_helmet_camera_semantic_result(self, result):
+
+        conn = self.connection()
+        cur = conn.cursor()
+        now = TimeService.utc_now_iso()
+        cur.execute("""
+        INSERT OR REPLACE INTO helmet_camera_semantic_results(
+            media_id,
+            start_seconds,
+            end_seconds,
+            provider,
+            model,
+            status,
+            result_json,
+            error,
+            elapsed_seconds,
+            generated_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            self._to_int(result.get("media_id")),
+            self._to_float(result.get("start_seconds")),
+            self._to_float(result.get("end_seconds")),
+            result.get("provider", ""),
+            result.get("model", ""),
+            result.get("status", ""),
+            self._to_json(result.get("result") or {}),
+            result.get("error", ""),
+            self._to_float(result.get("elapsed_seconds")),
+            result.get("generated_at", now)
+        ))
+        conn.commit()
+        conn.close()
+
+    def helmet_camera_semantic_result(
+        self,
+        media_id,
+        start_seconds,
+        end_seconds,
+        provider="",
+        model=""
+    ):
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute("""
+        SELECT *
+        FROM helmet_camera_semantic_results
+        WHERE media_id=?
+          AND start_seconds=?
+          AND end_seconds=?
+          AND provider=?
+          AND model=?
+        ORDER BY generated_at DESC
+        LIMIT 1
+        """,
+        (
+            self._to_int(media_id),
+            self._to_float(start_seconds),
+            self._to_float(end_seconds),
+            provider,
+            model
+        ))
+        row = cur.fetchone()
+        conn.close()
+
+        if not row:
+            return {}
+
+        item = dict(row)
+        item["result"] = self._from_json(item.get("result_json"))
+        return item
+
     ############################################################
 
     def _analysis_from_row(self, row):
@@ -12494,6 +12777,11 @@ class DatabaseManager:
             "CREATE INDEX IF NOT EXISTS idx_comm_package_history_created ON communication_package_history(created_at)",
             "CREATE INDEX IF NOT EXISTS idx_comm_package_actions_package ON communication_package_asset_actions(package_id)",
             "CREATE INDEX IF NOT EXISTS idx_comm_package_actions_media ON communication_package_asset_actions(media_id)",
+            "CREATE INDEX IF NOT EXISTS idx_package_review_package ON package_review_decisions(package_id)",
+            "CREATE INDEX IF NOT EXISTS idx_package_review_media ON package_review_decisions(media_id)",
+            "CREATE INDEX IF NOT EXISTS idx_package_review_decision ON package_review_decisions(decision_type)",
+            "CREATE INDEX IF NOT EXISTS idx_editorial_pref_key ON editorial_preference_signals(signal_type, signal_key)",
+            "CREATE INDEX IF NOT EXISTS idx_editorial_pref_direction ON editorial_preference_signals(direction)",
             "CREATE INDEX IF NOT EXISTS idx_home_sessions_status ON home_sessions(status)",
             "CREATE INDEX IF NOT EXISTS idx_home_sessions_completed ON home_sessions(completed_at)",
             "CREATE INDEX IF NOT EXISTS idx_home_sessions_started ON home_sessions(started_at)",
@@ -12503,6 +12791,7 @@ class DatabaseManager:
             "CREATE INDEX IF NOT EXISTS idx_helmet_segments_media ON helmet_camera_segments(media_id)",
             "CREATE INDEX IF NOT EXISTS idx_helmet_segments_score ON helmet_camera_segments(reel_score)",
             "CREATE INDEX IF NOT EXISTS idx_helmet_segments_status ON helmet_camera_segments(status)",
+            "CREATE INDEX IF NOT EXISTS idx_helmet_semantic_media ON helmet_camera_semantic_results(media_id, start_seconds, end_seconds)",
             "CREATE INDEX IF NOT EXISTS idx_decision_audit_decision ON decision_audit_history(decision_id)",
             "CREATE INDEX IF NOT EXISTS idx_decision_audit_type_subject ON decision_audit_history(decision_type, subject_id)",
             "CREATE INDEX IF NOT EXISTS idx_decision_audit_generated ON decision_audit_history(generated_at)",

@@ -13,6 +13,7 @@ from services.content_generation_service import ContentGenerationService
 from services.daily_communications_officer_service import DailyCommunicationsOfficerService
 from services.decision_explainability_service import DecisionExplainabilityService
 from services.logging_service import LoggingService
+from services.package_review_service import PackageReviewService
 from services.thumbnail_service import ThumbnailService
 from services.time_service import TimeService
 from gui.window_placement import WindowPlacement
@@ -34,6 +35,7 @@ class HomePage(ctk.CTkFrame):
         self.content_generation_service = ContentGenerationService()
         self.explainability_service = DecisionExplainabilityService()
         self.communications_intelligence_service = CommunicationsIntelligenceService()
+        self.package_review_service = PackageReviewService()
         self.thumbnail_service = ThumbnailService()
         self.future = None
         self.package_future = None
@@ -832,12 +834,176 @@ class HomePage(ctk.CTkFrame):
                     }
                 )
             ).pack(side="left")
+            if package.get("event_diagnostics"):
+                ctk.CTkButton(
+                    actions,
+                    text="Event Diagnostics",
+                    width=145,
+                    command=lambda item=package: self.show_event_diagnostics(item)
+                ).pack(side="left", padx=(8, 0))
+            ctk.CTkButton(
+                actions,
+                text="Approve Package",
+                width=135,
+                command=lambda item=package: self.record_package_decision(
+                    item,
+                    "approve_package"
+                )
+            ).pack(side="left", padx=(8, 0))
+            ctk.CTkButton(
+                actions,
+                text="Reject Media",
+                width=115,
+                command=lambda item=package: self.record_package_decision(
+                    item,
+                    "reject_media"
+                )
+            ).pack(side="left", padx=(8, 0))
+            for label, decision in (
+                ("Correct Event", "correct_event"),
+                ("Shorten", "shorten_caption"),
+                ("More Community", "make_more_community_focused"),
+                ("Lighter Tone", "make_more_light_hearted")
+            ):
+                ctk.CTkButton(
+                    actions,
+                    text=label,
+                    width=120,
+                    command=lambda item=package, kind=decision: self.record_package_decision(
+                        item,
+                        kind
+                    )
+                ).pack(side="left", padx=(8, 0))
+
+            review = package.get("package_review") or {}
+            quality = package.get("quality_gate") or {}
+            review_label = ctk.CTkLabel(
+                card,
+                text=(
+                    "Package review: required before publishing | "
+                    f"Quality gate: {'passed' if quality.get('passed') else 'needs attention'} | "
+                    "Actions: " + self.format_list(review.get("actions", [])[:4])
+                ),
+                text_color="#b9d7ff",
+                wraplength=1050,
+                justify="left"
+            )
+            review_label.pack(
+                fill="x",
+                padx=12,
+                pady=(0, 10)
+            )
 
     def copy_daily_text(self, package, key):
 
         self.clipboard_clear()
         self.clipboard_append((package or {}).get(key, ""))
         self.status.configure(text="Daily package text copied.")
+
+    def record_package_decision(self, package, decision_type):
+
+        result = self.package_review_service.record_decision(
+            package,
+            decision_type
+        )
+        self.status.configure(
+            text=(
+                "Package decision recorded: "
+                f"{decision_type.replace('_', ' ')} "
+                f"(#{result.get('decision_id')})."
+            )
+        )
+
+    def show_event_diagnostics(self, package):
+
+        diagnostics = (package or {}).get("event_diagnostics") or {}
+        event = (package or {}).get("event_collection") or {}
+        window = ctk.CTkToplevel(self)
+        window.title("Event Diagnostics")
+        window.transient(self.winfo_toplevel())
+        WindowPlacement.center_window(window, 820, 620, parent=self)
+        window.lift()
+
+        textbox = ctk.CTkTextbox(
+            window,
+            wrap="word"
+        )
+        textbox.pack(
+            fill="both",
+            expand=True,
+            padx=16,
+            pady=(16, 8)
+        )
+        textbox.insert(
+            "1.0",
+            self.event_diagnostics_text(diagnostics, event)
+        )
+        textbox.configure(state="disabled")
+
+        ctk.CTkButton(
+            window,
+            text="Close",
+            command=window.destroy
+        ).pack(
+            anchor="e",
+            padx=16,
+            pady=(0, 16)
+        )
+
+    def event_diagnostics_text(self, diagnostics, event):
+
+        integrity = (
+            diagnostics.get("event_integrity")
+            or event.get("event_integrity")
+            or {}
+        )
+        lines = [
+            "Event Diagnostics",
+            "",
+            f"Title: {diagnostics.get('event_title') or event.get('title', '')}",
+            f"Title source: {diagnostics.get('title_source') or event.get('title_source', '')}",
+            f"Title confidence: {diagnostics.get('title_confidence') or event.get('title_confidence', 0)}",
+            f"Event confidence: {diagnostics.get('confidence') or event.get('confidence', 0)}",
+            f"Usability: {diagnostics.get('event_usability_state') or integrity.get('event_usability_state', '')}",
+            f"Coherence score: {integrity.get('coherence_score', 0)}",
+            f"Date range: {diagnostics.get('date_range') or event.get('when_it_occurred', {})}",
+            f"Source folders: {self.format_list(diagnostics.get('source_folders') or event.get('source_folders') or [])}",
+            f"Media count: {diagnostics.get('media_count') or event.get('media_count', 0)}",
+            "",
+            "Grouping Evidence:",
+            *[
+                "- " + str(item)
+                for item in (
+                    diagnostics.get("grouping_evidence")
+                    or integrity.get("grouping_evidence")
+                    or []
+                )
+            ],
+            "",
+            "Conflicts:",
+            *[
+                "- " + str(item)
+                for item in (
+                    diagnostics.get("conflicts")
+                    or integrity.get("conflicts")
+                    or ["No blocking conflicts reported."]
+                )
+            ],
+            "",
+            "Excluded Items:",
+            *[
+                "- " + str(item.get("filename", "")) + ": " + str(item.get("reason", ""))
+                for item in (
+                    diagnostics.get("excluded_items")
+                    or integrity.get("excluded_media")
+                    or []
+                )[:20]
+            ],
+            "",
+            "Semantic Verification:",
+            diagnostics.get("semantic_verification_status", "")
+        ]
+        return "\n".join(str(line) for line in lines)
 
     ##########################################################
 
