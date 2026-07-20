@@ -13,6 +13,7 @@ from services.content_generation_service import ContentGenerationService
 from services.daily_communications_officer_service import DailyCommunicationsOfficerService
 from services.decision_explainability_service import DecisionExplainabilityService
 from services.logging_service import LoggingService
+from services.opportunity_orchestration_service import OpportunityOrchestrationService
 from services.package_review_service import PackageReviewService
 from services.thumbnail_service import ThumbnailService
 from services.time_service import TimeService
@@ -30,7 +31,8 @@ class HomePage(ctk.CTkFrame):
 
         super().__init__(parent)
 
-        self.service = DailyCommunicationsOfficerService()
+        self.service = OpportunityOrchestrationService()
+        self.daily_service = DailyCommunicationsOfficerService()
         self.package_service = CommunicationPackageService()
         self.content_generation_service = ContentGenerationService()
         self.explainability_service = DecisionExplainabilityService()
@@ -63,7 +65,7 @@ class HomePage(ctk.CTkFrame):
     def build_page(self):
 
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(2, weight=1)
+        self.grid_rowconfigure(3, weight=1)
 
         header = ctk.CTkFrame(
             self,
@@ -81,7 +83,7 @@ class HomePage(ctk.CTkFrame):
 
         title = ctk.CTkLabel(
             header,
-            text="Home",
+            text="Communications Command Center",
             font=("Segoe UI", 30, "bold")
         )
 
@@ -103,13 +105,51 @@ class HomePage(ctk.CTkFrame):
             sticky="e"
         )
 
+        search_frame = ctk.CTkFrame(
+            self,
+            fg_color="transparent"
+        )
+        search_frame.grid(
+            row=1,
+            column=0,
+            sticky="ew",
+            padx=20,
+            pady=(0, 8)
+        )
+        search_frame.grid_columnconfigure(0, weight=1)
+
+        self.search_entry = ctk.CTkEntry(
+            search_frame,
+            placeholder_text="Search opportunities, media, historical posts, Helmet Camera clips, programs..."
+        )
+        self.search_entry.grid(
+            row=0,
+            column=0,
+            sticky="ew",
+            padx=(0, 8)
+        )
+        self.search_entry.bind(
+            "<Return>",
+            lambda _event: self.run_command_center_search()
+        )
+
+        ctk.CTkButton(
+            search_frame,
+            text="Search",
+            width=100,
+            command=self.run_command_center_search
+        ).grid(
+            row=0,
+            column=1
+        )
+
         self.status = ctk.CTkLabel(
             self,
             text="Preparing today's communications brief..."
         )
 
         self.status.grid(
-            row=1,
+            row=2,
             column=0,
             sticky="w",
             padx=20,
@@ -119,7 +159,7 @@ class HomePage(ctk.CTkFrame):
         self.content = ctk.CTkScrollableFrame(self)
 
         self.content.grid(
-            row=2,
+            row=3,
             column=0,
             sticky="nsew",
             padx=20,
@@ -150,7 +190,7 @@ class HomePage(ctk.CTkFrame):
         self.render_loading()
 
         self.future = context.job_manager.submit(
-            self.service.generate,
+            self.service.command_center,
             force=True
         )
         self.communications_intelligence_future = None
@@ -211,7 +251,7 @@ class HomePage(ctk.CTkFrame):
             return
 
         self.loading_state = "loaded"
-        stage = self.brief.get("brief_stage", "complete")
+        stage = self.brief.get("status", self.brief.get("brief_stage", "complete"))
         self.status.configure(
             text=(
                 f"Brief {stage}: " +
@@ -224,6 +264,75 @@ class HomePage(ctk.CTkFrame):
             )
         )
         self.render_brief()
+
+    ##########################################################
+
+    def run_command_center_search(self):
+
+        query = self.search_entry.get().strip()
+        if not query:
+            self.status.configure(
+                text="Enter a search term first."
+            )
+            return
+
+        self.status.configure(
+            text=f"Searching for {query}..."
+        )
+        token = self._load_token
+        future = context.job_manager.submit(
+            self.service.search,
+            query
+        )
+        self.after(
+            150,
+            lambda item=future, value=token: self.check_search_future(
+                item,
+                value
+            )
+        )
+
+    def check_search_future(self, future, token):
+
+        if self._destroyed:
+            return
+
+        if token != self._load_token:
+            return
+
+        if not future.done():
+            self.after(
+                150,
+                lambda item=future, value=token: self.check_search_future(
+                    item,
+                    value
+                )
+            )
+            return
+
+        try:
+            result = future.result()
+        except Exception as ex:
+            logger.error(
+                "Command Center search failed",
+                exc_info=(
+                    type(ex),
+                    ex,
+                    ex.__traceback__
+                )
+            )
+            self.status.configure(
+                text=f"Search failed: {ex}"
+            )
+            return
+
+        self.status.configure(
+            text=(
+                f"Search complete: {result.get('total_results', 0)} result(s) "
+                f"in {result.get('elapsed_seconds', 0)}s."
+            )
+        )
+        self.render_search_results(result)
 
     ##########################################################
 
@@ -357,19 +466,30 @@ class HomePage(ctk.CTkFrame):
             return
 
         self.add_section(
-            self.brief.get("title", "AI Communications Officer Morning Brief"),
+            self.brief.get("title", "Communications Command Center"),
             [
                 self.brief.get("current_date", ""),
-                "Why today matters: " + self.brief.get("why_today_matters", ""),
+                "Why today matters: " + self.command_center_why_today(),
                 (
-                    "Confidence: "
-                    f"{self.brief.get('confidence', 0)}%"
+                    "Load time: "
+                    f"{(self.brief.get('metrics') or {}).get('total_seconds', 0)}s"
                 )
             ]
         )
+        self.render_daily_workflow()
         self.render_daily_post_packages()
+        self.render_command_center_recent_activity()
+        self.render_ready_to_publish_media()
+        self.render_helmet_camera_opportunities()
+        self.render_command_center_gaps()
+        self.render_upcoming_programs()
+        self.render_publishing_workflow()
+        self.render_knowledge_provider_health()
+        self.render_attention_required()
+        self.render_planning_horizons()
         self.render_context()
-        self.render_recent_mfr_activity()
+        if not self.brief.get("recent_mfr_activity"):
+            self.render_recent_mfr_activity()
         self.render_communication_priorities()
         self.render_best_operational_opportunities()
         self.render_top_story()
@@ -427,6 +547,268 @@ class HomePage(ctk.CTkFrame):
             "Today's Communication Priorities",
             lines
         )
+
+    ##########################################################
+
+    def command_center_why_today(self):
+
+        packages = (
+            self.brief.get("top_packages")
+            or self.brief.get("daily_post_packages")
+            or []
+        )
+        if packages:
+            return (
+                packages[0].get("why_today")
+                or packages[0].get("why_today_matters")
+                or "Top packages are ready from stored local intelligence."
+            )
+        return self.brief.get(
+            "why_today_matters",
+            "Recent activity, seasonal context, memory, and media readiness were reviewed."
+        )
+
+    def render_daily_workflow(self):
+
+        workflow = self.brief.get("daily_workflow") or {}
+        if not workflow:
+            return
+
+        self.add_section(
+            workflow.get("title", "Today's Communications Workflow"),
+            [
+                workflow.get("completion_label", ""),
+                "Steps: " + self.format_list(workflow.get("steps", []))
+            ]
+        )
+
+    def render_command_center_recent_activity(self):
+
+        events = self.brief.get("recent_mfr_activity", [])
+        if not events:
+            return
+
+        lines = []
+        for event in events[:6]:
+            lines.append(
+                (
+                    f"{event.get('title', '')} - "
+                    f"{event.get('photo_count', 0)} photo(s), "
+                    f"{event.get('video_count', 0)} video(s), "
+                    f"{event.get('helmet_camera_count', 0)} helmet clip(s) - "
+                    f"{event.get('communication_status', '')}."
+                )
+            )
+            lines.append(
+                "  Why it matters: " + event.get("priority_reason", "")
+            )
+
+        self.add_section(
+            "Recent MFR Activity",
+            lines
+        )
+
+    def render_ready_to_publish_media(self):
+
+        media = self.brief.get("ready_to_publish_media", [])
+        if not media:
+            return
+
+        lines = []
+        for item in media[:8]:
+            lines.append(
+                (
+                    f"{item.get('filename', '')} - "
+                    f"{item.get('media_type', '')} - "
+                    f"{item.get('trust', '')} - "
+                    f"{item.get('why_selected', '')}"
+                )
+            )
+
+        self.add_section(
+            "Ready-to-Publish Media",
+            lines
+        )
+
+    def render_helmet_camera_opportunities(self):
+
+        clips = self.brief.get("helmet_camera_opportunities", [])
+        if not clips:
+            return
+
+        lines = []
+        for clip in clips[:5]:
+            lines.append(
+                (
+                    f"{clip.get('filename', '')} "
+                    f"{clip.get('start_seconds', 0)}-{clip.get('end_seconds', 0)}s - "
+                    f"{clip.get('technical_label', '')} - "
+                    f"Reel potential {clip.get('reel_potential', 0)}."
+                )
+            )
+            if clip.get("actual_visible_activity"):
+                lines.append(
+                    "  Visible activity: " + clip.get("actual_visible_activity", "")
+                )
+            if clip.get("risks"):
+                lines.append(
+                    "  Risks: " + self.format_list(clip.get("risks", []))
+                )
+
+        self.add_section(
+            "Helmet Camera Opportunities",
+            lines
+        )
+
+    def render_command_center_gaps(self):
+
+        gaps = self.brief.get("communications_gaps", [])
+        if not gaps:
+            return
+
+        lines = []
+        for gap in gaps[:6]:
+            lines.append(
+                (
+                    f"{gap.get('title', '')} - {gap.get('urgency', '')}. "
+                    f"{gap.get('evidence', '')}"
+                )
+            )
+            lines.append(
+                "  Action: " + gap.get("suggested_action", gap.get("action", ""))
+            )
+
+        self.add_section(
+            "Communications Gaps",
+            lines
+        )
+
+    def render_upcoming_programs(self):
+
+        programs = self.brief.get("upcoming_programs", [])
+        if not programs:
+            return
+
+        lines = []
+        for program in programs[:6]:
+            lines.append(
+                (
+                    f"{program.get('title', '')} - "
+                    f"{program.get('current_year_status', '')} - "
+                    f"{program.get('recommended_lead_time', '')}."
+                )
+            )
+            if program.get("typical_historical_timing"):
+                lines.append(
+                    "  Historical timing: " +
+                    program.get("typical_historical_timing", "")
+                )
+
+        self.add_section(
+            "Upcoming Programs and Seasonal Opportunities",
+            lines
+        )
+
+    def render_publishing_workflow(self):
+
+        workflow = self.brief.get("publishing_workflow") or {}
+        counts = workflow.get("counts") or {}
+        if not counts:
+            return
+
+        self.add_section(
+            "Drafts / Scheduled / Published Recently",
+            [
+                (
+                    f"Drafts: {counts.get('drafts', 0)} | "
+                    f"Approved: {counts.get('approved', 0)} | "
+                    f"Scheduled: {counts.get('scheduled', 0)} | "
+                    f"Published this week: {counts.get('published_this_week', 0)}"
+                ),
+                "Actions: " + self.format_list(workflow.get("actions", []))
+            ]
+        )
+
+    def render_knowledge_provider_health(self):
+
+        health = self.brief.get("knowledge_provider_health") or {}
+        memory = self.brief.get("communications_memory_status") or {}
+        if not health and not memory:
+            return
+
+        self.add_section(
+            "Knowledge and Provider Health",
+            [
+                memory.get("status", ""),
+                (
+                    f"Knowledge completeness: "
+                    f"{health.get('knowledge_completeness', 0)}"
+                ),
+                health.get("provider_status", "")
+            ]
+        )
+
+    def render_attention_required(self):
+
+        items = self.brief.get("attention_required", [])
+        if not items:
+            return
+
+        lines = []
+        for item in items[:8]:
+            lines.append(
+                (
+                    f"{item.get('reason', '')} - "
+                    f"{item.get('affected', '')} - "
+                    f"{item.get('action', '')}"
+                )
+            )
+
+        self.add_section(
+            "Attention Required",
+            lines
+        )
+
+    def render_planning_horizons(self):
+
+        horizons = self.brief.get("planning_horizons") or {}
+        if not horizons:
+            return
+
+        lines = []
+        for name, items in horizons.items():
+            lines.append(f"{name}: {len(items or [])} item(s)")
+
+        self.add_section(
+            "Planning Horizon",
+            lines
+        )
+
+    def render_search_results(self, result):
+
+        self.clear_content()
+        self.add_section(
+            f"Search: {result.get('query', '')}",
+            [
+                (
+                    f"{result.get('total_results', 0)} grouped result(s), "
+                    f"bounded search in {result.get('elapsed_seconds', 0)}s."
+                ),
+                "Actions: " + self.format_list(result.get("actions", []))
+            ]
+        )
+        for group, items in (result.get("groups") or {}).items():
+            lines = []
+            for item in items[:6]:
+                lines.append(
+                    f"{item.get('title', '')} - {item.get('summary', '')}"
+                )
+                lines.append(
+                    "  Actions: " + self.format_list(item.get("actions", []))
+                )
+            if not lines:
+                lines.append("No matching items in this group.")
+            self.add_section(group, lines)
 
     ##########################################################
 
@@ -637,7 +1019,10 @@ class HomePage(ctk.CTkFrame):
 
     def render_daily_post_packages(self):
 
-        packages = self.brief.get("daily_post_packages", [])
+        packages = (
+            self.brief.get("top_packages")
+            or self.brief.get("daily_post_packages", [])
+        )
 
         if not packages:
             return
@@ -852,6 +1237,14 @@ class HomePage(ctk.CTkFrame):
             ).pack(side="left", padx=(8, 0))
             ctk.CTkButton(
                 actions,
+                text="Create Draft",
+                width=120,
+                command=lambda item=package: self.create_publication_draft(
+                    item
+                )
+            ).pack(side="left", padx=(8, 0))
+            ctk.CTkButton(
+                actions,
                 text="Reject Media",
                 width=115,
                 command=lambda item=package: self.record_package_decision(
@@ -911,6 +1304,31 @@ class HomePage(ctk.CTkFrame):
                 "Package decision recorded: "
                 f"{decision_type.replace('_', ' ')} "
                 f"(#{result.get('decision_id')})."
+            )
+        )
+
+    def create_publication_draft(self, package):
+
+        try:
+            result = self.service.create_publication_draft(package)
+        except Exception as ex:
+            logger.error(
+                "Publication draft creation failed",
+                exc_info=(
+                    type(ex),
+                    ex,
+                    ex.__traceback__
+                )
+            )
+            self.status.configure(
+                text=f"Publication draft failed: {ex}"
+            )
+            return
+
+        self.status.configure(
+            text=(
+                "Publication draft created "
+                f"(#{result.get('history_id', '')})."
             )
         )
 

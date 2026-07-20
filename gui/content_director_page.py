@@ -19,6 +19,7 @@ from services.decision_explainability_service import DecisionExplainabilityServi
 from services.daily_communications_officer_service import DailyCommunicationsOfficerService
 from services.editorial_comparison_service import EditorialComparisonService
 from services.logging_service import LoggingService
+from services.opportunity_orchestration_service import OpportunityOrchestrationService
 from services.thumbnail_service import ThumbnailService
 from gui.window_placement import WindowPlacement
 
@@ -40,6 +41,7 @@ class ContentDirectorPage(ctk.CTkFrame):
         )
         self.officer_service = CommunicationsOfficerService()
         self.daily_officer_service = DailyCommunicationsOfficerService()
+        self.opportunity_service = OpportunityOrchestrationService()
         self.communication_package_service = CommunicationPackageService()
         self.retrieval_service = ContentDirectorRetrievalService()
         self.content_generation_service = ContentGenerationService()
@@ -395,18 +397,49 @@ class ContentDirectorPage(ctk.CTkFrame):
 
     def load_proactive_brief(self, force=True):
 
-        brief = self.daily_officer_service.generate(force=force)
-        packages = brief.get("daily_post_packages") or []
+        if not hasattr(self, "opportunity_service"):
+            database = getattr(
+                getattr(self, "daily_officer_service", None),
+                "db",
+                None
+            )
+            self.opportunity_service = OpportunityOrchestrationService(
+                database=database,
+                daily_service=getattr(self, "daily_officer_service", None)
+            )
+
+        brief = self.opportunity_service.command_center(force=force)
+        packages = (
+            brief.get("top_packages")
+            or brief.get("daily_post_packages")
+            or []
+        )
+        broader = brief.get("recommendations") or []
         recommendations = [
             self.daily_package_to_opportunity(package)
             for package in packages
         ]
+        for item in broader:
+            if not item:
+                continue
+            if item.get("daily_package"):
+                candidate = self.daily_package_to_opportunity(
+                    item.get("daily_package")
+                )
+            else:
+                candidate = item
+            if candidate and not any(
+                existing.get("title") == candidate.get("title")
+                for existing in recommendations
+            ):
+                recommendations.append(candidate)
         recommendations = [
             item for item in recommendations
             if item
         ]
         brief["recommendations"] = recommendations
-        brief["content_director_source"] = "daily_communications_officer"
+        brief["content_director_source"] = "opportunity_orchestration_service"
+        brief["shared_with_home"] = True
         brief["opportunity_rejection_diagnostics"] = {
             "examined": len(packages),
             "rejected_for_unknown_event": sum(
