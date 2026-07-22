@@ -57,6 +57,73 @@ class MediaTopicCompatibilityService:
         "haze",
         "visibility"
     }
+    SMOKE_ALARM_TERMS = {
+        "smoke alarm",
+        "smoke alarms",
+        "smoke_alarm",
+        "smoke detector",
+        "smoke_detector",
+        "fire prevention",
+        "home fire safety",
+        "escape planning"
+    }
+    FIREWORKS_TERMS = {
+        "fireworks",
+        "firework",
+        "fireworks safety",
+        "fireworks_safety",
+        "canada day fireworks"
+    }
+    DAYCARE_TERMS = {
+        "daycare",
+        "spray down",
+        "spray_down",
+        "spraydown",
+        "hose spray",
+        "children visit"
+    }
+    HYDRANT_TERMS = {
+        "hydrant heroes",
+        "hydrant_heroes",
+        "hydrant",
+        "clear hydrant",
+        "snow hydrant"
+    }
+    GRASS_FIRE_TERMS = {
+        "grass fire",
+        "grass_fire",
+        "wildland",
+        "wildfire",
+        "dry grass",
+        "burn ban"
+    }
+    SCHOOL_TERMS = {
+        "school visit",
+        "school_visit",
+        "travelling sparky",
+        "public education visit"
+    }
+    HELMET_PROMOTION_TERMS = {
+        "helmet promotion",
+        "helmet_promotion",
+        "new helmet",
+        "milestone",
+        "promotion"
+    }
+    SERIOUS_INCIDENT_TERMS = {
+        "serious incident",
+        "serious_incident",
+        "incident update",
+        "incident_update",
+        "emergency incident",
+        "confirmed incident",
+        "structure fire",
+        "vehicle fire",
+        "mvc",
+        "medical",
+        "hazmat",
+        "emergency response"
+    }
     STRONG_EVENT_FIELDS = (
         "public_education_program",
         "campaign",
@@ -162,6 +229,69 @@ class MediaTopicCompatibilityService:
                 )
                 return self._result(False, 0, reasons, exclusions, False)
 
+        if self._is_serious_incident_topic(topic_terms):
+            incident_a = [
+                item for item in tier_a
+                if any(term in item.lower() for term in (
+                    "incident",
+                    "structure fire",
+                    "vehicle fire",
+                    "mvc",
+                    "medical",
+                    "hazmat",
+                    "emergency response"
+                ))
+            ]
+            incident_b = [
+                item for item in tier_b
+                if any(term in item.lower() for term in (
+                    "incident",
+                    "structure fire",
+                    "vehicle fire",
+                    "mvc",
+                    "medical",
+                    "hazmat",
+                    "emergency response",
+                    "fire attack",
+                    "apparatus"
+                ))
+            ]
+            if incident_a:
+                reasons.extend(incident_a[:4])
+            elif len(incident_b) >= 2:
+                reasons.extend(incident_b[:4])
+            else:
+                exclusions.append(
+                    "No public-safe verified incident, response, or incident-classification evidence found."
+                )
+                return self._result(False, 0, reasons, exclusions, False)
+
+        explicit_event = self._explicit_event_terms(topic_terms)
+        if explicit_event:
+            explicit_a = [
+                item for item in tier_a
+                if any(term.replace("_", " ") in item.lower() for term in explicit_event)
+            ]
+            explicit_b = [
+                item for item in tier_b
+                if any(term.replace("_", " ") in item.lower() for term in explicit_event)
+            ]
+            explicit_terms = explicit_event & media_terms
+            if explicit_a:
+                reasons.extend(explicit_a[:4])
+            elif explicit_terms and (tier_a or len(explicit_b) >= 1):
+                reasons.extend(explicit_b[:3])
+                reasons.append(
+                    "Matched explicit event evidence: " +
+                    ", ".join(sorted(explicit_terms)[:5]) + "."
+                )
+            else:
+                exclusions.append(
+                    "No explicit verified event evidence found for: " +
+                    ", ".join(sorted(explicit_event)[:5]) + "."
+                )
+                return self._result(False, 0, reasons, exclusions, False)
+
         matches = sorted(topic_terms & media_terms)
         score = min(100, 25 + len(matches) * 7 + len(tier_a) * 24 + len(tier_b) * 13)
 
@@ -252,6 +382,16 @@ class MediaTopicCompatibilityService:
                     "Public education, spray, daycare, Hydrant Heroes, or Fire Chief program evidence conflicts with recruitment."
                 )
 
+        if self.FIREWORKS_TERMS & topic_terms and (
+            {"wildfire", "wildland", "grass fire", "grass_fire"} & media_terms
+        ) and not (self.FIREWORKS_TERMS & media_terms):
+            return "Wildfire or grass-fire evidence conflicts with fireworks."
+
+        if self.DAYCARE_TERMS & topic_terms and (
+            {"wildfire", "wildland", "grass fire", "grass_fire", "value protection"} & media_terms
+        ) and not (self.DAYCARE_TERMS & media_terms):
+            return "Wildfire or value-protection evidence conflicts with daycare."
+
         return ""
 
     def _is_water_topic(self, topic_terms):
@@ -262,6 +402,24 @@ class MediaTopicCompatibilityService:
 
     def _is_smoke_topic(self, topic_terms):
         return bool(self.SMOKE_TERMS & topic_terms)
+
+    def _is_serious_incident_topic(self, topic_terms):
+        return bool(self.SERIOUS_INCIDENT_TERMS & topic_terms)
+
+    def _explicit_event_terms(self, topic_terms):
+        for terms in (
+            self.FIREWORKS_TERMS,
+            self.DAYCARE_TERMS,
+            self.SMOKE_ALARM_TERMS,
+            self.HYDRANT_TERMS,
+            self.GRASS_FIRE_TERMS,
+            self.SCHOOL_TERMS,
+            self.HELMET_PROMOTION_TERMS,
+            self.SERIOUS_INCIDENT_TERMS
+        ):
+            if terms & topic_terms:
+                return terms
+        return set()
 
     def _tier_a(self, topic_terms, media, activity, media_terms):
         evidence = []

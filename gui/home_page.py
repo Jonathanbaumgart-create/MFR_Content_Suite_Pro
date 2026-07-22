@@ -15,6 +15,7 @@ from services.decision_explainability_service import DecisionExplainabilityServi
 from services.logging_service import LoggingService
 from services.opportunity_orchestration_service import OpportunityOrchestrationService
 from services.package_review_service import PackageReviewService
+from services.recommendation_freshness_service import RecommendationFreshnessService
 from services.thumbnail_service import ThumbnailService
 from services.time_service import TimeService
 from gui.window_placement import WindowPlacement
@@ -38,6 +39,7 @@ class HomePage(ctk.CTkFrame):
         self.explainability_service = DecisionExplainabilityService()
         self.communications_intelligence_service = CommunicationsIntelligenceService()
         self.package_review_service = PackageReviewService()
+        self.freshness_service = RecommendationFreshnessService()
         self.thumbnail_service = ThumbnailService()
         self.future = None
         self.package_future = None
@@ -1078,6 +1080,10 @@ class HomePage(ctk.CTkFrame):
 
             details = [
                 f"Strategy: {package.get('strategy', '')}",
+                f"Tone: {package.get('recommended_tone', '')}",
+                f"Teaching point: {package.get('selected_teaching_point') or package.get('teaching_point', '')}",
+                f"Scroll Stop Score: {(package.get('scroll_stop_score') or {}).get('total_score', 0)}",
+                f"Writing quality: {'passed' if (package.get('caption_quality') or {}).get('passed') else 'needs context'}",
                 f"Why today: {package.get('why_today', '')}",
                 f"Confidence: {package.get('confidence', 0)}%",
                 f"Media trust: {package.get('media_trust_state', '')}",
@@ -1254,9 +1260,17 @@ class HomePage(ctk.CTkFrame):
             ).pack(side="left", padx=(8, 0))
             for label, decision in (
                 ("Correct Event", "correct_event"),
+                ("Correct Topic", "correct_topic"),
+                ("Add Context", "add_missing_context"),
+                ("Teaching Point", "change_teaching_point"),
+                ("Stronger Hook", "stronger_hook"),
                 ("Shorten", "shorten_caption"),
                 ("More Community", "make_more_community_focused"),
-                ("Lighter Tone", "make_more_light_hearted")
+                ("Lighter Tone", "make_more_light_hearted"),
+                ("More Action", "make_more_action_focused"),
+                ("Remove Fluff", "remove_fluff"),
+                ("Hashtags", "regenerate_hashtags"),
+                ("Emojis", "regenerate_emojis")
             ):
                 ctk.CTkButton(
                     actions,
@@ -1299,6 +1313,10 @@ class HomePage(ctk.CTkFrame):
             package,
             decision_type
         )
+        self.update_freshness_from_decision(
+            package,
+            decision_type
+        )
         self.status.configure(
             text=(
                 "Package decision recorded: "
@@ -1307,10 +1325,47 @@ class HomePage(ctk.CTkFrame):
             )
         )
 
+    def update_freshness_from_decision(self, package, decision_type):
+
+        fingerprint = (
+            (package or {}).get("recommendation_fingerprint")
+            or (package or {}).get("fingerprint")
+            or ""
+        )
+        status_map = {
+            "dismiss": ("Dismissed", "dismissed_at"),
+            "dismissed": ("Dismissed", "dismissed_at"),
+            "not_relevant": ("Dismissed", "dismissed_at"),
+            "wrong_event": ("Dismissed", "dismissed_at"),
+            "wrong_topic": ("Dismissed", "dismissed_at"),
+            "needs_better_media": ("Needs Media", "deferred_at"),
+            "save_for_later": ("Deferred", "deferred_at"),
+            "deferred": ("Deferred", "deferred_at"),
+            "accepted": ("Accepted", "accepted_at"),
+            "accept": ("Accepted", "accepted_at"),
+            "published": ("Published", "published_at"),
+            "already_posted": ("Published", "published_at")
+        }
+        status, timestamp_field = status_map.get(
+            decision_type,
+            ("Shown", "")
+        )
+        if fingerprint:
+            self.freshness_service.update_status(
+                fingerprint,
+                status,
+                page="Home",
+                timestamp_field=timestamp_field
+            )
+
     def create_publication_draft(self, package):
 
         try:
             result = self.service.create_publication_draft(package)
+            self.update_freshness_from_decision(
+                package,
+                "published"
+            )
         except Exception as ex:
             logger.error(
                 "Publication draft creation failed",
@@ -1330,7 +1385,7 @@ class HomePage(ctk.CTkFrame):
                 "Publication draft created "
                 f"(#{result.get('history_id', '')})."
             )
-        )
+            )
 
     def show_event_diagnostics(self, package):
 

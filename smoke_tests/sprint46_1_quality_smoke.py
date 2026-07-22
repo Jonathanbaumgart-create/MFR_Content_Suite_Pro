@@ -77,8 +77,8 @@ def main():
                 if package.get("content_family")
             }
             assert len(families) >= 3, families
-            assert any(package.get("primary_media") for package in packages), packages
-            assert any(package.get("text_graphic_first") for package in packages), packages
+            assert all(package.get("primary_media") for package in packages), packages
+            assert not any(package.get("text_graphic_first") for package in packages), packages
 
             for package in packages:
                 assert_public_caption(package.get("facebook_caption", ""))

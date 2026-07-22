@@ -15,6 +15,7 @@ from services.media_priority_service import MediaPriorityService
 from services.package_review_service import PackageReviewService
 from services.seasonal_communications_service import SeasonalCommunicationsService
 from services.time_service import TimeService
+from services.editorial_writing_service import EditorialWritingService
 
 
 logger = LoggingService.get_logger("content")
@@ -69,6 +70,7 @@ class OpportunityOrchestrationService:
             database=self.db
         )
         self.review = review_service or PackageReviewService(database=self.db)
+        self.writer = EditorialWritingService()
         self.last_metrics = {}
 
     ############################################################
@@ -88,6 +90,17 @@ class OpportunityOrchestrationService:
         top_packages = self._quality_packages(
             daily_brief.get("daily_post_packages") or []
         )[:self.TOP_PACKAGE_LIMIT]
+        for package in top_packages:
+            try:
+                self.daily.freshness.record_exposure(
+                    package,
+                    page="Home"
+                )
+            except Exception:
+                logger.warning(
+                    "Home recommendation exposure recording failed",
+                    exc_info=True
+                )
         package_seconds = round(time.perf_counter() - package_started, 3)
 
         recent_events = self.recent_activity(limit=8)
@@ -939,7 +952,7 @@ class OpportunityOrchestrationService:
             package.setdefault("story_support", self.story_support(package))
             package.setdefault("reel_support", self.reel_support(package))
             results.append(package)
-        return self._diverse_packages(results)
+        return results
 
     def _diverse_packages(self, packages):
 
@@ -1099,17 +1112,36 @@ class OpportunityOrchestrationService:
         except Exception:
             media_package = {}
         package = dict(option)
+        copy = self._fallback_copy(option, media_package)
+        has_media = self._has_media({"media_package": media_package})
         package.update({
             "option_title": option.get("title", ""),
             "why_today": option.get("why_today_matters", ""),
             "media_package": media_package,
             "primary_media": media_package.get("primary_photo") or media_package.get("primary_video") or {},
-            "facebook_caption": self._fallback_facebook(option),
-            "instagram_caption": self._fallback_instagram(option),
-            "instagram_hashtags": ["#Morden", "#CommunitySafety"],
-            "quality_gate": {"passed": True, "checks": {"fallback_bounded": True}},
+            "facebook_caption": copy.get("facebook", ""),
+            "instagram_caption": copy.get("instagram", ""),
+            "instagram_hashtags": copy.get("instagram_hashtags", []),
+            "facebook_hashtags": copy.get("facebook_hashtags", []),
+            "selected_teaching_point": copy.get("selected_teaching_point", ""),
+            "teaching_point": copy.get("selected_teaching_point", ""),
+            "hook_type": copy.get("hook_type", ""),
+            "recommended_tone": copy.get("recommended_tone", ""),
+            "scroll_stop_score": copy.get("scroll_stop_score", {}),
+            "caption_quality": copy.get("quality", {}),
+            "quality_gate": {
+                "passed": bool(copy.get("quality", {}).get("passed") and has_media),
+                "checks": {
+                    "editorial_writer": True,
+                    "verified_media": has_media
+                },
+                "blocking_issues": (
+                    ([] if has_media else ["No verified media available for this topic."])
+                    + list((copy.get("quality") or {}).get("blocking_issues") or [])
+                )
+            },
             "package_review": {"actions": ["Review media", "Approve Package"]},
-            "warnings": [] if self._has_media({"media_package": media_package}) else ["Package needs reliable media before publishing."],
+            "warnings": [] if has_media else ["Package needs reliable media before publishing."],
             "recommended_format": "Facebook + Instagram",
             "historical_mfr_evidence": self.seasonal.around_this_time(topic=option.get("topic", ""), limit=3),
             "positive_factors": ["Bounded event and memory search", "Local media package ranking"],
@@ -1217,21 +1249,39 @@ class OpportunityOrchestrationService:
         except Exception:
             return "No benchmark records available"
 
-    def _fallback_facebook(self, option):
+    def _fallback_copy(self, option, media_package=None):
 
         topic = option.get("title", "MFR update")
-        return (
-            f"{topic} is a good opportunity to keep Morden connected with the work happening locally.\n\n"
-            "We will review the attached media, keep the message clear, and share only what is useful for the community."
+        media_package = media_package or {}
+        media = []
+        for key in ("primary_photo", "primary_video", "gallery_photos", "gallery_videos"):
+            item = media_package.get(key)
+            if isinstance(item, dict):
+                media.append(item)
+            elif isinstance(item, list):
+                media.extend(value for value in item if isinstance(value, dict))
+        fact_sheet = self.writer.topic_fact_sheet(
+            topic=topic,
+            current_relevance=option.get("why_today_matters", ""),
+            media=media,
+            known_facts=[
+                option.get("why_today_matters", ""),
+                option.get("topic", ""),
+                option.get("content_family", "")
+            ],
+            platforms=["Facebook", "Instagram"]
         )
-
-    def _fallback_instagram(self, option):
-
-        topic = option.get("title", "MFR update")
-        return (
-            f"{topic}.\n\n"
-            "A local moment worth sharing with the community.\n\n"
-            "#Morden #CommunitySafety"
+        fact_sheet["verified_media"] = media
+        fact_sheet["verified_media_ids"] = [
+            item.get("media_id") or item.get("id")
+            for item in media
+            if item.get("media_id") or item.get("id")
+        ]
+        fact_sheet["requires_verified_media"] = True
+        return self.writer.generate_from_fact_sheet(
+            fact_sheet,
+            option=option,
+            tone="standard"
         )
 
     def _shorten(self, text, length):

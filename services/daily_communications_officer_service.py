@@ -12,6 +12,7 @@ from services.event_collection_service import EventCollectionService
 from services.media_review_policy_service import MediaReviewPolicyService
 from services.automated_editorial_trust_service import AutomatedEditorialTrustService
 from services.editorial_fact_sheet_service import EditorialFactSheetService
+from services.recommendation_freshness_service import RecommendationFreshnessService
 
 
 logger = LoggingService.get_logger("content")
@@ -43,7 +44,19 @@ class DailyCommunicationsOfficerService:
         "meaningful moment",
         "one task at a time",
         "highlights our commitment",
-        "demonstrates dedication"
+        "demonstrates dedication",
+        "prepared for all situations",
+        "prepared for anything",
+        "ready for whatever comes",
+        "whatever comes next",
+        "department prepares",
+        "prepared when called",
+        "helps ensure readiness",
+        "preparedness is important",
+        "training prepares us",
+        "our members trained",
+        "great night of training",
+        "another successful training"
     )
 
     def __init__(
@@ -82,6 +95,7 @@ class DailyCommunicationsOfficerService:
         self.editorial_copy = EditorialFactSheetService(
             memory_service=self.memory
         )
+        self.freshness = RecommendationFreshnessService(database=self.db)
         self.last_metrics = {}
 
     ############################################################
@@ -114,27 +128,25 @@ class DailyCommunicationsOfficerService:
             local_now,
             event_collections
         )
-        packages = []
+        candidates = []
 
-        for index, option in enumerate(options[:self.PACKAGE_COUNT], start=1):
-            packages.append(
-                self._complete_package(
-                    index,
-                    option,
-                    context_snapshot,
-                    local_now
-                )
+        for index, option in enumerate(options[:max(self.PACKAGE_COUNT * 4, 10)], start=1):
+            package = self._complete_package(
+                index,
+                option,
+                context_snapshot,
+                local_now
             )
+            if package.get("quality_gate", {}).get("passed"):
+                candidates.append(package)
 
-        while len(packages) < self.PACKAGE_COUNT:
-            packages.append(
-                self._complete_package(
-                    len(packages) + 1,
-                    self._fallback_option(len(packages), context_snapshot),
-                    context_snapshot,
-                    local_now
-                )
-            )
+        packages = self.freshness.apply_to_packages(
+            candidates,
+            page="Home",
+            limit=self.PACKAGE_COUNT,
+            record=False,
+            now=TimeService.utc_now()
+        )
 
         elapsed = round(time.perf_counter() - started, 3)
         brief = {
@@ -169,7 +181,8 @@ class DailyCommunicationsOfficerService:
             ],
             "risks_and_limitations": [
                 "Daily packages are generated from stored local intelligence before deep vision analysis.",
-                "Review required before publishing."
+                "Review required before publishing.",
+                "Packages without verified media are withheld from the top stories."
             ],
             "offline_ready": True,
             "ai_enhancement_status": (
@@ -181,6 +194,7 @@ class DailyCommunicationsOfficerService:
         self.last_metrics = {
             "daily_package_seconds": elapsed,
             "package_count": len(packages),
+            "candidate_count": len(candidates),
             "provider_calls": 0,
             "stage1_target_seconds": 2,
             "stage2_target_seconds": 5
@@ -199,10 +213,15 @@ class DailyCommunicationsOfficerService:
         options = []
         event_collections = event_collections or []
 
-        for event in event_collections[:3]:
+        event_options = []
+        event_variants = []
+        for event in event_collections[:5]:
             option = self._event_option(event)
             if option:
-                options.append(option)
+                event_options.append(option)
+                event_variants.extend(self._event_option_variants(option))
+        options.extend(event_options)
+        options.extend(event_variants)
 
         recent_ids = [
             item.get("id") or item.get("media_id")
@@ -277,6 +296,56 @@ class DailyCommunicationsOfficerService:
             "graphic_first_reason": "No coherent recruitment event media was found before the graphic-first fallback."
         })
         return self._distinct_options(options)
+
+    def _event_option_variants(self, option):
+
+        if not option.get("allowed_media_ids") and not option.get("best_asset_ids"):
+            return []
+
+        title = option.get("title", "MFR Activity")
+        media_ids = list(option.get("allowed_media_ids") or option.get("best_asset_ids") or [])
+        base = {
+            "topic": option.get("topic", title),
+            "best_asset_ids": media_ids[:3],
+            "supporting_asset_ids": media_ids[3:8],
+            "allowed_media_ids": media_ids,
+            "recommended_platforms": ["Facebook", "Instagram"],
+            "event_collection": option.get("event_collection", {}),
+            "event_diagnostics": option.get("event_diagnostics", {}),
+            "event_id": option.get("event_id", ""),
+            "strict_asset_ids": True
+        }
+        variants = [
+            {
+                **base,
+                "title": f"{title}: Community Story",
+                "strategy": "Community-focused",
+                "opportunity_type": "community_story",
+                "content_family": "community_event",
+                "why_today_matters": (
+                    f"{title} can help residents see the people and preparation "
+                    "behind local emergency service."
+                ),
+                "intended_audience": "Morden residents and community followers",
+                "tone_options": ["Community-focused", "Human-interest", "Professional"],
+                "confidence": max(60, int(option.get("confidence", 72)) - 4)
+            },
+            {
+                **base,
+                "title": f"{title}: Recruitment Angle",
+                "strategy": "Recruitment",
+                "opportunity_type": "recruitment",
+                "content_family": "recruitment",
+                "why_today_matters": (
+                    f"{title} gives potential volunteers a practical look at "
+                    "training, teamwork, and serving Morden."
+                ),
+                "intended_audience": "Potential volunteers and community-minded residents",
+                "tone_options": ["Recruitment", "Community-focused", "Action-focused"],
+                "confidence": max(58, int(option.get("confidence", 72)) - 8)
+            }
+        ]
+        return variants
 
     def _event_option(self, event):
 
@@ -445,6 +514,17 @@ class DailyCommunicationsOfficerService:
             "facebook_caption": facebook,
             "instagram_caption": instagram,
             "instagram_hashtags": instagram_tags,
+            "facebook_hashtags": copy.get("facebook_hashtags", []),
+            "selected_formula": copy.get("selected_formula", ""),
+            "selected_teaching_point": copy.get("selected_teaching_point", ""),
+            "teaching_point": copy.get("selected_teaching_point", ""),
+            "hook_type": copy.get("hook_type", ""),
+            "recommended_tone": copy.get("recommended_tone", ""),
+            "scroll_stop_score": copy.get("scroll_stop_score", {}),
+            "caption_variants": copy.get("variants", []),
+            "instagram_story_caption": copy.get("instagram_story_caption", ""),
+            "story_cta": copy.get("story_cta", ""),
+            "reel_hook": copy.get("reel_hook", ""),
             "event_fact_sheet": fact_sheet,
             "mfr_voice_profile": self.editorial_copy.voice_profile(memory),
             "caption_quality": copy.get("quality", {}),
@@ -538,7 +618,7 @@ class DailyCommunicationsOfficerService:
             ]
         else:
             lines = [
-                f"{self._emoji(option)} A timely reminder for Morden.",
+                f"{self._emoji(option)} A useful safety note for Morden.",
                 "",
                 option.get("why_today_matters", "") or (
                     "A clear local message can help people make safer choices."
@@ -693,7 +773,7 @@ class DailyCommunicationsOfficerService:
         if not self._has_media(media_package):
             warnings.append(
                 option.get("graphic_first_reason")
-                or "No strongly matched media found; use as text/graphic-first post."
+                or "No verified media available for this topic."
             )
 
         event = option.get("event_collection") or {}
@@ -752,12 +832,29 @@ class DailyCommunicationsOfficerService:
             "actions": [
                 "Approve Package",
                 "Edit Caption",
+                "Correct Topic",
+                "Add Missing Context",
+                "Use Different Event",
+                "Change Teaching Point",
+                "Choose Another Teaching Point",
+                "Stronger Hook",
+                "Use Another Hook",
                 "Correct Event Summary",
                 "Change Tone",
                 "Shorten Caption",
+                "Shorter",
+                "Longer",
+                "Educational",
+                "Community",
+                "Light-hearted",
                 "Make More Community-Focused",
                 "Make More Light-Hearted",
+                "More Action-Focused",
+                "Remove Fluff",
+                "Regenerate Hashtags",
+                "Regenerate Emojis",
                 "Change Media",
+                "Replace Media",
                 "Reject Media",
                 "Correct Event",
                 "Use Another Option",
@@ -770,7 +867,7 @@ class DailyCommunicationsOfficerService:
 
         facebook = package.get("facebook_caption", "")
         instagram = package.get("instagram_caption", "")
-        media_ok = bool(package.get("primary_media")) or bool(package.get("text_graphic_first"))
+        media_ok = bool(package.get("primary_media"))
         title_ok = not self._bad_package_title(package.get("title", ""))
         event = package.get("event_collection") or {}
         integrity = event.get("event_integrity") or {}
@@ -800,7 +897,7 @@ class DailyCommunicationsOfficerService:
             "checks": {
                 "facebook_caption": bool(facebook),
                 "instagram_caption": bool(instagram),
-                "media_or_graphic_first": media_ok,
+                "verified_media": media_ok,
                 "usable_title": title_ok,
                 "media_event_coherence": event_ok,
                 "public_copy_clean": not banned,
@@ -814,6 +911,7 @@ class DailyCommunicationsOfficerService:
             "blocking_issues": (
                 banned
                 + caption_quality.get("blocking_issues", [])
+                + ([] if media_ok else ["No verified media available for this topic."])
                 + ([] if title_ok else ["unusable package title"])
                 + ([] if event_ok else ["event coherence failed"])
             ),
@@ -988,7 +1086,7 @@ class DailyCommunicationsOfficerService:
         if "recruit" in text:
             return "Ready to serve?"
 
-        return "A timely reminder for Morden."
+        return "A useful safety note for Morden."
 
     def _clean_public_copy(self, text):
 

@@ -1,4 +1,5 @@
 from services.time_service import TimeService
+from services.editorial_writing_service import EditorialWritingService
 
 
 class EditorialFactSheetService:
@@ -28,36 +29,31 @@ class EditorialFactSheetService:
         "one task at a time",
         "highlights our commitment",
         "demonstrates dedication",
+        "prepared for all situations",
+        "prepared for anything",
+        "ready for whatever comes",
+        "whatever comes next",
+        "department prepares",
+        "prepared when called",
+        "helps ensure readiness",
+        "preparedness is important",
+        "training prepares us",
+        "our members trained",
+        "great night of training",
+        "another successful training",
         "#MordenFireRescue"
     )
 
     def __init__(self, memory_service=None):
 
         self.memory = memory_service
+        self.writer = EditorialWritingService()
 
     ############################################################
 
     def voice_profile(self, memory=None):
 
-        count = 0
-        if isinstance(memory, dict):
-            count = len(memory.get("matches") or [])
-
-        return {
-            "sample_count": count,
-            "tone": "plain, community-focused, concise",
-            "formality": "friendly but professional",
-            "emoji_use": "light",
-            "hashtag_policy": "up to five, never #MordenFireRescue",
-            "preferences": [
-                "concise readable captions",
-                "plain language",
-                "community connection",
-                "avoid generic corporate wording",
-                "Facebook and Instagram should differ",
-                "light-hearted content is acceptable when safe"
-            ]
-        }
+        return self.writer.voice_profile(memory)
 
     def build_fact_sheet(self, option, media_package=None, context_snapshot=None):
 
@@ -74,6 +70,22 @@ class EditorialFactSheetService:
         participants = self._participants(event_type, text)
         community = self._community_connection(event_type)
         uncertainty = []
+        verified_media = self._verified_media(media_package)
+        verified_media_ids = [
+            item.get("media_id") or item.get("id")
+            for item in verified_media
+            if item.get("media_id") or item.get("id")
+        ]
+        photo_ids = [
+            item.get("media_id") or item.get("id")
+            for item in verified_media
+            if item.get("media_type") in ("image", "photo")
+        ]
+        video_ids = [
+            item.get("media_id") or item.get("id")
+            for item in verified_media
+            if item.get("media_type") == "video"
+        ]
 
         if self._generic_title(title):
             uncertainty.append("Event title is not specific enough.")
@@ -81,10 +93,31 @@ class EditorialFactSheetService:
         if not actual_activity:
             uncertainty.append("Actual activity is unclear.")
 
-        has_facts = bool(title and not self._generic_title(title) and actual_activity and what and why)
+        if not verified_media_ids:
+            uncertainty.append("No verified media available for this topic.")
+
+        has_facts = bool(
+            title
+            and not self._generic_title(title)
+            and actual_activity
+            and what
+            and why
+            and verified_media_ids
+        )
 
         return {
+            "event": event,
             "event_title": title,
+            "verified_event_ids": self._verified_event_ids(option, event),
+            "verified_media": verified_media,
+            "verified_media_ids": verified_media_ids,
+            "photo_ids": photo_ids,
+            "video_ids": video_ids,
+            "helmet_camera_ids": [
+                item.get("media_id") or item.get("id")
+                for item in verified_media
+                if "helmet" in self._media_text(item)
+            ],
             "actual_activity": actual_activity,
             "date_or_timing": timing,
             "program_campaign": event.get("program_campaign", ""),
@@ -94,6 +127,28 @@ class EditorialFactSheetService:
             "community_connection": community,
             "equipment_apparatus": event.get("apparatus_equipment", []),
             "content_type": event_type,
+            "story_family": event_type,
+            "current_context": context_snapshot or {},
+            "local_context": "Morden, Manitoba",
+            "recommended_hook": "",
+            "recommended_platforms": option.get("recommended_platforms") or ["Facebook", "Instagram"],
+            "recommended_tone": self._tone(option),
+            "emoji_recommendations": [],
+            "hashtag_recommendations": [],
+            "story_suitability": bool(photo_ids),
+            "reel_suitability": bool(video_ids),
+            "platform_notes": self._platform_notes(photo_ids, video_ids),
+            "historical_communications_memory": option.get("historical_mfr_evidence") or {},
+            "confidence": int(option.get("confidence", 0) or 0),
+            "requires_verified_media": True,
+            "package_status": "ready_for_writing" if verified_media_ids else "blocked_no_verified_media",
+            "media_integrity": {
+                "verified_media_count": len(verified_media_ids),
+                "photo_count": len(photo_ids),
+                "video_count": len(video_ids),
+                "missing_media": not bool(verified_media_ids),
+                "rejection_reason": "" if verified_media_ids else "No verified media available for this topic."
+            },
             "factual_uncertainty": uncertainty,
             "prohibited_assumptions": [
                 "Do not name people unless stored knowledge explicitly provides names.",
@@ -107,56 +162,121 @@ class EditorialFactSheetService:
             )
         }
 
+    def _verified_media(self, media_package):
+
+        media_package = media_package or {}
+        values = []
+        for key in (
+            "primary_photo",
+            "primary_video",
+            "primary_image",
+            "gallery_photos",
+            "gallery_videos",
+            "alternates",
+            "carousel_order",
+            "reel_options"
+        ):
+            item = media_package.get(key)
+            if isinstance(item, dict):
+                values.append(item)
+            elif isinstance(item, list):
+                values.extend(value for value in item if isinstance(value, dict))
+
+        result = []
+        seen = set()
+        for item in values:
+            media_id = item.get("media_id") or item.get("id")
+            if not media_id or media_id in seen:
+                continue
+            if item.get("trust_state") in ("rejected_real", "failed", "mock"):
+                continue
+            seen.add(media_id)
+            result.append(item)
+        return result
+
+    def _verified_event_ids(self, option, event):
+
+        values = [
+            option.get("event_id"),
+            event.get("event_id"),
+            event.get("id")
+        ]
+        return [value for value in values if value]
+
+    def _media_text(self, item):
+
+        return " ".join(
+            str(value or "").lower()
+            for value in (
+                item.get("filename"),
+                item.get("path"),
+                item.get("description"),
+                item.get("primary_activity"),
+                item.get("search_text")
+            )
+        )
+
+    def _platform_notes(self, photo_ids, video_ids):
+
+        notes = {
+            "Facebook": "Use the strongest verified media as the story anchor.",
+            "Instagram": "Use verified visual media only."
+        }
+        if video_ids:
+            notes["Reels"] = "Video media is available for reel consideration."
+        if not photo_ids and not video_ids:
+            notes["blocked"] = "No verified media available."
+        return notes
+
     def generate_captions(self, fact_sheet, option=None, memory=None):
 
         fact_sheet = dict(fact_sheet or {})
         option = dict(option or {})
 
-        if not fact_sheet.get("has_enough_facts"):
-            text = "More event context is needed before this can become a public post."
-            return {
-                "facebook": text,
-                "instagram": text,
-                "hashtags": ["#Morden", "#CommunitySafety"],
-                "quality": self.quality_gate(text, text, fact_sheet)
-            }
-
-        event_type = fact_sheet.get("content_type", "")
-
-        if event_type == "daycare_spray_down":
-            facebook = self._daycare_facebook(fact_sheet)
-            instagram = self._daycare_instagram(fact_sheet)
-            hashtags = ["#Morden", "#CommunityConnection", "#SummerFun"]
-        elif event_type == "helmet_promotion":
-            facebook = self._helmet_promotion_facebook(fact_sheet)
-            instagram = self._helmet_promotion_instagram(fact_sheet)
-            hashtags = ["#Morden", "#FireService", "#Recognition"]
-        elif event_type == "heat_safety":
-            facebook = self._heat_facebook()
-            instagram = self._heat_instagram()
-            hashtags = ["#Morden", "#HeatSafety", "#CommunitySafety"]
-        elif event_type == "training":
-            facebook = self._training_facebook(fact_sheet)
-            instagram = self._training_instagram(fact_sheet)
-            hashtags = ["#Morden", "#FirefighterTraining", "#CommunitySafety"]
-        elif event_type == "behind_the_scenes":
-            facebook = self._behind_facebook(fact_sheet)
-            instagram = self._behind_instagram(fact_sheet)
-            hashtags = ["#Morden", "#BehindTheScenes", "#Community"]
-        else:
-            facebook = self._community_facebook(fact_sheet)
-            instagram = self._community_instagram(fact_sheet)
-            hashtags = ["#Morden", "#CommunityConnection", "#CommunitySafety"]
-
-        hashtags = [tag for tag in self._unique(hashtags) if tag != "#MordenFireRescue"][:5]
-        facebook = self._clean(facebook)
-        instagram = self._clean(instagram + "\n\n" + " ".join(hashtags))
+        result = self.writer.generate_from_fact_sheet(
+            fact_sheet,
+            option=option,
+            memory=memory,
+            tone=self._tone(option)
+        )
         return {
-            "facebook": facebook,
-            "instagram": instagram,
-            "hashtags": hashtags,
-            "quality": self.quality_gate(facebook, instagram, fact_sheet)
+            "facebook": result["facebook"],
+            "instagram": result["instagram"],
+            "hashtags": result.get("instagram_hashtags") or result.get("hashtags") or [],
+            "facebook_hashtags": result.get("facebook_hashtags", []),
+            "instagram_hashtags": result.get("instagram_hashtags", []),
+            "quality": result.get("quality", {}),
+            "scroll_stop_score": result.get("scroll_stop_score", {}),
+            "selected_formula": result.get("selected_formula", ""),
+            "selected_teaching_point": result.get("selected_teaching_point", ""),
+            "hook_type": result.get("hook_type", ""),
+            "recommended_tone": result.get("recommended_tone", ""),
+            "variants": result.get("variants", []),
+            "instagram_story_caption": result.get("instagram_story_caption", ""),
+            "story_cta": result.get("story_cta", ""),
+            "reel_hook": result.get("reel_hook", "")
         }
+
+    def _tone(self, option):
+
+        text = " ".join(
+            str(value or "")
+            for value in (
+                option.get("strategy"),
+                option.get("content_family"),
+                option.get("opportunity_type"),
+                option.get("title")
+            )
+        ).lower()
+        if "light" in text or "daycare" in text or "spray" in text:
+            return "light"
+        if "education" in text or "safety" in text:
+            return "educational"
+        if "action" in text:
+            return "action"
+        if "recognition" in text or "promotion" in text:
+            return "recognition"
+        return "standard"
 
     def quality_gate(self, facebook, instagram, fact_sheet):
 
@@ -175,7 +295,19 @@ class EditorialFactSheetService:
                 "meaningful moment",
                 "one task at a time",
                 "highlights our commitment",
-                "demonstrates dedication"
+                "demonstrates dedication",
+                "prepared for all situations",
+                "prepared for anything",
+                "ready for whatever comes",
+                "whatever comes next",
+                "department prepares",
+                "prepared when called",
+                "helps ensure readiness",
+                "preparedness is important",
+                "training prepares us",
+                "our members trained",
+                "great night of training",
+                "another successful training"
             )
             if phrase in lower
         ]

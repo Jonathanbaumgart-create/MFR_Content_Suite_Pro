@@ -20,6 +20,7 @@ from services.daily_communications_officer_service import DailyCommunicationsOff
 from services.editorial_comparison_service import EditorialComparisonService
 from services.logging_service import LoggingService
 from services.opportunity_orchestration_service import OpportunityOrchestrationService
+from services.recommendation_freshness_service import RecommendationFreshnessService
 from services.thumbnail_service import ThumbnailService
 from gui.window_placement import WindowPlacement
 
@@ -48,6 +49,7 @@ class ContentDirectorPage(ctk.CTkFrame):
         self.explainability_service = DecisionExplainabilityService()
         self.editorial_comparison_service = EditorialComparisonService()
         self.memory_service = CommunicationsMemoryService()
+        self.freshness_service = RecommendationFreshnessService()
         self.thumbnail_service = ThumbnailService()
         self.current_results = []
         self.brief = None
@@ -3531,6 +3533,10 @@ class ContentDirectorPage(ctk.CTkFrame):
                 opportunity,
                 feedback_type
             )
+            self.update_freshness_from_feedback(
+                opportunity,
+                feedback_type
+            )
 
             if feedback_type in ("accepted", "saved"):
                 self.remember_accepted_strategy_package(opportunity)
@@ -3555,6 +3561,35 @@ class ContentDirectorPage(ctk.CTkFrame):
             )
             self.status.configure(
                 text=f"Feedback error: {ex}"
+            )
+
+    ##########################################################
+
+    def update_freshness_from_feedback(self, opportunity, feedback_type):
+
+        fingerprint = (
+            opportunity.get("recommendation_fingerprint")
+            or opportunity.get("fingerprint")
+            or ""
+        )
+        status_map = {
+            "accepted": ("Accepted", "accepted_at"),
+            "saved": ("Deferred", "deferred_at"),
+            "dismissed": ("Dismissed", "dismissed_at"),
+            "not_relevant": ("Dismissed", "dismissed_at"),
+            "already_posted": ("Published", "published_at"),
+            "regenerated": ("Shown", "")
+        }
+        status, timestamp_field = status_map.get(
+            feedback_type,
+            ("Shown", "")
+        )
+        if fingerprint:
+            self.freshness_service.update_status(
+                fingerprint,
+                status,
+                page="Content Director",
+                timestamp_field=timestamp_field
             )
 
     ##########################################################

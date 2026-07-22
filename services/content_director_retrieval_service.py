@@ -12,6 +12,8 @@ from services.media_topic_compatibility_service import MediaTopicCompatibilitySe
 from services.operational_activity_service import OperationalActivityService
 from services.seasonal_communications_service import SeasonalCommunicationsService
 from services.time_service import TimeService
+from services.editorial_writing_service import EditorialWritingService
+from services.recommendation_freshness_service import RecommendationFreshnessService
 
 
 logger = LoggingService.get_logger("content")
@@ -60,6 +62,17 @@ class ContentDirectorRetrievalService:
             )
         ),
         (
+            "rope_rescue",
+            (
+                "rope rescue",
+                "low angle rope",
+                "low-angle rope",
+                "steep embankment",
+                "rescue rope",
+                "technical rescue"
+            )
+        ),
+        (
             "recruitment",
             (
                 "volunteer recruitment",
@@ -86,6 +99,83 @@ class ContentDirectorRetrievalService:
                 "smoke detector",
                 "test your alarms",
                 "alarm reminder"
+            )
+        ),
+        (
+            "fireworks",
+            (
+                "fireworks",
+                "fireworks safety",
+                "canada day fireworks",
+                "firework"
+            )
+        ),
+        (
+            "daycare",
+            (
+                "daycare",
+                "spray down",
+                "spraydown",
+                "hose spray",
+                "children visit"
+            )
+        ),
+        (
+            "hydrant_heroes",
+            (
+                "hydrant heroes",
+                "hydrant",
+                "clear hydrant",
+                "snow hydrant"
+            )
+        ),
+        (
+            "grass_fire",
+            (
+                "grass fire",
+                "wildland",
+                "wildfire",
+                "burn ban",
+                "dry grass"
+            )
+        ),
+        (
+            "school_visit",
+            (
+                "school visit",
+                "school",
+                "public education visit",
+                "travelling sparky"
+            )
+        ),
+        (
+            "helmet_promotion",
+            (
+                "helmet promotion",
+                "promotion",
+                "new helmet",
+                "milestone"
+            )
+        ),
+        (
+            "historical_apparatus",
+            (
+                "historical apparatus",
+                "apparatus history",
+                "old apparatus",
+                "vintage apparatus",
+                "department history"
+            )
+        ),
+        (
+            "serious_incident",
+            (
+                "serious incident",
+                "incident update",
+                "emergency incident",
+                "confirmed incident",
+                "structure fire",
+                "vehicle fire"
             )
         )
     )
@@ -147,6 +237,25 @@ class ContentDirectorRetrievalService:
             "cta": "Wear a life jacket, supervise children closely, and call 911 if someone is in trouble on or near the water.",
             "type": "seasonal safety reminder"
         },
+        "rope_rescue": {
+            "label": "Rope Rescue Training",
+            "secondary": [
+                "low-angle rope rescue",
+                "steep terrain",
+                "patient movement",
+                "EMS access",
+                "technical rescue training"
+            ],
+            "hashtags": [
+                "#RopeRescue",
+                "#FirefighterTraining",
+                "#EmergencyPreparedness",
+                "#FireService",
+                "#MordenMB"
+            ],
+            "cta": "Learn why realistic training helps firefighters solve access problems safely.",
+            "type": "training explainer"
+        },
         "recruitment": {
             "label": "Volunteer Recruitment",
             "secondary": [
@@ -202,6 +311,148 @@ class ContentDirectorRetrievalService:
             "cta": "Test alarms, talk through your escape plan, and look for simple ways to reduce fire risk at home.",
             "type": "fire prevention campaign"
         },
+        "fireworks": {
+            "label": "Fireworks Safety",
+            "secondary": [
+                "fireworks",
+                "Canada Day",
+                "distance",
+                "supervision",
+                "local rules"
+            ],
+            "hashtags": [
+                "#FireworksSafety",
+                "#PublicSafety",
+                "#SummerSafety",
+                "#MordenMB"
+            ],
+            "cta": "Follow local rules, keep water nearby, supervise carefully, and call 911 for emergencies.",
+            "type": "public safety reminder"
+        },
+        "daycare": {
+            "label": "Daycare Visit",
+            "secondary": [
+                "daycare",
+                "spray-down",
+                "children",
+                "community visit"
+            ],
+            "hashtags": [
+                "#CommunityEvent",
+                "#SummerFun",
+                "#TeamMFR",
+                "#MordenMB"
+            ],
+            "cta": "Celebrate a friendly MFR community visit.",
+            "type": "community event"
+        },
+        "hydrant_heroes": {
+            "label": "Hydrant Heroes",
+            "secondary": [
+                "hydrants",
+                "snow clearing",
+                "winter safety",
+                "community help"
+            ],
+            "hashtags": [
+                "#HydrantHeroes",
+                "#WinterSafety",
+                "#PublicSafety",
+                "#MordenMB"
+            ],
+            "cta": "Keep hydrants visible and clear when snow builds up.",
+            "type": "seasonal safety reminder"
+        },
+        "grass_fire": {
+            "label": "Grass Fire Safety",
+            "secondary": [
+                "grass fire",
+                "wildland",
+                "dry conditions",
+                "burning safety"
+            ],
+            "hashtags": [
+                "#GrassFireSafety",
+                "#WildfirePrevention",
+                "#PublicSafety",
+                "#MordenMB"
+            ],
+            "cta": "Watch dry conditions and follow local burning rules.",
+            "type": "seasonal safety reminder"
+        },
+        "school_visit": {
+            "label": "School Visit",
+            "secondary": [
+                "school visit",
+                "public education",
+                "children",
+                "Travelling Sparky"
+            ],
+            "hashtags": [
+                "#PublicEducation",
+                "#SchoolVisit",
+                "#CommunityEvent",
+                "#MordenMB"
+            ],
+            "cta": "Share a public education moment with local students.",
+            "type": "public education event"
+        },
+        "helmet_promotion": {
+            "label": "Helmet Promotion",
+            "secondary": [
+                "helmet promotion",
+                "recognition",
+                "milestone",
+                "leadership"
+            ],
+            "hashtags": [
+                "#FireService",
+                "#Leadership",
+                "#TeamMFR",
+                "#MordenMB"
+            ],
+            "cta": "Recognize a department milestone.",
+            "type": "recognition"
+        },
+        "historical_apparatus": {
+            "label": "Historical Apparatus",
+            "secondary": [
+                "apparatus history",
+                "department history",
+                "equipment evolution",
+                "fire service heritage"
+            ],
+            "hashtags": [
+                "#MFRHistory",
+                "#FireService",
+                "#Apparatus",
+                "#MordenMB"
+            ],
+            "cta": "Share a department history moment without overstating unverified details.",
+            "type": "historical feature"
+        },
+        "serious_incident": {
+            "label": "Serious Incident",
+            "secondary": [
+                "confirmed incident information",
+                "public safety",
+                "operational response",
+                "community update",
+                "incident response",
+                "emergency response",
+                "structure fire",
+                "vehicle fire",
+                "mvc",
+                "hazmat"
+            ],
+            "hashtags": [
+                "#PublicSafety",
+                "#CommunityUpdate",
+                "#MordenMB"
+            ],
+            "cta": "Share only confirmed information and direct residents to official updates when needed.",
+            "type": "incident information"
+        },
         "general_engagement": {
             "label": "Community Safety",
             "secondary": [
@@ -245,6 +496,8 @@ class ContentDirectorRetrievalService:
             compatibility_service=self.compatibility
         )
         self.seasonal = SeasonalCommunicationsService(database=self.db)
+        self.writer = EditorialWritingService()
+        self.freshness = RecommendationFreshnessService(database=self.db)
         self.last_metrics = {}
 
     def build_prompt_package(self, prompt, limit=5, now=None, option_count=None):
@@ -262,6 +515,26 @@ class ContentDirectorRetrievalService:
             current_date=now,
             limit=6
         )
+        if (
+            interpreted.get("primary_topic") == "general_engagement"
+            and not interpreted.get("matched_terms")
+        ):
+            empty_media = {
+                "accepted": [],
+                "excluded": [],
+                "recoverable_candidates": [],
+                "no_suitable_media": True,
+                "unmatched_prompt": True
+            }
+            return self._blocked_package(
+                prompt,
+                interpreted,
+                current_context,
+                historical,
+                around_this_time,
+                empty_media,
+                "No verified media or topic match was found for this search."
+            )
         clusters = self.operational.clusters_for_window(
             days=30,
             limit=140,
@@ -436,6 +709,24 @@ class ContentDirectorRetrievalService:
                 else:
                     excluded.append(item)
 
+        if interpreted.get("primary_topic") in self._reusable_topics():
+            for term in topic_terms[:8]:
+                for row in self._stored_media_rows(term, limit=30):
+                    result = self.compatibility.evaluate(
+                        compatibility_topic,
+                        row,
+                        activity={}
+                    )
+                    item = {
+                        **row,
+                        "compatibility": result,
+                        "stored_media_search": True
+                    }
+                    if result.get("compatible"):
+                        accepted.append(item)
+                    else:
+                        excluded.append(item)
+
         accepted = self._dedupe_media(accepted)
         excluded = self._dedupe_media(excluded)
         accepted.sort(
@@ -450,6 +741,10 @@ class ContentDirectorRetrievalService:
         return {
             "accepted": accepted[:limit],
             "excluded": excluded[:10],
+            "recoverable_candidates": [
+                item for item in excluded
+                if not item.get("compatibility", {}).get("hard_reject")
+            ][:10],
             "no_suitable_media": not accepted,
             "source": "operational_activity_and_stored_media"
         }
@@ -466,6 +761,16 @@ class ContentDirectorRetrievalService:
     ):
         details = self.TOPIC_DETAILS[interpreted["primary_topic"]]
         accepted = media.get("accepted", [])
+        if not accepted:
+            return self._blocked_package(
+                prompt,
+                interpreted,
+                current_context,
+                historical,
+                around_this_time,
+                media,
+                "No verified media available for this topic."
+            )
         primary = accepted[0] if accepted else {}
         alternates = accepted[1:5]
         warnings = self._warnings(
@@ -508,7 +813,25 @@ class ContentDirectorRetrievalService:
             details,
             option_count or self.DEFAULT_OPTION_COUNT
         )
+        options = self.freshness.apply_to_packages(
+            options,
+            page="Content Director Search",
+            limit=option_count or self.DEFAULT_OPTION_COUNT,
+            record=True,
+            now=TimeService.utc_now(),
+            preserve_order=True
+        )
         first_option = options[0] if options else {}
+        if not first_option:
+            return self._blocked_package(
+                prompt,
+                interpreted,
+                current_context,
+                historical,
+                around_this_time,
+                media,
+                "No publishable package passed editorial media integrity."
+            )
         if first_option:
             facebook = first_option.get("facebook_draft", facebook)
             instagram = first_option.get("instagram_draft", instagram)
@@ -565,6 +888,29 @@ class ContentDirectorRetrievalService:
             "around_this_time": around_this_time,
             "validation_warnings": warnings,
             "trust_explanation": self._trust_explanation(accepted),
+            "search_diagnostics": self._search_diagnostics(
+                interpreted,
+                media,
+                story_family=first_option.get("strategy_family", ""),
+                teaching_point=first_option.get("teaching_point", ""),
+                package_status=first_option.get("package_status", "ready")
+            ),
+            "package_status": first_option.get("package_status", "ready"),
+            "search_result_status": first_option.get(
+                "search_result_status",
+                "Publish Ready"
+            ),
+            "package_state": first_option.get(
+                "package_state",
+                "Publish Ready"
+            ),
+            "recommendation_fingerprint": first_option.get(
+                "recommendation_fingerprint",
+                ""
+            ),
+            "freshness": first_option.get("freshness", {}),
+            "freshness_penalty": first_option.get("freshness_penalty", 0),
+            "quality_gate": first_option.get("quality_gate", {}),
             "progressive_sections": [
                 "interpreted_topic",
                 "historical_references",
@@ -584,6 +930,197 @@ class ContentDirectorRetrievalService:
             "generated_at": TimeService.utc_now_iso()
         }
         return package
+
+    def _blocked_package(
+        self,
+        prompt,
+        interpreted,
+        current_context,
+        historical,
+        around_this_time,
+        media,
+        reason
+    ):
+
+        diagnostics = self._search_diagnostics(
+            interpreted,
+            media,
+            story_family="",
+            teaching_point="",
+            package_status="blocked_no_verified_media"
+        )
+        search_status = diagnostics.get("search_result_status", "Needs Media")
+        blocked_copy = {
+            "platform": "",
+            "copy_text": reason,
+            "hashtags": [],
+            "quality": {
+                "passed": False,
+                "blocking_issues": [reason],
+                "failure_reasons": [reason]
+            },
+            "scroll_stop_score": {
+                "total_score": 0,
+                "strongest_factor": "",
+                "weakest_factor": "verified media",
+                "suggested_improvement": "Select verified media from the matching event before generating copy."
+            }
+        }
+        warnings = self._warnings(
+            interpreted,
+            current_context,
+            media,
+            historical
+        )
+        warnings.insert(0, reason)
+        year_over_year = self._year_over_year_evidence(around_this_time)
+        return {
+            "request_id": self._request_id(prompt),
+            "prompt": prompt,
+            "option_count_requested": self.DEFAULT_OPTION_COUNT,
+            "option_count_returned": 0,
+            "options": [],
+            "option_limit_reason": reason,
+            "interpreted_topic": interpreted,
+            "current_context": current_context,
+            "opportunity_summary": {
+                "what": interpreted.get("label", ""),
+                "why_now": self._why_now(interpreted, current_context),
+                "year_over_year_evidence": year_over_year,
+                "confidence": 0
+            },
+            "facebook_draft": blocked_copy,
+            "instagram_draft": blocked_copy,
+            "facebook_caption": reason,
+            "instagram_caption": reason,
+            "media_package": {
+                "primary_image": {},
+                "primary_video": {},
+                "alternates": [],
+                "carousel_order": [],
+                "reel_options": [],
+                "no_suitable_media": True,
+                "verified_media_ids": [],
+                "excluded_conflicts": diagnostics["rejected_media"]
+            },
+            "historical_references": historical,
+            "around_this_time": around_this_time,
+            "validation_warnings": self._unique(warnings),
+            "trust_explanation": reason,
+            "progressive_sections": [
+                "interpreted_topic",
+                "search_diagnostics"
+            ],
+            "source_signals": [
+                "Media-topic compatibility gate",
+                "Editorial media integrity gate",
+                "Year-over-year Communications Memory"
+            ],
+            "search_diagnostics": diagnostics,
+            "search_result_status": search_status,
+            "user_guidance": diagnostics.get("user_guidance", reason),
+            "year_over_year_evidence": year_over_year,
+            "package_status": "blocked_no_verified_media",
+            "package_state": (
+                "Blocked"
+                if search_status == "Blocked for Privacy or Safety"
+                else "Needs Media"
+            ),
+            "quality_gate": {
+                "passed": False,
+                "blocking_issues": [reason],
+                "checks": {
+                    "verified_media": False,
+                    "caption_quality": False
+                }
+            },
+            "benchmark_inspiration": [],
+            "generation_version": self.QUERY_VERSION,
+            "generated_at": TimeService.utc_now_iso()
+        }
+
+    def _search_diagnostics(
+        self,
+        interpreted,
+        media,
+        story_family="",
+        teaching_point="",
+        package_status=""
+    ):
+
+        accepted = list(media.get("accepted") or [])
+        rejected = list(media.get("excluded") or [])
+        recoverable = list(media.get("recoverable_candidates") or [])
+        status = self._search_result_status(
+            interpreted,
+            accepted,
+            rejected,
+            recoverable,
+            package_status
+        )
+        return {
+            "search_result_status": status,
+            "user_guidance": self._search_user_guidance(
+                interpreted,
+                status,
+                recoverable
+            ),
+            "matched_events": self._unique([
+                item.get("activity_title")
+                or item.get("event_title")
+                or (item.get("filesystem_intelligence") or {}).get("community_event")
+                or (item.get("filesystem_intelligence") or {}).get("campaign")
+                or (item.get("filesystem_intelligence") or {}).get("public_education_program")
+                for item in accepted
+            ]),
+            "matched_media": [
+                {
+                    "media_id": item.get("media_id") or item.get("id"),
+                    "filename": item.get("filename", ""),
+                    "media_type": item.get("media_type", ""),
+                    "trust_state": item.get("trust_state", ""),
+                    "reasons": item.get("compatibility", {}).get("reasons", [])
+                }
+                for item in accepted[:10]
+            ],
+            "rejected_media": [
+                {
+                    "media_id": item.get("media_id") or item.get("id"),
+                    "filename": item.get("filename", ""),
+                    "media_type": item.get("media_type", ""),
+                    "reason": (
+                        item.get("reason")
+                        or "; ".join(item.get("exclusions") or [])
+                        or "; ".join(item.get("compatibility", {}).get("exclusions", []))
+                        or "Media did not pass topic compatibility."
+                    )
+                }
+                for item in rejected[:20]
+            ],
+            "recoverable_media": [
+                {
+                    "media_id": item.get("media_id") or item.get("id"),
+                    "filename": item.get("filename", ""),
+                    "media_type": item.get("media_type", ""),
+                    "source_type": self._media_source_type(item),
+                    "trust_state": item.get("trust_state", ""),
+                    "current_tags": self._diagnostic_tags(item),
+                    "compatibility_score": item.get("compatibility", {}).get("score", 0),
+                    "compatibility_reason": "; ".join(
+                        item.get("compatibility", {}).get("reasons", [])
+                    ),
+                    "uncertainty_reason": "; ".join(
+                        item.get("compatibility", {}).get("exclusions", [])
+                    ) or "Candidate needs human media review before use."
+                }
+                for item in recoverable[:10]
+            ],
+            "story_family": story_family,
+            "teaching_point": teaching_point,
+            "package_status": package_status,
+            "topic": interpreted.get("primary_topic", ""),
+            "label": interpreted.get("label", "")
+        }
 
     def _historical_media_rows(self, term, limit=30):
         try:
@@ -606,6 +1143,91 @@ class ContentDirectorRetrievalService:
             if assets:
                 result.append(assets[0])
         return result
+
+    def _search_result_status(
+        self,
+        interpreted,
+        accepted,
+        rejected,
+        recoverable,
+        package_status
+    ):
+
+        topic = interpreted.get("primary_topic", "")
+        if accepted and not str(package_status or "").startswith("blocked"):
+            return "Publish Ready"
+        if recoverable:
+            return "Needs Media Review"
+        if topic == "serious_incident":
+            if rejected:
+                return "Blocked for Privacy or Safety"
+            return "No Matching Event"
+        if topic in self._reusable_topics():
+            return "Needs Media"
+        if rejected:
+            return "No Relevant Content"
+        return "No Matching Event"
+
+    def _search_user_guidance(self, interpreted, status, recoverable):
+
+        label = interpreted.get("label", "Search")
+        topic = interpreted.get("primary_topic", "")
+        if status == "Publish Ready":
+            return f"{label} has verified compatible media and can be reviewed as a publish-ready package."
+        if status == "Needs Media Review":
+            return (
+                f"{label} has possible media candidates, but they need human review "
+                "before they can support a public package."
+            )
+        if topic == "serious_incident":
+            return (
+                "No public-safe, verified serious-incident event with compatible "
+                "media was found. Avoid publishing incident details without confirmed "
+                "public information and approved media."
+            )
+        if topic == "smoke_alarm":
+            return (
+                "No verified smoke-alarm media was found. Review candidate media, "
+                "import a smoke-alarm photo or graphic, or mark an approved reusable "
+                "campaign asset before generating a publish-ready package."
+            )
+        return (
+            f"No verified compatible media was found for {label}. Review candidates "
+            "or add stronger topic/campaign metadata before publishing."
+        )
+
+    def _media_source_type(self, item):
+
+        if item.get("filesystem_media"):
+            return "filesystem intelligence"
+        if item.get("historical_media"):
+            return "stored media intelligence"
+        if item.get("stored_media_search"):
+            return "stored media search"
+        fs = item.get("filesystem_intelligence") or {}
+        if fs.get("campaign") or fs.get("public_education_program"):
+            return "campaign or education asset"
+        return item.get("media_type", "media")
+
+    def _diagnostic_tags(self, item):
+
+        tags = []
+        for key in (
+            "content_tags",
+            "content_themes",
+            "recommended_uses",
+            "communications_uses"
+        ):
+            tags.extend(self._flatten(item.get(key)))
+        fs = item.get("filesystem_intelligence") or {}
+        for key in (
+            "normalized_tags",
+            "campaign",
+            "public_education_program",
+            "community_event"
+        ):
+            tags.extend(self._flatten(fs.get(key)))
+        return self._unique(str(tag) for tag in tags if tag)[:10]
 
     def _filesystem_media_rows(self, term, limit=30):
         term = str(term or "").strip()
@@ -758,6 +1380,90 @@ class ContentDirectorRetrievalService:
 
         return results
 
+    def _stored_media_rows(self, term, limit=30):
+
+        term = str(term or "").strip()
+        if not term:
+            return []
+
+        normalized = term.replace("_", " ")
+        like = f"%{normalized}%"
+        compact_like = f"%{normalized.replace(' ', '_')}%"
+        try:
+            limit_value = max(1, min(100, int(limit or 30)))
+        except (TypeError, ValueError):
+            limit_value = 30
+        try:
+            conn = self.db.connection()
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+            cur.execute("""
+            SELECT DISTINCT media.id AS media_id
+            FROM media
+            LEFT JOIN ai_analysis
+            ON ai_analysis.media_id=media.id
+            LEFT JOIN media_intelligence
+            ON media_intelligence.media_id=media.id
+            LEFT JOIN fire_service_intelligence
+            ON fire_service_intelligence.media_id=media.id
+            LEFT JOIN filesystem_intelligence
+            ON filesystem_intelligence.media_id=media.id
+            WHERE (
+                media.filename LIKE ?
+                OR media.path LIKE ?
+                OR ai_analysis.description LIKE ?
+                OR ai_analysis.visible_text LIKE ?
+                OR media_intelligence.search_text LIKE ?
+                OR media_intelligence.content_tags LIKE ?
+                OR media_intelligence.recommended_uses LIKE ?
+                OR fire_service_intelligence.communications_uses LIKE ?
+                OR fire_service_intelligence.reasoning_evidence LIKE ?
+                OR filesystem_intelligence.relative_path LIKE ?
+                OR filesystem_intelligence.normalized_tags LIKE ?
+                OR filesystem_intelligence.campaign LIKE ?
+                OR filesystem_intelligence.public_education_program LIKE ?
+                OR media.filename LIKE ?
+                OR media.path LIKE ?
+            )
+            AND (
+                ai_analysis.trust_state IS NULL
+                OR ai_analysis.trust_state NOT IN ('rejected_real', 'failed', 'mock')
+            )
+            ORDER BY media.id DESC
+            LIMIT ?
+            """, tuple([like] * 13 + [compact_like, compact_like, limit_value]))
+            ids = [
+                row["media_id"]
+                for row in cur.fetchall()
+                if row["media_id"]
+            ]
+            conn.close()
+        except Exception:
+            return []
+
+        if not ids:
+            return []
+        try:
+            return self.db.communications_officer_assets(
+                ids,
+                limit=len(ids)
+            )
+        except Exception:
+            return []
+
+    def _reusable_topics(self):
+
+        return {
+            "smoke_alarm",
+            "recruitment",
+            "fireworks",
+            "water_safety",
+            "fire_prevention_week",
+            "heat_warning",
+            "smoke_advisory",
+            "hydrant_heroes"
+        }
+
     ############################################################
 
     def _build_options(
@@ -790,6 +1496,8 @@ class ContentDirectorRetrievalService:
                 len(options),
                 accepted
             )
+            if option_media.get("no_suitable_media"):
+                continue
             references = self._option_historical_references(
                 historical,
                 around_this_time,
@@ -809,6 +1517,8 @@ class ContentDirectorRetrievalService:
 
             score = self._diversity_score(option, options)
             option["diversity_score"] = score
+            if option.get("state") != "ready":
+                continue
             if score < 45:
                 continue
             options.append(option)
@@ -823,6 +1533,8 @@ class ContentDirectorRetrievalService:
                     len(options),
                     accepted
                 )
+                if option_media.get("no_suitable_media"):
+                    continue
                 references = self._option_historical_references(
                     historical,
                     around_this_time,
@@ -841,6 +1553,8 @@ class ContentDirectorRetrievalService:
                 )
                 score = self._diversity_score(option, options)
                 option["diversity_score"] = score
+                if option.get("state") != "ready":
+                    continue
                 if score >= 45:
                     options.append(option)
 
@@ -1042,6 +1756,64 @@ class ContentDirectorRetrievalService:
                     "audience": ["Morden residents"],
                     "cta": "Walk through the checklist with everyone at home."
                 }
+            ],
+            "historical_apparatus": [
+                {
+                    "family": "apparatus_history",
+                    "title": "Apparatus History Feature",
+                    "angle": "Show how department tools and apparatus have changed over time.",
+                    "format": "carousel",
+                    "platform": "Facebook",
+                    "audience": ["MFR followers", "community history followers"],
+                    "cta": "Share a memory or question about MFR apparatus history."
+                },
+                {
+                    "family": "behind_the_scenes",
+                    "title": "Then and Now Equipment Story",
+                    "angle": "Connect a verified apparatus detail to the work it supports.",
+                    "format": "single-image post",
+                    "platform": "Instagram",
+                    "audience": ["visual-first followers"],
+                    "cta": "Look for the details that show how the fire service has evolved."
+                },
+                {
+                    "family": "community_story",
+                    "title": "MFR History Moment",
+                    "angle": "Frame the apparatus as part of local fire-service history.",
+                    "format": "single-image post",
+                    "platform": "Facebook",
+                    "audience": ["Morden community"],
+                    "cta": "Follow along for more MFR history moments."
+                }
+            ],
+            "serious_incident": [
+                {
+                    "family": "incident_information",
+                    "title": "Confirmed Incident Information",
+                    "angle": "Share only confirmed details and practical public context.",
+                    "format": "single-image post",
+                    "platform": "Facebook",
+                    "audience": ["Morden residents", "affected community members"],
+                    "cta": "Use official updates and call 911 for emergencies."
+                },
+                {
+                    "family": "incident_follow_up",
+                    "title": "Incident Follow-Up",
+                    "angle": "Explain the public-safety context after the immediate response.",
+                    "format": "single-image post",
+                    "platform": "Facebook",
+                    "audience": ["community members"],
+                    "cta": "Avoid speculation and rely on confirmed information."
+                },
+                {
+                    "family": "community_update",
+                    "title": "Community Update",
+                    "angle": "Keep the public informed without adding unverified incident facts.",
+                    "format": "text/graphic-first post",
+                    "platform": "Instagram",
+                    "audience": ["Morden followers"],
+                    "cta": "Watch for official updates when more information is available."
+                }
             ]
         }
 
@@ -1083,7 +1855,7 @@ class ContentDirectorRetrievalService:
         index
     ):
 
-        facebook = self._option_facebook_draft(
+        writing = self._option_writing(
             interpreted,
             current_context,
             historical,
@@ -1091,14 +1863,8 @@ class ContentDirectorRetrievalService:
             details,
             strategy
         )
-        instagram = self._option_instagram_draft(
-            interpreted,
-            current_context,
-            historical,
-            media_package,
-            details,
-            strategy
-        )
+        facebook = writing["facebook_draft"]
+        instagram = writing["instagram_draft"]
         warnings = self._warnings(
             interpreted,
             current_context,
@@ -1107,7 +1873,7 @@ class ContentDirectorRetrievalService:
         )
         if media_package.get("no_suitable_media"):
             warnings.append(
-                "This option is text/graphic-first because no suitable media passed the compatibility gate."
+                "No verified media available for this topic."
             )
 
         option_id = f"{self._normalize(interpreted.get('primary_topic'))}_{index}"
@@ -1131,6 +1897,12 @@ class ContentDirectorRetrievalService:
             confidence += 5 if historical or around_this_time.get("matches") else -5
         if media_package.get("no_suitable_media"):
             confidence -= 8
+        quality = writing.get("quality", {}) or {}
+        ready = bool(
+            not media_package.get("no_suitable_media")
+            and media_package.get("verified_media_ids")
+            and quality.get("passed")
+        )
 
         return {
             "option_id": option_id,
@@ -1145,11 +1917,64 @@ class ContentDirectorRetrievalService:
             "instagram_draft": instagram,
             "facebook_caption": facebook.get("copy_text", ""),
             "instagram_caption": instagram.get("copy_text", ""),
-            "hashtags": self._unique(
+            "selected_formula": writing.get("selected_formula", ""),
+            "communication_objective": writing.get("communication_objective", ""),
+            "secondary_objective": writing.get("secondary_objective", ""),
+            "narrative_angle": writing.get("narrative_angle", {}),
+            "narrative_focus": writing.get("narrative_focus", ""),
+            "selected_teaching_point": writing.get("selected_teaching_point", ""),
+            "teaching_point": writing.get("selected_teaching_point", ""),
+            "hook_type": writing.get("hook_type", ""),
+            "recommended_tone": writing.get("recommended_tone", ""),
+            "scroll_stop_score": writing.get("scroll_stop_score", {}),
+            "caption_quality": writing.get("quality", {}),
+            "caption_variants": writing.get("variants", []),
+            "hashtags": self._merge_hashtags(
                 list(facebook.get("hashtags", [])) +
                 list(instagram.get("hashtags", []))
-            )[:5],
+            ),
             "media_package": media_package,
+            "package_status": "ready" if ready else "blocked",
+            "search_result_status": (
+                "Publish Ready"
+                if ready
+                else (
+                    "Needs Media"
+                    if media_package.get("no_suitable_media")
+                    else "Needs Review"
+                )
+            ),
+            "package_state": (
+                "Publish Ready"
+                if ready
+                else (
+                    "Needs Media"
+                    if media_package.get("no_suitable_media")
+                    else "Needs Review"
+                )
+            ),
+            "quality_gate": {
+                "passed": ready,
+                "checks": {
+                    "verified_media": bool(media_package.get("verified_media_ids")),
+                    "caption_quality": bool(quality.get("passed")),
+                    "topic_media_alignment": not media_package.get("no_suitable_media")
+                },
+                "blocking_issues": (
+                    ([] if media_package.get("verified_media_ids") else ["No verified media available for this topic."])
+                    + list(quality.get("blocking_issues") or [])
+                )
+            },
+            "search_diagnostics": self._search_diagnostics(
+                interpreted,
+                {
+                    "accepted": media_package.get("carousel_order") or [],
+                    "excluded": media_package.get("excluded_conflicts") or []
+                },
+                story_family=writing.get("story_family", ""),
+                teaching_point=writing.get("selected_teaching_point", ""),
+                package_status="ready" if ready else "blocked"
+            ),
             "historical_references": historical[:3],
             "historical_reference_ids": reference_ids,
             "year_over_year_evidence": self._year_over_year_evidence(
@@ -1180,7 +2005,7 @@ class ContentDirectorRetrievalService:
                 historical,
                 confidence
             ),
-            "state": "ready"
+            "state": "ready" if ready else "blocked"
         }
 
     def _option_media_package(self, media, strategy, index, accepted):
@@ -1196,13 +2021,17 @@ class ContentDirectorRetrievalService:
             ][:3]
         if not selected and accepted and family not in (
             "text_graphic_first",
-            "myth_versus_fact",
-            "checklist"
+            "myth_versus_fact"
         ):
             start = index if index < len(accepted) else 0
             selected = accepted[start:start + 4] or accepted[:1]
 
         primary = selected[0] if selected else {}
+        verified_ids = [
+            item.get("media_id") or item.get("id")
+            for item in selected
+            if item.get("media_id") or item.get("id")
+        ]
         return {
             "primary_image": primary if primary.get("media_type") == "image" else {},
             "primary_video": primary if primary.get("media_type") == "video" else {},
@@ -1214,6 +2043,17 @@ class ContentDirectorRetrievalService:
                 if item.get("media_type") == "video"
             ][:3],
             "no_suitable_media": not bool(selected),
+            "verified_media_ids": verified_ids,
+            "photo_ids": [
+                item.get("media_id") or item.get("id")
+                for item in selected
+                if item.get("media_type") in ("image", "photo")
+            ],
+            "video_ids": [
+                item.get("media_id") or item.get("id")
+                for item in selected
+                if item.get("media_type") == "video"
+            ],
             "compatibility_evidence": [
                 {
                     "filename": item.get("filename", ""),
@@ -1269,6 +2109,447 @@ class ContentDirectorRetrievalService:
         strategy
     ):
 
+        writing = self._option_writing(
+            interpreted,
+            current_context,
+            historical,
+            media,
+            details,
+            strategy
+        )
+        return writing["facebook_draft"]
+
+    def _option_instagram_draft(
+        self,
+        interpreted,
+        current_context,
+        historical,
+        media,
+        details,
+        strategy
+    ):
+
+        writing = self._option_writing(
+            interpreted,
+            current_context,
+            historical,
+            media,
+            details,
+            strategy
+        )
+        return writing["instagram_draft"]
+
+    def _option_writing(
+        self,
+        interpreted,
+        current_context,
+        historical,
+        media,
+        details,
+        strategy
+    ):
+
+        primary = media.get("primary_image") or media.get("primary_video") or {}
+        available = list(media.get("carousel_order") or [])
+        if primary and primary not in available:
+            available.insert(0, primary)
+        known_facts = self._topic_known_facts(
+            interpreted,
+            media,
+            details,
+            strategy
+        )
+        fact_sheet = self.writer.topic_fact_sheet(
+            topic=details.get("label") or interpreted.get("label", ""),
+            current_relevance=self._why_now(interpreted, current_context),
+            historical={
+                "matches": historical[:3],
+                "last_related_post": (
+                    historical[0].get("post_date", "")
+                    if historical
+                    else ""
+                )
+            },
+            media=available[:6],
+            known_facts=known_facts,
+            unknown_facts=self._topic_unknown_facts(media),
+            platforms=["Facebook", "Instagram"]
+        )
+        verified_media_ids = [
+            item.get("media_id") or item.get("id")
+            for item in available[:6]
+            if item.get("media_id") or item.get("id")
+        ]
+        fact_sheet["verified_media"] = available[:6]
+        fact_sheet["verified_media_ids"] = verified_media_ids
+        fact_sheet["photo_ids"] = [
+            item.get("media_id") or item.get("id")
+            for item in available[:6]
+            if item.get("media_type") in ("image", "photo")
+        ]
+        fact_sheet["video_ids"] = [
+            item.get("media_id") or item.get("id")
+            for item in available[:6]
+            if item.get("media_type") == "video"
+        ]
+        fact_sheet["requires_verified_media"] = True
+        fact_sheet["package_status"] = (
+            "ready_for_writing"
+            if verified_media_ids
+            else "blocked_no_verified_media"
+        )
+        fact_sheet["recommended_angle"] = strategy.get("angle", "")
+        fact_sheet["story_family"] = self._writer_family(
+            interpreted,
+            strategy,
+            fact_sheet
+        )
+        fact_sheet["content_type"] = fact_sheet["story_family"]
+        if (
+            strategy.get("family") in ("training_story", "educational_explainer")
+            or interpreted.get("primary_topic") in (
+                "water_safety",
+                "smoke_alarm",
+                "fireworks",
+                "hydrant_heroes"
+            )
+        ):
+            fact_sheet["teaching_point"] = self._teaching_point_for_topic(
+                interpreted,
+                media
+            )
+        tone = self._tone_for_strategy(strategy)
+        copy = self.writer.generate_from_fact_sheet(
+            fact_sheet,
+            option={
+                "title": strategy.get("title", ""),
+                "topic": interpreted.get("primary_topic", ""),
+                "opportunity_type": interpreted.get("primary_topic", ""),
+                "content_family": strategy.get("family", "")
+            },
+            memory={"matches": historical},
+            tone=tone
+        )
+        copy = self._strategy_specific_writer_copy(
+            copy,
+            fact_sheet,
+            interpreted,
+            strategy
+        )
+        facebook = {
+            "platform": "facebook",
+            "copy_text": copy.get("facebook", ""),
+            "hashtags": copy.get("facebook_hashtags", []),
+            "reference_note": self._reference_note(historical),
+            "quality": copy.get("quality", {}),
+            "scroll_stop_score": copy.get("scroll_stop_score", {})
+        }
+        instagram = {
+            "platform": "instagram",
+            "copy_text": copy.get("instagram", ""),
+            "hashtags": copy.get("instagram_hashtags", []),
+            "quality": copy.get("quality", {}),
+            "scroll_stop_score": copy.get("scroll_stop_score", {})
+        }
+        return {
+            "facebook_draft": facebook,
+            "instagram_draft": instagram,
+            "selected_formula": copy.get("selected_formula", ""),
+            "communication_objective": copy.get("communication_objective", ""),
+            "secondary_objective": copy.get("secondary_objective", ""),
+            "narrative_angle": copy.get("narrative_angle", {}),
+            "narrative_focus": copy.get("narrative_focus", ""),
+            "selected_teaching_point": copy.get("selected_teaching_point", ""),
+            "hook_type": copy.get("hook_type", ""),
+            "recommended_tone": copy.get("recommended_tone", ""),
+            "scroll_stop_score": copy.get("scroll_stop_score", {}),
+            "quality": copy.get("quality", {}),
+            "variants": copy.get("variants", []),
+            "topic_fact_sheet": fact_sheet
+        }
+
+    def _strategy_specific_writer_copy(self, copy, fact_sheet, interpreted, strategy):
+
+        fact_sheet = dict(fact_sheet or {})
+        if copy.get("communication_objective"):
+            fact_sheet["communication_objective"] = copy.get("communication_objective")
+        if copy.get("secondary_objective"):
+            fact_sheet["secondary_objective"] = copy.get("secondary_objective")
+        if copy.get("narrative_angle"):
+            fact_sheet["narrative_angle"] = copy.get("narrative_angle")
+        if copy.get("narrative_focus"):
+            fact_sheet["narrative_focus"] = copy.get("narrative_focus")
+        family = strategy.get("family", "")
+        topic = interpreted.get("primary_topic", "")
+        if (
+            not copy.get("quality", {}).get("passed")
+            and copy.get("quality", {}).get("banned_phrases")
+        ):
+            return copy
+
+        if topic == "water_safety" and family == "direct_safety_reminder":
+            facebook = (
+                "Water safety starts before anyone is in trouble. \u2705\n\n"
+                "The risk is often how quickly a normal outing can change when supervision, distance, weather, or a missing life jacket becomes part of the situation.\n\n"
+                "Choose one action before you head out: wear a life jacket, keep children within arm's reach near water, and call 911 if someone is in trouble.\n\n"
+                "Supervision and life jackets matter because they give families more time to respond before a problem becomes an emergency.\n\n"
+                "#WaterSafety #PublicSafety #SummerSafety #MordenMB"
+            )
+            instagram = (
+                "Water safety starts before anyone is in trouble. \u2705\n\n"
+                "Life jackets and close supervision can change the outcome near water.\n\n"
+                "#WaterSafety #SummerSafety #CommunityEducation #MordenMB"
+            )
+        elif topic == "water_safety" and family == "community_story":
+            facebook = (
+                "Looking out for each other starts before anyone steps near the water. \u2705\n\n"
+                "For families, supervision and life jackets matter because water conditions can change faster than people expect.\n\n"
+                "Before the outing starts, choose the water watcher, check that life jackets fit, and keep a phone nearby in case help is needed.\n\n"
+                "Those simple decisions help keep summer safer around Morden.\n\n"
+                "#WaterSafety #FamilySafety #CommunityEducation #MordenMB"
+            )
+            instagram = (
+                "Pick the water watcher before the outing starts. \u2705\n\n"
+                "Supervision and life jackets matter around water.\n\n"
+                "#WaterSafety #FamilySafety #SummerSafety #MordenMB"
+            )
+        elif topic == "smoke_alarm" and family == "historical_campaign_refresh":
+            facebook = (
+                "Fire prevention reminders are worth repeating because the basics save lives. \u2705\n\n"
+                "Working smoke alarms give families the early warning they need to get out and call 911.\n\n"
+                "Refresh the habit this week with smoke alarm testing and replacement: test alarms, replace expired units, and make sure everyone knows the escape plan.\n\n"
+                "A familiar reminder can still make a real difference for Morden families.\n\n"
+                "#FirePrevention #SmokeAlarms #HomeSafety #MordenMB"
+            )
+            instagram = (
+                "A familiar reminder for a reason. \u2705\n\n"
+                "Test smoke alarms and review the escape plan before you need it.\n\n"
+                "#FirePrevention #SmokeAlarms #HomeSafety #MordenMB"
+            )
+        elif family == "historical_campaign_refresh":
+            if topic == "water_safety":
+                facebook = (
+                    "Water safety is worth repeating before the busiest summer days. \u2705\n\n"
+                    "The risk often appears when a normal outing changes quickly: a child gets too far away, a life jacket is skipped, or the weather shifts.\n\n"
+                    "Make the decision before you reach the water. Wear a life jacket, keep children close, and call 911 if someone is in trouble.\n\n"
+                    "Supervision and life jackets matter because they give families more time to respond.\n\n"
+                    "A familiar reminder can still prevent a new emergency.\n\n"
+                    "#WaterSafety #PublicSafety #SummerSafety #MordenMB"
+                )
+                instagram = (
+                    "Before the water, make the plan. \u2705\n\n"
+                    "Life jackets, close supervision, and quick calls for help matter before anyone is in trouble.\n\n"
+                    "#WaterSafety #SummerSafety #CommunityEducation #MordenMB"
+                )
+            else:
+                facebook = (
+                    f"{interpreted.get('label', 'This topic')} has come up before because the risk is still real. \u2705\n\n"
+                    "Use the current verified event and media facts, not old wording or old dates.\n\n"
+                    f"{strategy.get('cta', '')}\n\n"
+                    "#PublicSafety #CommunityEducation #MordenMB"
+                )
+                instagram = (
+                    f"{interpreted.get('label', 'Safety')} with a fresh angle. \u2705\n\n"
+                    f"{strategy.get('cta', '')}\n\n"
+                    "#PublicSafety #MordenMB"
+                )
+        elif topic == "smoke_alarm" and family == "checklist":
+            facebook = (
+                "Smoke alarms only help if they are working when you need them. \u2705\n\n"
+                "Smoke alarm testing and replacement are the focus: take a few minutes today to test each alarm, check the date, and talk through two ways out of every sleeping area.\n\n"
+                "If an alarm is expired or not working, replace it before the reminder gets forgotten.\n\n"
+                "Small checks at home can buy precious time for families in Morden.\n\n"
+                "#SmokeAlarms #FirePrevention #HomeSafety #MordenMB"
+            )
+            instagram = (
+                "Test. Check the date. Talk through two ways out. \u2705\n\n"
+                "Working smoke alarms buy time when every second matters.\n\n"
+                "#SmokeAlarms #FirePrevention #HomeSafety #MordenMB"
+            )
+        elif topic == "smoke_alarm" and family == "educational_explainer":
+            facebook = (
+                "A working smoke alarm does one critical job: it gives you time. \u2705\n\n"
+                "Fire can spread quickly, especially at night when people are sleeping. Early warning helps everyone get moving, follow the escape plan, and call 911 from outside.\n\n"
+                "Check the date on each alarm and replace units that are expired or not working.\n\n"
+                "For homes in Morden, the best alarm is the one that works before there is smoke in the hallway.\n\n"
+                "#SmokeAlarms #FireSafety #HomeSafety #MordenMB"
+            )
+            instagram = (
+                "Smoke alarms buy time. \u2705\n\n"
+                "Check the date, test the alarm, and know two ways out.\n\n"
+                "#SmokeAlarms #FireSafety #HomeSafety #MordenMB"
+            )
+        elif family == "educational_explainer" and topic == "water_safety":
+            facebook = (
+                "Water emergencies can happen quietly and faster than most people expect. \u2705\n\n"
+                "Life jackets, close supervision, and knowing when to call 911 are not extra steps. They are the steps that give someone the best chance when a day near the water changes suddenly.\n\n"
+                "Before you head out, decide who is watching the water, make sure life jackets fit, and keep a phone close enough to call for help.\n\n"
+                "A few calm choices before the outing can prevent panic later.\n\n"
+                "#WaterSafety #PublicSafety #FamilySafety #MordenMB"
+            )
+            instagram = (
+                "Water safety is preparation, not panic. \u2705\n\n"
+                "Fit the life jacket. Pick the water watcher. Know when to call 911.\n\n"
+                "#WaterSafety #FamilySafety #SummerSafety #MordenMB"
+            )
+        elif topic == "recruitment" and family == "training_story":
+            facebook = (
+                "A lot of firefighting happens before the emergency call ever comes in. \U0001faa2\n\n"
+                "Training builds the confidence, teamwork, and decision-making that volunteers rely on when neighbours need help.\n\n"
+                "If you have wondered what joining Morden Fire & Rescue actually involves, training is where many members find their footing.\n\n"
+                "Reach out if you want to learn what serving your community could look like.\n\n"
+                "#VolunteerFirefighter #FirefighterTraining #CommunityService #MordenMB"
+            )
+            instagram = (
+                "Training is where confidence starts. \U0001faa2\n\n"
+                "Volunteer firefighting is teamwork, learning, and service to neighbours.\n\n"
+                "#VolunteerFirefighter #FirefighterTraining #JoinMFR #MordenMB"
+            )
+        elif topic == "recruitment" and family in ("community_service_story", "community_story"):
+            facebook = (
+                "Some people help their community by coaching, serving on boards, or checking in on neighbours. Others answer the call when emergencies happen. \U0001f91d\n\n"
+                "Volunteer firefighting is one practical way to serve Morden with training, teamwork, and purpose.\n\n"
+                "You do not need to know everything on day one. You need a willingness to learn and a heart for helping people.\n\n"
+                "Share this with someone who would make a strong volunteer firefighter.\n\n"
+                "#VolunteerFirefighter #CommunityService #JoinMFR #MordenMB"
+            )
+            instagram = (
+                "Serving Morden can look like this. \U0001f91d\n\n"
+                "Training, teamwork, and showing up for neighbours when it matters.\n\n"
+                "#VolunteerFirefighter #CommunityService #JoinMFR #MordenMB"
+            )
+        elif topic == "recruitment" and family == "text_graphic_first":
+            facebook = (
+                "Thinking about volunteering, but not sure where to start? \U0001f91d\n\n"
+                "Start with the basics: ask what training looks like, what time commitment is expected, and how different skills can support the team.\n\n"
+                "Morden Fire & Rescue needs people who are willing to learn, work as a team, and serve the community when help is needed.\n\n"
+                "Save this as a reminder to ask the first question.\n\n"
+                "#VolunteerFirefighter #JoinMFR #CommunityService #MordenMB"
+            )
+            instagram = (
+                "Curious about volunteering? \U0001f91d\n\n"
+                "Ask about training, time commitment, and where your skills could fit.\n\n"
+                "#VolunteerFirefighter #JoinMFR #CommunityService #MordenMB"
+            )
+        elif topic == "smoke_advisory" and family == "general_safety_reminder":
+            facebook = (
+                "Smoky days can change plans quickly, even when there is no emergency at your door. \u2705\n\n"
+                "Wildfire smoke can bother children, seniors, outdoor workers, and anyone with heart or lung conditions.\n\n"
+                "When the air looks or smells smoky, consider moving strenuous activity indoors, keeping windows closed, and checking official local updates before heading out.\n\n"
+                "A simple plan before conditions worsen can make the day safer.\n\n"
+                "#AirQuality #PublicSafety #CommunityEducation #MordenMB"
+            )
+            instagram = (
+                "Smoky outside? Check before you head out. \u2705\n\n"
+                "Move heavy activity indoors when conditions are poor and follow official local updates.\n\n"
+                "#AirQuality #PublicSafety #MordenMB"
+            )
+        elif topic == "smoke_advisory" and family == "urgent_safety_advisory":
+            facebook = (
+                "If smoke or poor air quality is affecting Morden, start with the current official alert. \u2705\n\n"
+                "Conditions can change quickly, and wildfire smoke may affect children, seniors, outdoor workers, and anyone with heart or lung conditions.\n\n"
+                "Use the alert to decide whether to move strenuous activity indoors, reduce exposure, and check on people who may need a cooler or cleaner-air space.\n\n"
+                "Confirm the official conditions before publishing this as an active advisory.\n\n"
+                "#AirQuality #PublicSafety #CommunityEducation #MordenMB"
+            )
+            instagram = (
+                "Smoke in the air? Check the current official alert first. \u2705\n\n"
+                "Reduce exposure when conditions are poor and look out for people at higher risk.\n\n"
+                "#AirQuality #PublicSafety #MordenMB"
+            )
+        elif topic == "smoke_advisory" and family == "checklist":
+            facebook = (
+                "A smoky day plan does not need to be complicated. \u2705\n\n"
+                "Start with three checks: look for current official air-quality information, reduce heavy outdoor activity when conditions are poor, and make a cooler indoor option available for anyone who may be more affected by smoke.\n\n"
+                "Children, seniors, outdoor workers, and people with heart or lung conditions may need extra care when the air quality changes.\n\n"
+                "Check the conditions before the day gets away from you.\n\n"
+                "#AirQuality #PublicSafety #CommunityEducation #MordenMB"
+            )
+            instagram = (
+                "Three checks for smoky days. \u2705\n\n"
+                "Check official updates. Reduce heavy outdoor activity. Look out for people at higher risk.\n\n"
+                "#AirQuality #PublicSafety #CommunityEducation #MordenMB"
+            )
+        elif family in ("checklist", "myth_versus_fact"):
+            label = interpreted.get("label", "Safety")
+            facebook = (
+                f"{label} works best when the action is simple. \u2705\n\n"
+                f"One thing to do today: {strategy.get('cta', 'choose one practical safety step and complete it.')}.\n\n"
+                "Short, specific actions are easier to remember when conditions change.\n\n"
+                "#PublicSafety #CommunityEducation #MordenMB"
+            )
+            instagram = (
+                f"One clear step. \u2705\n\n{strategy.get('cta', '')}\n\n"
+                "#PublicSafety #CommunityEducation #MordenMB"
+            )
+        else:
+            return copy
+
+        selected_teaching_point = (
+            fact_sheet.get("teaching_point")
+            or copy.get("selected_teaching_point", "")
+        )
+        quality = self.writer.quality_gate(
+            facebook,
+            instagram,
+            fact_sheet,
+            selected_teaching_point
+        )
+        if (
+            not quality.get("passed")
+            and quality.get("banned_phrases")
+        ):
+            return copy
+        copy = dict(copy)
+        copy["facebook"] = facebook
+        copy["instagram"] = instagram
+        copy["communication_objective"] = (
+            copy.get("communication_objective")
+            or quality.get("communication_objective", "")
+        )
+        copy["secondary_objective"] = (
+            copy.get("secondary_objective")
+            or fact_sheet.get("secondary_objective", "")
+        )
+        copy["narrative_angle"] = (
+            copy.get("narrative_angle")
+            or fact_sheet.get("narrative_angle", {})
+            or quality.get("narrative_angle", {})
+        )
+        copy["narrative_focus"] = (
+            copy.get("narrative_focus")
+            or fact_sheet.get("narrative_focus", "")
+            or quality.get("narrative_focus", "")
+        )
+        copy["facebook_hashtags"] = self.writer.hashtags(
+            copy.get("story_family", "public_education"),
+            fact_sheet,
+            "facebook"
+        )
+        copy["instagram_hashtags"] = self.writer.hashtags(
+            copy.get("story_family", "public_education"),
+            fact_sheet,
+            "instagram"
+        )
+        copy["selected_teaching_point"] = selected_teaching_point
+        copy["quality"] = quality
+        copy["scroll_stop_score"] = self.writer.scroll_stop_score(
+            facebook,
+            fact_sheet,
+            copy.get("selected_teaching_point", "")
+        )
+        return copy
+
+    def _legacy_option_facebook_draft(
+        self,
+        interpreted,
+        current_context,
+        historical,
+        media,
+        details,
+        strategy
+    ):
+
         alert = self._alert_phrase(interpreted, current_context)
         reference = self._reference_note(historical)
         media_phrase = self._option_media_phrase(media)
@@ -1291,7 +2572,7 @@ class ContentDirectorRetrievalService:
             "reference_note": reference
         }
 
-    def _option_instagram_draft(
+    def _legacy_option_instagram_draft(
         self,
         interpreted,
         current_context,
@@ -1321,12 +2602,116 @@ class ContentDirectorRetrievalService:
             "hashtags": hashtags
         }
 
+    def _topic_known_facts(self, interpreted, media, details, strategy):
+
+        facts = [
+            strategy.get("angle", ""),
+            details.get("cta", ""),
+            interpreted.get("label", "")
+        ]
+        primary = media.get("primary_image") or media.get("primary_video") or {}
+        if primary:
+            for key in (
+                "primary_activity",
+                "incident_type",
+                "description",
+                "search_text"
+            ):
+                value = primary.get(key)
+                if value:
+                    facts.append(str(value))
+            for key in (
+                "content_tags",
+                "content_themes",
+                "recommended_uses",
+                "equipment_tags"
+            ):
+                facts.extend(str(item) for item in primary.get(key, []) if item)
+        else:
+            facts.append("No single event is confirmed; write from the topic and known public safety point only.")
+        return self._unique(
+            item for item in facts
+            if item
+        )[:10]
+
+    def _topic_unknown_facts(self, media):
+
+        if media.get("primary_image") or media.get("primary_video"):
+            return []
+        return [
+            "No specific current event is confirmed.",
+            "No individual people, dates, or incident outcomes are confirmed."
+        ]
+
+    def _writer_family(self, interpreted, strategy, fact_sheet):
+
+        family = strategy.get("family", "")
+        topic = interpreted.get("primary_topic", "")
+        if topic in ("water_safety", "smoke_alarm", "fire_prevention_week", "heat_warning", "fireworks", "hydrant_heroes"):
+            return "public_education"
+        if topic in ("daycare", "school_visit"):
+            return "community_event"
+        if topic == "helmet_promotion":
+            return "recognition"
+        if topic == "historical_apparatus":
+            return "apparatus"
+        if topic == "serious_incident":
+            return "incident_follow_up"
+        if family in ("training_story", "reel_video"):
+            return "training"
+        if family == "recruitment_appeal":
+            return "recruitment"
+        if family in ("historical_campaign_refresh", "checklist", "educational_explainer"):
+            return "public_education"
+        if family == "community_story":
+            return "community_event"
+        if topic == "rope_rescue":
+            return "training"
+        return fact_sheet.get("story_family", "public_education")
+
+    def _tone_for_strategy(self, strategy):
+
+        text = " ".join(
+            str(strategy.get(key, ""))
+            for key in ("family", "title", "angle")
+        ).lower()
+        if "light" in text or "community" in text:
+            return "community"
+        if "educational" in text or "checklist" in text:
+            return "educational"
+        if "recruit" in text:
+            return "standard"
+        return "standard"
+
+    def _teaching_point_for_topic(self, interpreted, media):
+
+        topic = interpreted.get("primary_topic", "")
+        if topic == "water_safety":
+            return "why supervision and life jackets matter near water"
+        if topic == "smoke_alarm":
+            return "why smoke alarms need testing and replacement"
+        if topic == "fireworks":
+            return "why fireworks safety depends on distance, supervision, and local rules"
+        if topic == "hydrant_heroes":
+            return "why hydrants must remain visible and accessible"
+        text = topic + " "
+        primary = media.get("primary_image") or media.get("primary_video") or {}
+        text += " ".join(
+            str(primary.get(key, ""))
+            for key in ("primary_activity", "description", "search_text")
+        )
+        return self.writer.teaching_points(
+            self.writer.story_family({}, text),
+            text,
+            interpreted.get("label", "")
+        )[0]
+
     def _strategy_hook(self, interpreted, strategy):
 
         family = strategy.get("family", "")
         label = interpreted.get("label", "Community Safety")
         if family == "historical_campaign_refresh":
-            return f"{label} is a message worth bringing back when the timing is right."
+            return f"{label} is useful when the timing and verified media support it."
         if family in ("checklist", "myth_versus_fact"):
             return f"Here is a quick {label.lower()} checklist to keep handy."
         if family in ("recruitment_appeal", "training_story"):
@@ -1339,7 +2724,7 @@ class ContentDirectorRetrievalService:
 
         family = strategy.get("family", "")
         if family == "educational_explainer":
-            return "The goal is simple: help people understand the risk before it becomes an emergency."
+            return "Explain the verified risk using the selected event and media facts."
         if family == "historical_campaign_refresh":
             return "MFR has shared similar seasonal reminders before; this version should use today's context and avoid copying old dates or details."
         if family == "community_service_story":
@@ -1354,7 +2739,7 @@ class ContentDirectorRetrievalService:
 
         primary = media.get("primary_image") or media.get("primary_video") or {}
         if not primary:
-            return "This option should be handled as text/graphic-first unless Jonathan chooses suitable media."
+            return "No verified media available for this topic."
         return (
             "Use the attached photo or video after review confirms it matches the topic "
             "and does not create a misleading connection."
@@ -1570,9 +2955,9 @@ class ContentDirectorRetrievalService:
             if option.get("recommended_format") == other.get("recommended_format"):
                 score -= 10
             if option_media and option_media == other.get("primary_media_id"):
-                score -= 20
-            if option_refs and option_refs & set(other.get("historical_reference_ids") or []):
                 score -= 10
+            if option_refs and option_refs & set(other.get("historical_reference_ids") or []):
+                score -= 5
             other_terms = self._tokens([
                 other.get("title", ""),
                 other.get("strategic_angle", ""),
@@ -1606,6 +2991,21 @@ class ContentDirectorRetrievalService:
         except Exception:
             count = self.DEFAULT_OPTION_COUNT
         return max(1, min(self.MAX_OPTION_COUNT, count))
+
+    def _merge_hashtags(self, values):
+
+        tags = [
+            tag
+            for tag in self._unique(values)
+            if str(tag).lower() != "#mordenfirerescue"
+        ]
+        tags = [
+            tag
+            for tag in tags
+            if str(tag).lower() != "#mordenmb"
+        ][:4]
+        tags.append("#MordenMB")
+        return tags
 
     def _dedupe_references(self, references):
 
@@ -1727,7 +3127,7 @@ class ContentDirectorRetrievalService:
             return "Looking for a meaningful way to serve your community?"
         if topic == "smoke_alarm":
             return "Working smoke alarms give you and your family time to get out."
-        return "Here is a timely safety reminder from Morden Fire & Rescue."
+        return "Here is a useful safety note for Morden."
 
     def _alert_phrase(self, interpreted, current_context):
         alerts = current_context.get("alerts") or []
@@ -1751,7 +3151,7 @@ class ContentDirectorRetrievalService:
 
     def _media_phrase(self, media):
         if media.get("no_suitable_media"):
-            return "No suitable current media was found for this topic, so this is best handled as a text or graphic-first post."
+            return "No verified media available for this topic."
 
         accepted = media.get("accepted") or []
         if not accepted:
@@ -1772,7 +3172,7 @@ class ContentDirectorRetrievalService:
             warnings.append("Current context is unavailable or stale.")
 
         if media.get("no_suitable_media"):
-            warnings.append("No suitable current media passed the topic compatibility gate.")
+            warnings.append("No verified media available for this topic.")
 
         if any(item.get("trust_state") == "unreviewed_real" for item in media.get("accepted", [])):
             warnings.append("Some suitable media is still unreviewed.")
@@ -1962,6 +3362,29 @@ class ContentDirectorRetrievalService:
             seen.add(key)
             result.append(value)
         return result
+
+    def _flatten(self, value):
+
+        if value in (None, ""):
+            return []
+        if isinstance(value, dict):
+            items = []
+            for nested in value.values():
+                items.extend(self._flatten(nested))
+            return items
+        if isinstance(value, (list, tuple, set)):
+            items = []
+            for nested in value:
+                items.extend(self._flatten(nested))
+            return items
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped.startswith("[") or stripped.startswith("{"):
+                parsed = self._from_json(stripped)
+                if parsed != [stripped]:
+                    return self._flatten(parsed)
+            return [stripped]
+        return [value]
 
     def _from_json(self, value):
         if value in (None, ""):

@@ -196,7 +196,9 @@ def main():
 
             water = service.build_prompt_package("water safety", limit=5)
             assert water["media_package"]["no_suitable_media"] is True, water
-            assert "No suitable current media" in " ".join(water["validation_warnings"]), water
+            assert water["package_status"] == "blocked_no_verified_media", water
+            assert "No verified media available" in " ".join(water["validation_warnings"]), water
+            assert not water["quality_gate"]["passed"], water
 
             from gui.content_director_page import ContentDirectorPage
 

@@ -623,6 +623,56 @@ class DatabaseManager:
 
         """)
 
+        cur.execute("""
+
+        CREATE TABLE IF NOT EXISTS recommendation_exposures(
+
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+            fingerprint TEXT UNIQUE,
+
+            event_id TEXT,
+
+            media_ids_json TEXT,
+
+            communication_objective TEXT,
+
+            narrative_angle TEXT,
+
+            teaching_point TEXT,
+
+            platform_package_type TEXT,
+
+            campaign TEXT,
+
+            program TEXT,
+
+            source_opportunity_id TEXT,
+
+            first_shown_at TEXT,
+
+            last_shown_at TEXT,
+
+            shown_count INTEGER DEFAULT 0,
+
+            page TEXT,
+
+            status TEXT DEFAULT 'Shown',
+
+            dismissed_at TEXT,
+
+            deferred_at TEXT,
+
+            accepted_at TEXT,
+
+            published_at TEXT,
+
+            metadata_json TEXT
+
+        )
+
+        """)
+
         ########################################################
         # Communication Package History / Asset Actions
         ########################################################
@@ -7185,6 +7235,182 @@ class DatabaseManager:
 
     ############################################################
 
+    def record_recommendation_exposure(self, exposure):
+
+        exposure = exposure or {}
+        fingerprint = str(exposure.get("fingerprint") or "").strip()
+        if not fingerprint:
+            return False
+
+        shown_at = exposure.get("shown_at") or TimeService.utc_now_iso()
+        conn = self.connection()
+        cur = conn.cursor()
+        cur.execute("""
+        INSERT INTO recommendation_exposures(
+            fingerprint,
+            event_id,
+            media_ids_json,
+            communication_objective,
+            narrative_angle,
+            teaching_point,
+            platform_package_type,
+            campaign,
+            program,
+            source_opportunity_id,
+            first_shown_at,
+            last_shown_at,
+            shown_count,
+            page,
+            status,
+            metadata_json
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(fingerprint) DO UPDATE SET
+            event_id=excluded.event_id,
+            media_ids_json=excluded.media_ids_json,
+            communication_objective=excluded.communication_objective,
+            narrative_angle=excluded.narrative_angle,
+            teaching_point=excluded.teaching_point,
+            platform_package_type=excluded.platform_package_type,
+            campaign=excluded.campaign,
+            program=excluded.program,
+            source_opportunity_id=excluded.source_opportunity_id,
+            last_shown_at=excluded.last_shown_at,
+            shown_count=recommendation_exposures.shown_count + 1,
+            page=excluded.page,
+            status=excluded.status,
+            metadata_json=excluded.metadata_json
+        """, (
+            fingerprint,
+            exposure.get("event_id", ""),
+            self._to_json(exposure.get("media_ids") or []),
+            exposure.get("communication_objective", ""),
+            exposure.get("narrative_angle", ""),
+            exposure.get("teaching_point", ""),
+            exposure.get("platform_package_type", ""),
+            exposure.get("campaign", ""),
+            exposure.get("program", ""),
+            exposure.get("source_opportunity_id", ""),
+            shown_at,
+            shown_at,
+            1,
+            exposure.get("page", ""),
+            exposure.get("status", "Shown"),
+            self._to_json(exposure.get("metadata") or {})
+        ))
+        conn.commit()
+        conn.close()
+        return True
+
+    ############################################################
+
+    def recommendation_exposures(
+        self,
+        fingerprints=None,
+        media_ids=None,
+        event_ids=None,
+        days=45,
+        page=None,
+        limit=1000
+    ):
+
+        clauses = []
+        params = []
+        fingerprints = [str(item) for item in (fingerprints or []) if item]
+        media_ids = [self._to_int(item) for item in (media_ids or []) if self._to_int(item)]
+        event_ids = [str(item) for item in (event_ids or []) if item]
+
+        if fingerprints:
+            clauses.append(
+                "fingerprint IN (" + ",".join("?" for _ in fingerprints) + ")"
+            )
+            params.extend(fingerprints)
+        if event_ids:
+            clauses.append(
+                "event_id IN (" + ",".join("?" for _ in event_ids) + ")"
+            )
+            params.extend(event_ids)
+        if media_ids:
+            media_clauses = []
+            for media_id in media_ids[:80]:
+                media_clauses.append("media_ids_json LIKE ?")
+                params.append(f"%{media_id}%")
+            clauses.append("(" + " OR ".join(media_clauses) + ")")
+        if page:
+            clauses.append("page=?")
+            params.append(page)
+
+        clauses.append("last_shown_at >= datetime('now', ?)")
+        params.append(f"-{self._to_int(days) or 45} days")
+
+        where = " OR ".join(clauses[:-1])
+        if where:
+            where = "(" + where + ") AND " + clauses[-1]
+        else:
+            where = clauses[-1]
+
+        conn = self.connection()
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute(f"""
+        SELECT *
+        FROM recommendation_exposures
+        WHERE {where}
+        ORDER BY last_shown_at DESC, id DESC
+        LIMIT ?
+        """, tuple(params + [self._to_int(limit) or 1000]))
+        rows = cur.fetchall()
+        conn.close()
+        return [self._recommendation_exposure_from_row(row) for row in rows]
+
+    ############################################################
+
+    def update_recommendation_exposure_status(
+        self,
+        fingerprint,
+        status,
+        page="",
+        timestamp_field=""
+    ):
+
+        fingerprint = str(fingerprint or "").strip()
+        if not fingerprint:
+            return False
+        allowed_timestamp_fields = {
+            "dismissed_at",
+            "deferred_at",
+            "accepted_at",
+            "published_at"
+        }
+        timestamp_field = (
+            timestamp_field
+            if timestamp_field in allowed_timestamp_fields
+            else ""
+        )
+        assignments = ["status=?"]
+        params = [status]
+        if page:
+            assignments.append("page=?")
+            params.append(page)
+        if timestamp_field:
+            assignments.append(f"{timestamp_field}=?")
+            params.append(TimeService.utc_now_iso())
+        params.append(fingerprint)
+
+        conn = self.connection()
+        cur = conn.cursor()
+        cur.execute(f"""
+        UPDATE recommendation_exposures
+        SET {', '.join(assignments)}
+        WHERE fingerprint=?
+        """, tuple(params))
+        changed = cur.rowcount
+        conn.commit()
+        conn.close()
+        return bool(changed)
+
+    ############################################################
+
     def save_decision_audit_snapshot(self, snapshot):
 
         snapshot = snapshot or {}
@@ -11761,6 +11987,34 @@ class DatabaseManager:
 
     ############################################################
 
+    def _recommendation_exposure_from_row(self, row):
+
+        return {
+            "id": row["id"],
+            "fingerprint": row["fingerprint"] or "",
+            "event_id": row["event_id"] or "",
+            "media_ids": self._from_json(row["media_ids_json"]),
+            "communication_objective": row["communication_objective"] or "",
+            "narrative_angle": row["narrative_angle"] or "",
+            "teaching_point": row["teaching_point"] or "",
+            "platform_package_type": row["platform_package_type"] or "",
+            "campaign": row["campaign"] or "",
+            "program": row["program"] or "",
+            "source_opportunity_id": row["source_opportunity_id"] or "",
+            "first_shown_at": row["first_shown_at"] or "",
+            "last_shown_at": row["last_shown_at"] or "",
+            "shown_count": row["shown_count"] or 0,
+            "page": row["page"] or "",
+            "status": row["status"] or "",
+            "dismissed_at": row["dismissed_at"] or "",
+            "deferred_at": row["deferred_at"] or "",
+            "accepted_at": row["accepted_at"] or "",
+            "published_at": row["published_at"] or "",
+            "metadata": self._from_json(row["metadata_json"])
+        }
+
+    ############################################################
+
     def _analysis_from_row(self, row):
 
         return {
@@ -12772,6 +13026,11 @@ class DatabaseManager:
             "CREATE INDEX IF NOT EXISTS idx_recommendation_history_media ON recommendation_history(media_id)",
             "CREATE INDEX IF NOT EXISTS idx_recommendation_history_date ON recommendation_history(recommendation_date)",
             "CREATE INDEX IF NOT EXISTS idx_recommendation_history_opportunity ON recommendation_history(opportunity)",
+            "CREATE INDEX IF NOT EXISTS idx_recommendation_exposure_fingerprint ON recommendation_exposures(fingerprint)",
+            "CREATE INDEX IF NOT EXISTS idx_recommendation_exposure_event ON recommendation_exposures(event_id)",
+            "CREATE INDEX IF NOT EXISTS idx_recommendation_exposure_last ON recommendation_exposures(last_shown_at)",
+            "CREATE INDEX IF NOT EXISTS idx_recommendation_exposure_status ON recommendation_exposures(status)",
+            "CREATE INDEX IF NOT EXISTS idx_recommendation_exposure_page ON recommendation_exposures(page)",
             "CREATE INDEX IF NOT EXISTS idx_comm_package_history_package ON communication_package_history(package_id)",
             "CREATE INDEX IF NOT EXISTS idx_comm_package_history_recommendation ON communication_package_history(recommendation_id)",
             "CREATE INDEX IF NOT EXISTS idx_comm_package_history_created ON communication_package_history(created_at)",

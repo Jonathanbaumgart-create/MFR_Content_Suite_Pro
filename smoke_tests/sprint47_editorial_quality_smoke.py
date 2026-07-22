@@ -159,7 +159,7 @@ def main():
             fact_service = EditorialFactSheetService()
             missing = fact_service.build_fact_sheet({"title": "Unknown"})
             copy = fact_service.generate_captions(missing)
-            assert "More event context is needed" in copy["facebook"], copy
+            assert "No verified media available for this topic." in copy["facebook"], copy
             assert copy["quality"]["passed"] is False, copy
 
             page = object.__new__(ContentDirectorPage)

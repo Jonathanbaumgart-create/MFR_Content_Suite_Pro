@@ -26,10 +26,11 @@ def seed_extra(db):
         "water_rescue_training.jpg",
         path="library/2026/Training/Water Rescue/water_rescue_training.jpg"
     )
-    save_analysis(db, 10, "approved_real", "approved")
+    water_id = media_id_by_filename(db, "water_rescue_training.jpg")
+    save_analysis(db, water_id, "approved_real", "approved")
     save_intelligence(
         db,
-        10,
+        water_id,
         {
             "normalized_scene": "water rescue training",
             "incident_type": "training",
@@ -43,7 +44,7 @@ def seed_extra(db):
     )
     save_filesystem(
         db,
-        10,
+        water_id,
         root_category="Training",
         subcategory="Water Rescue",
         training_type="Water Rescue",
@@ -56,10 +57,11 @@ def seed_extra(db):
         "recruit_training_team.jpg",
         path="library/2026/Recruitment/recruit_training_team.jpg"
     )
-    save_analysis(db, 11, "corrected_real", "corrected")
+    recruit_id = media_id_by_filename(db, "recruit_training_team.jpg")
+    save_analysis(db, recruit_id, "corrected_real", "corrected")
     save_intelligence(
         db,
-        11,
+        recruit_id,
         {
             "normalized_scene": "firefighter training",
             "incident_type": "training",
@@ -73,11 +75,74 @@ def seed_extra(db):
     )
     save_filesystem(
         db,
-        11,
+        recruit_id,
         root_category="Recruitment",
         subcategory="Training",
         campaign="Volunteer Recruitment",
         normalized_tags=["volunteer recruitment", "training", "teamwork"]
+    )
+
+    add_media(
+        db,
+        13,
+        "smoke_advisory.jpg",
+        path="library/2026/Public Safety/Smoke Advisory/smoke_advisory.jpg"
+    )
+    smoke_advisory_id = media_id_by_filename(db, "smoke_advisory.jpg")
+    save_analysis(db, smoke_advisory_id, "approved_real", "approved")
+    save_intelligence(
+        db,
+        smoke_advisory_id,
+        {
+            "normalized_scene": "wildfire smoke public safety",
+            "incident_type": "public education",
+            "primary_activity": "smoke advisory",
+            "content_tags": ["smoke advisory", "air quality", "wildfire smoke"],
+            "content_themes": ["public safety", "air quality"],
+            "recommended_uses": ["smoke advisory", "public education"],
+            "search_text": "smoke advisory air quality wildfire smoke official alert",
+            "communications_score": 86
+        }
+    )
+    save_filesystem(
+        db,
+        smoke_advisory_id,
+        root_category="Public Safety",
+        subcategory="Smoke Advisory",
+        campaign="Smoke Advisory",
+        normalized_tags=["smoke advisory", "air quality", "wildfire smoke"]
+    )
+
+    add_media(
+        db,
+        14,
+        "smoke_alarm_check.jpg",
+        path="library/2026/Fire Prevention/Smoke Alarms/smoke_alarm_check.jpg"
+    )
+    smoke_alarm_id = media_id_by_filename(db, "smoke_alarm_check.jpg")
+    save_analysis(db, smoke_alarm_id, "approved_real", "approved")
+    save_intelligence(
+        db,
+        smoke_alarm_id,
+        {
+            "normalized_scene": "smoke alarm public education",
+            "incident_type": "public education",
+            "primary_activity": "smoke alarm reminder",
+            "content_tags": ["smoke alarm", "fire prevention", "home safety"],
+            "content_themes": ["public education", "fire prevention"],
+            "recommended_uses": ["smoke alarm", "fire prevention"],
+            "search_text": "smoke alarm test replace escape planning",
+            "communications_score": 87
+        }
+    )
+    save_filesystem(
+        db,
+        smoke_alarm_id,
+        root_category="Fire Prevention",
+        subcategory="Smoke Alarms",
+        campaign="Fire Prevention",
+        public_education_program="Smoke Alarms",
+        normalized_tags=["smoke alarm", "fire prevention", "home fire safety"]
     )
 
     add_media(
